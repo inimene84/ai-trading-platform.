@@ -1,0 +1,26 @@
+@import "tailwindcss";
+@source "../**/*.{ts,tsx,js,jsx,html}";
+
+@theme {
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+}
+
+@layer base {
+  body {
+    @apply bg-[#0A0A0B] text-white antialiased;
+    font-family: 'Inter', sans-serif;
+  }
+}
+
+@layer utilities {
+  .scrollbar-default::-webkit-scrollbar { width: 6px; height: 6px; }
+  .scrollbar-default::-webkit-scrollbar-track { background: transparent; }
+  .scrollbar-default::-webkit-scrollbar-thumb { @apply bg-zinc-800 rounded-full; }
+  .scrollbar-default::-webkit-scrollbar-thumb:hover { @apply bg-zinc-700; }
+}
+
+@layer components {
+  .trading-panel { @apply bg-[#141416] border border-[#232326] rounded-xl overflow-hidden; }
+  .data-label { @apply text-[10px] uppercase tracking-wider text-zinc-500 font-medium; }
+  .data-value { @apply font-mono text-sm; }
+}
