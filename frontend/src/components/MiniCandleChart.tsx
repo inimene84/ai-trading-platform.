@@ -10,6 +10,7 @@ interface Candle {
 }
 
 export interface MiniCandleChartProps {
+  key?: string | number;
   symbol: string;
   displayName: string;
   signal?: 'BUY' | 'SELL' | 'HOLD' | null;

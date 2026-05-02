@@ -241,21 +241,21 @@ const NodeProperties = ({ node, onUpdate }: { node: FlowNode, onUpdate: (id: str
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <label className="text-[9px] uppercase text-zinc-500 font-bold tracking-wider">Period</label>
-              <input type="number" value={config.rsiPeriod} onChange={(e) => handleChange('rsiPeriod', parseInt(e.target.value))} className="w-full bg-zinc-900 border border-zinc-800 rounded-lg py-2 px-3 text-xs font-mono text-white focus:outline-none focus:border-emerald-500/50" />
+              <input type="number" title="RSI Period" value={config.rsiPeriod} onChange={(e) => handleChange('rsiPeriod', parseInt(e.target.value))} className="w-full bg-zinc-900 border border-zinc-800 rounded-lg py-2 px-3 text-xs font-mono text-white focus:outline-none focus:border-emerald-500/50" />
             </div>
             <div className="space-y-1.5">
               <label className="text-[9px] uppercase text-zinc-500 font-bold tracking-wider">Symbol</label>
-              <input type="text" value={config.symbol} onChange={(e) => handleChange('symbol', e.target.value.toUpperCase())} className="w-full bg-zinc-900 border border-zinc-800 rounded-lg py-2 px-3 text-xs font-mono text-white focus:outline-none focus:border-emerald-500/50" />
+              <input type="text" title="Symbol" value={config.symbol} onChange={(e) => handleChange('symbol', e.target.value.toUpperCase())} className="w-full bg-zinc-900 border border-zinc-800 rounded-lg py-2 px-3 text-xs font-mono text-white focus:outline-none focus:border-emerald-500/50" />
             </div>
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <label className="text-[9px] uppercase text-zinc-500 font-bold tracking-wider">Overbought</label>
-              <input type="number" value={config.rsiUpper} onChange={(e) => handleChange('rsiUpper', parseInt(e.target.value))} className="w-full bg-zinc-900 border border-zinc-800 rounded-lg py-2 px-3 text-xs font-mono text-white focus:outline-none focus:border-emerald-500/50" />
+              <input type="number" title="RSI Overbought Level" value={config.rsiUpper} onChange={(e) => handleChange('rsiUpper', parseInt(e.target.value))} className="w-full bg-zinc-900 border border-zinc-800 rounded-lg py-2 px-3 text-xs font-mono text-white focus:outline-none focus:border-emerald-500/50" />
             </div>
             <div className="space-y-1.5">
               <label className="text-[9px] uppercase text-zinc-500 font-bold tracking-wider">Oversold</label>
-              <input type="number" value={config.rsiLower} onChange={(e) => handleChange('rsiLower', parseInt(e.target.value))} className="w-full bg-zinc-900 border border-zinc-800 rounded-lg py-2 px-3 text-xs font-mono text-white focus:outline-none focus:border-emerald-500/50" />
+              <input type="number" title="RSI Oversold Level" value={config.rsiLower} onChange={(e) => handleChange('rsiLower', parseInt(e.target.value))} className="w-full bg-zinc-900 border border-zinc-800 rounded-lg py-2 px-3 text-xs font-mono text-white focus:outline-none focus:border-emerald-500/50" />
             </div>
           </div>
         </div>
@@ -353,16 +353,21 @@ const NodeProperties = ({ node, onUpdate }: { node: FlowNode, onUpdate: (id: str
         <div className="space-y-3">
           <div className="space-y-1.5">
             <label className="text-[9px] uppercase text-zinc-500 font-bold tracking-wider">Symbol</label>
-            <input type="text" value={config.symbol} onChange={(e) => handleChange('symbol', e.target.value.toUpperCase())} className="w-full bg-zinc-900 border border-zinc-800 rounded-lg py-2 px-3 text-xs font-mono text-white focus:outline-none focus:border-emerald-500/50" />
+            <input type="text" title="Trade Symbol" value={tradeConfig.symbol} onChange={(e) => setTradeConfig({ ...tradeConfig, symbol: e.target.value.toUpperCase() })} className="w-full bg-zinc-900 border border-zinc-800 rounded-lg py-2 px-3 text-xs font-mono text-white focus:outline-none focus:border-emerald-500/50" />
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
               <label className="text-[9px] uppercase text-zinc-500 font-bold tracking-wider">Quantity</label>
-              <input type="number" value={config.quantity} onChange={(e) => handleChange('quantity', parseFloat(e.target.value))} className="w-full bg-zinc-900 border border-zinc-800 rounded-lg py-2 px-3 text-xs font-mono text-white focus:outline-none focus:border-emerald-500/50" />
+              <input type="number" title="Trade Quantity" value={tradeConfig.quantity} onChange={(e) => setTradeConfig({ ...tradeConfig, quantity: parseFloat(e.target.value) })} className="w-full bg-zinc-900 border border-zinc-800 rounded-lg py-2 px-3 text-xs font-mono text-white focus:outline-none focus:border-emerald-500/50" />
             </div>
             <div className="space-y-1.5">
               <label className="text-[9px] uppercase text-zinc-500 font-bold tracking-wider">Side</label>
-              <select value={config.side} onChange={(e) => handleChange('side', e.target.value)} className="w-full bg-zinc-900 border border-zinc-800 rounded-lg py-2 px-3 text-xs font-mono text-white focus:outline-none focus:border-emerald-500/50">
+              <select
+                title="Trade Side"
+                value={tradeConfig.side}
+                onChange={(e) => setTradeConfig({ ...tradeConfig, side: e.target.value as 'buy' | 'sell' })}
+                className="w-full bg-zinc-900 border border-zinc-800 rounded-lg py-2 px-3 text-xs font-mono text-white focus:outline-none focus:border-emerald-500/50"
+              >
                 <option value="buy">Buy</option>
                 <option value="sell">Sell</option>
               </select>
@@ -666,7 +671,7 @@ const GeminiChat = ({ isOpen, onClose, messages, onSendMessage, isLoading }: Gem
               </div>
               <span className="font-bold text-sm">Gemini Assistant</span>
             </div>
-            <button onClick={onClose} className="text-zinc-500 hover:text-white transition-colors">
+            <button onClick={onClose} className="text-zinc-500 hover:text-white transition-colors" title="Close Chat" aria-label="Close Chat">
               <X size={18} />
             </button>
           </div>
@@ -712,6 +717,8 @@ const GeminiChat = ({ isOpen, onClose, messages, onSendMessage, isLoading }: Gem
               <button
                 onClick={handleSend}
                 disabled={isLoading}
+                title="Send Message"
+                aria-label="Send Message"
                 className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 bg-emerald-500 text-black rounded-lg hover:bg-emerald-400 transition-colors disabled:opacity-50"
               >
                 <Send size={14} />
@@ -733,7 +740,7 @@ import { NewsDataPanel } from './components/NewsDataPanel';
 import { newsDataService } from './services/newsDataService';
 
 export default function App() {
-  const { showToast } = useToast();
+  const { showToast, notifications, clearNotifications } = useToast();
   const [mode, setMode] = useState<AppMode>('manual');
   const [backendConnected, setBackendConnected] = useState<boolean | null>(null);
   const [loopRunning, setLoopRunning] = useState(false);
@@ -1541,33 +1548,35 @@ export default function App() {
                       <h3 className="font-semibold text-sm">Notifications</h3>
                       <button
                         className="text-[10px] text-emerald-400 hover:text-emerald-300 font-medium"
-                        onClick={() => setIsNotificationsOpen(false)}
-                        aria-label="Mark all as read"
+                        onClick={() => clearNotifications()}
+                        aria-label="Clear all notifications"
+                        title="Clear all notifications"
                       >
-                        Mark all as read
+                        Clear all
                       </button>
                     </div>
                     <div className="max-h-96 overflow-y-auto">
-                      {[
-                        { title: 'AI Workflow Executed', desc: 'RSI Reversal trigger fired for BTC/USDT. Order placed.', time: 'Just now', type: 'info' },
-                        { title: 'Risk Limit Warning', desc: 'Daily drawdown limit approaches 80%. Consider pausing agents.', time: '2h ago', type: 'warn' },
-                        { title: 'Deposit Confirmed', desc: 'Successfully deposited 5,000 USDT to Wallet.', time: '5h ago', type: 'success' },
-                        { title: 'API Disconnected', desc: 'Missing Binance API keys. Re-check settings.', time: '1d ago', type: 'error' },
-                      ].map((notif, i) => (
-                        <div key={i} className="p-4 border-b border-zinc-800/50 hover:bg-white/5 transition-colors cursor-pointer flex gap-3">
-                          <div className={cn(
-                            "w-2 h-2 rounded-full mt-1.5 flex-shrink-0",
-                            notif.type === 'info' ? "bg-blue-500" :
-                              notif.type === 'warn' ? "bg-amber-500" :
-                                notif.type === 'success' ? "bg-emerald-500" : "bg-rose-500"
-                          )} />
-                          <div>
-                            <p className="text-sm font-medium text-white">{notif.title}</p>
-                            <p className="text-xs text-zinc-400 mt-1">{notif.desc}</p>
-                            <p className="text-[10px] text-zinc-600 mt-2 font-mono uppercase tracking-widest">{notif.time}</p>
-                          </div>
+                      {notifications.length === 0 ? (
+                        <div className="p-8 text-center text-zinc-500 text-sm">
+                          No new notifications
                         </div>
-                      ))}
+                      ) : (
+                        notifications.map((notif, i) => (
+                          <div key={notif.id || i} className="p-4 border-b border-zinc-800/50 hover:bg-white/5 transition-colors cursor-pointer flex gap-3">
+                            <div className={cn(
+                              "w-2 h-2 rounded-full mt-1.5 flex-shrink-0",
+                              notif.type === 'info' ? "bg-blue-500" :
+                                notif.type === 'warn' ? "bg-amber-500" :
+                                  notif.type === 'success' ? "bg-emerald-500" : "bg-rose-500"
+                            )} />
+                            <div>
+                              <p className="text-sm font-medium text-white">{notif.title}</p>
+                              <p className="text-xs text-zinc-400 mt-1">{notif.message}</p>
+                              <p className="text-[10px] text-zinc-600 mt-2 font-mono uppercase tracking-widest">{notif.time}</p>
+                            </div>
+                          </div>
+                        ))
+                      )}
                     </div>
                   </motion.div>
                 )}
@@ -1662,6 +1671,7 @@ export default function App() {
                       <div className="space-y-1">
                         <label className="text-[9px] uppercase text-zinc-500 font-bold tracking-wider">Symbol</label>
                         <select
+                          title="Select Symbol"
                           value={selectedSymbol}
                           onChange={(e) => setSelectedSymbol(e.target.value)}
                           className="w-full bg-zinc-900 border border-zinc-800 rounded-xl py-2 px-3 text-xs font-mono text-white focus:outline-none focus:border-emerald-500/50"
@@ -1674,6 +1684,7 @@ export default function App() {
                       <div className="space-y-1">
                         <label className="text-[9px] uppercase text-zinc-500 font-bold tracking-wider">Order Type</label>
                         <select
+                          title="Select Order Type"
                           value={manualOrderType}
                           onChange={(e) => setManualOrderType(e.target.value)}
                           className="w-full bg-zinc-900 border border-zinc-800 rounded-xl py-2 px-3 text-xs font-mono text-white focus:outline-none focus:border-emerald-500/50"
@@ -1684,11 +1695,11 @@ export default function App() {
                       </div>
                       <div className="space-y-1">
                         <label className="text-[9px] uppercase text-zinc-500 font-bold tracking-wider">Price</label>
-                        <input type="text" value={price} onChange={(e) => setPrice(e.target.value)} className="w-full bg-zinc-900 border border-zinc-800 rounded-xl py-2 px-3 text-xs font-mono text-white focus:outline-none focus:border-emerald-500/50" />
+                        <input type="text" title="Order Price" value={price} onChange={(e) => setPrice(e.target.value)} className="w-full bg-zinc-900 border border-zinc-800 rounded-xl py-2 px-3 text-xs font-mono text-white focus:outline-none focus:border-emerald-500/50" />
                       </div>
                       <div className="space-y-1">
                         <label className="text-[9px] uppercase text-zinc-500 font-bold tracking-wider">Amount</label>
-                        <input type="number" step="0.001" value={manualAmount} onChange={(e) => setManualAmount(e.target.value)} className="w-full bg-zinc-900 border border-zinc-800 rounded-xl py-2 px-3 text-xs font-mono text-white focus:outline-none focus:border-emerald-500/50" />
+                        <input type="number" title="Order Amount" step="0.001" value={manualAmount} onChange={(e) => setManualAmount(e.target.value)} className="w-full bg-zinc-900 border border-zinc-800 rounded-xl py-2 px-3 text-xs font-mono text-white focus:outline-none focus:border-emerald-500/50" />
                       </div>
                       <div className="grid grid-cols-2 gap-2">
                         <div className="space-y-1">

@@ -197,7 +197,7 @@ export const apiService = {
 
   // ── Positions ───────────────────────────────────────────────────────────
   async getPositions(): Promise<{ positions: Position[]; count: number }> {
-    return request('/trading/positions');
+    return request('/trading/paper/positions');
   },
 
   // ── Trades ──────────────────────────────────────────────────────────────

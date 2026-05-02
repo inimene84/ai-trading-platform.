@@ -19,7 +19,7 @@ export const geminiService = {
   async chat(message: string, history: { role: string; parts: { text: string }[] }[] = []) {
     const ai = getAiClient();
     const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
+      model: "gemini-2.0-flash",
       contents: [...history, { role: "user", parts: [{ text: message }] }],
       config: {
         systemInstruction: "You are a professional trading assistant for QuantumTrade Pro. You help users with market analysis, trading strategies, and building AI agent workflows. Be concise, professional, and insightful.",
@@ -34,7 +34,7 @@ export const geminiService = {
   async analyzeMarket(data: any) {
     const ai = getAiClient();
     const response = await ai.models.generateContent({
-      model: "gemini-3.1-flash-lite-preview",
+      model: "gemini-2.0-flash",
       contents: `Analyze this trading data and provide a brief summary of trends and potential actions: ${JSON.stringify(data)}`,
       config: {
         systemInstruction: "You are a professional market analyst. Provide concise, actionable trading insights based on the provided data. Focus on immediate trends and clear 'Buy', 'Sell', or 'Hold' recommendations with brief justifications.",
@@ -64,7 +64,7 @@ export const geminiService = {
   async optimizeWorkflow(workflow: any) {
     const ai = getAiClient();
     const response = await ai.models.generateContent({
-      model: "gemini-3.1-pro-preview",
+      model: "gemini-2.0-pro-exp-02-05",
       contents: `Review this trading bot workflow and suggest improvements or missing nodes: ${JSON.stringify(workflow)}`,
       config: {
         thinkingConfig: { thinkingLevel: ThinkingLevel.HIGH },
