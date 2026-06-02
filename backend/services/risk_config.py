@@ -1,5 +1,6 @@
 import os
 from pydantic_settings import BaseSettings
+from pydantic import AliasChoices, Field as PydanticField
 
 class RiskConfig(BaseSettings):
     """Centralized risk and trading configuration."""
@@ -27,7 +28,16 @@ class RiskConfig(BaseSettings):
     max_positions: int = 4
     max_directional_exposure_usdt: float = 500.0
     trade_usdt_amount: float = 10.0
-    kill_floor_usdt: float = 65.0
+    kill_floor_usdt: float = PydanticField(
+        default=65.0,
+        validation_alias=AliasChoices("kill_floor_usdt", "TRADING_KILL_FLOOR_USDT"),
+    )
+    
+    # Safety hard boundaries (Phase 7)
+    max_position_risk_pct: float = 1.0
+    max_portfolio_drawdown_pct: float = 20.0
+    max_daily_loss_pct: float = 5.0
+    max_open_positions: int = 10
     
     # Signal thresholds
     min_signal_strength: float = 0.60
@@ -39,13 +49,10 @@ class RiskConfig(BaseSettings):
     sl_atr_mult: float = 1.0
     tp_atr_mult: float = 2.5
     
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        # Map env vars to attributes where names don't exactly match
-        fields = {
-            'kill_floor_usdt': {'env': 'TRADING_KILL_FLOOR_USDT'}
-        }
+    model_config = {
+        "env_file": ".env",
+        "env_file_encoding": "utf-8",
+    }
 
 # Global singleton
 _risk_config = None
@@ -55,3 +62,10 @@ def get_risk_config() -> RiskConfig:
     if _risk_config is None:
         _risk_config = RiskConfig()
     return _risk_config
+
+def get_trading_mode() -> str:
+    """Resolve trading mode (paper vs. live) based on config/env variables."""
+    # If PAPER_TRADING is true or DRY_RUN_ALL is true, it is paper mode
+    paper_trading = os.getenv("PAPER_TRADING", "false").lower() == "true"
+    dry_run = os.getenv("DRY_RUN_ALL", "true").lower() == "true"
+    return "paper" if (paper_trading or dry_run) else "live"

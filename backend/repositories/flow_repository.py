@@ -22,10 +22,14 @@ class FlowRepository:
             is_template=is_template,
             tags=tags or []
         )
-        self.db.add(flow)
-        self.db.commit()
-        self.db.refresh(flow)
-        return flow
+        try:
+            self.db.add(flow)
+            self.db.commit()
+            self.db.refresh(flow)
+            return flow
+        except Exception:
+            self.db.rollback()
+            raise
     
     def get_flow_by_id(self, flow_id: int) -> Optional[HedgeFundFlow]:
         """Get a flow by its ID"""
@@ -69,9 +73,13 @@ class FlowRepository:
         if tags is not None:
             flow.tags = tags
         
-        self.db.commit()
-        self.db.refresh(flow)
-        return flow
+        try:
+            self.db.commit()
+            self.db.refresh(flow)
+            return flow
+        except Exception:
+            self.db.rollback()
+            raise
     
     def delete_flow(self, flow_id: int) -> bool:
         """Delete a flow by ID"""
@@ -79,9 +87,13 @@ class FlowRepository:
         if not flow:
             return False
         
-        self.db.delete(flow)
-        self.db.commit()
-        return True
+        try:
+            self.db.delete(flow)
+            self.db.commit()
+            return True
+        except Exception:
+            self.db.rollback()
+            raise
     
     def duplicate_flow(self, flow_id: int, new_name: str = None) -> Optional[HedgeFundFlow]:
         """Create a copy of an existing flow"""

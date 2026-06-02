@@ -17,6 +17,7 @@ import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Dict, List, Optional
 
 import pandas as pd
@@ -159,41 +160,8 @@ def _run_technical_opinion(bars: pd.DataFrame, symbol: str) -> AgentOpinion:
         )
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# Kronos Opinion
-# ═══════════════════════════════════════════════════════════════════════════════
-
-def _run_kronos_opinion(bars: pd.DataFrame, symbol: str) -> AgentOpinion:
-    """Get Kronos foundation model opinion."""
-    try:
-        # kronos_service.predict is async; we call it via asyncio.run_coroutine_threadsafe
-        # But this function is called from sync context in thread pool, so use asyncio.run
-        result = asyncio.run(kronos_service.predict(bars, symbol))
-
-        signal = result.get("signal", "NEUTRAL").lower()
-        if signal == "up":
-            signal = "bullish"
-        elif signal == "down":
-            signal = "bearish"
-        elif signal not in ("bullish", "bearish", "neutral"):
-            signal = "neutral"
-
-        return AgentOpinion(
-            agent="kronos_foundation",
-            signal=signal,
-            confidence=result.get("confidence", 0.0),
-            reasoning=(
-                f"Kronos predicts {result.get('predicted_change_pct', 0):+.2f}% "
-                f"next close (${result.get('predicted_close', 'N/A')})"
-            ),
-            metadata=result
-        )
-    except Exception as e:
-        logger.warning(f"Kronos opinion error for {symbol}: {e}")
-        return AgentOpinion(
-            agent="kronos_foundation", signal="neutral", confidence=0.0,
-            reasoning=f"Error: {e}"
-        )
+# NOTE: _run_kronos_opinion() was removed — Kronos is now handled inline in
+# analyze_symbol() to avoid asyncio.run() inside an already-running event loop.
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -300,15 +268,31 @@ def _run_alert_opinion(symbol: str) -> AgentOpinion:
 # Opinion Aggregator (Portfolio Manager logic, simplified)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# Agent weights in the final vote (includes persona agents)
-_AGENT_WEIGHTS = {
-    "technical_analyst": 0.25,    # Only real signal right now — boost it
-    "kronos_foundation": 0.20,    # ML price model — high value when active
-    "social_sentiment": 0.20,     # BTC proxy covers all coins via fallback — boosted
-    "market_alerts": 0.05,        # Bonus weight when whale/pump data available
-    # Persona agents (from persona_adapter) - weights imported at runtime
-    # NOTE: persona total ≈ 1.0 - above = 0.30 → personas share remaining 0.30
-}
+# Agent weights loaded from config at module level.
+# Falls back to hardcoded defaults if YAML config is missing.
+def _load_agent_config() -> dict:
+    """Load agent_config.yaml and return the raw dict."""
+    import yaml as _yaml
+    _cfg_path = Path(__file__).resolve().parent.parent / "agents" / "config" / "agent_config.yaml"
+    try:
+        with open(_cfg_path, "r", encoding="utf-8") as f:
+            return _yaml.safe_load(f) or {}
+    except Exception as e:
+        logger.warning(f"Could not load agent_config.yaml: {e}. Using defaults.")
+        return {}
+
+_LOADED_CONFIG = _load_agent_config()
+_AGENT_WEIGHTS = _LOADED_CONFIG.get("base_agents", {
+    "technical_analyst": 0.25,
+    "kronos_foundation": 0.20,
+    "social_sentiment": 0.20,
+    "market_alerts": 0.05,
+})
+_AGG_CFG = _LOADED_CONFIG.get("aggregation", {})
+_BUY_THRESHOLD = float(_AGG_CFG.get("buy_threshold", 0.15))
+_SELL_THRESHOLD = float(_AGG_CFG.get("sell_threshold", -0.15))
+_CONF_SCORE_W = float(_AGG_CFG.get("confidence_score_weight", 0.6))
+_CONF_CONVICTION_W = float(_AGG_CFG.get("confidence_conviction_weight", 0.4))
 
 _SIGNAL_MAP = {
     "bullish": 1,
@@ -362,18 +346,18 @@ def _aggregate_opinions(
         final_score = 0.0
         avg_conviction = 0.0
 
-    # Map score to direction
-    if final_score > 0.15:
+    # Map score to direction (thresholds from config)
+    if final_score > _BUY_THRESHOLD:
         direction = "BUY"
-    elif final_score < -0.15:
+    elif final_score < _SELL_THRESHOLD:
         direction = "SELL"
     else:
         direction = "HOLD"
 
     # Confidence = directional clarity blended with average conviction
     # abs(final_score) measures directional consensus; avg_conviction measures overall engagement
-    # Weight: 60% directional + 40% conviction — avoids zero when agents cancel
-    confidence = min(0.6 * abs(final_score) + 0.4 * avg_conviction, 1.0)
+    # Weights from config (default: 60% directional + 40% conviction)
+    confidence = min(_CONF_SCORE_W * abs(final_score) + _CONF_CONVICTION_W * avg_conviction, 1.0)
 
     # Build reasoning
     reasoning = (

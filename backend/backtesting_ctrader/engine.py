@@ -75,6 +75,12 @@ class BacktestEngine:
         self.initial_balance = initial_balance
         self.commission      = commission
         self.slippage        = slippage
+        
+        try:
+            from backend.strategies.market_regime import MarketRegimeDetector
+            self._regime_detector = MarketRegimeDetector()
+        except ImportError:
+            self._regime_detector = None
 
     # ── main simulation ────────────────────────────────────────────────────────
 
@@ -148,7 +154,11 @@ class BacktestEngine:
             if len(lookback) < 10:
                 continue
 
-            sig = strategy.generate_signal(symbol, lookback)
+            if self.strategy_name == "combined" and self._regime_detector:
+                regime_result = self._regime_detector.detect(lookback)
+                sig = strategy.generate_signal(symbol, lookback, regime=regime_result.regime)
+            else:
+                sig = strategy.generate_signal(symbol, lookback)
 
             if sig.signal == "NEUTRAL":
                 continue

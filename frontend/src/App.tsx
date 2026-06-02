@@ -79,6 +79,7 @@ import { StatusView } from './components/StatusView';
 import PaperTradingView from './components/PaperTradingView';
 import { TradingChart } from './components/TradingChart';
 import { OpinionLayerView } from './components/OpinionLayerView';
+import { OperationsPage } from './components/OperationsPage';
 import { marketDataService, MarketProvider } from './services/marketDataService';
 import { brokerService, OrderParams } from './services/brokerService';
 import { backtestService, BacktestResult } from './services/backtestService';
@@ -87,7 +88,7 @@ import { workflowEngine } from './services/workflowEngine';
 import { FilterNode, PositionSizerNode, RiskManagementNode, KillswitchNode } from './components/WorkflowNodes';
 
 // --- Types ---
-type AppMode = 'manual' | 'ai' | 'backtest' | 'settings' | 'markets' | 'portfolio' | 'wallet' | 'signals' | 'status' | 'opinion';
+type AppMode = 'manual' | 'ai' | 'backtest' | 'settings' | 'markets' | 'portfolio' | 'wallet' | 'signals' | 'status' | 'opinion' | 'operations';
 
 interface WorkflowNodeData {
   label: string;
@@ -1396,6 +1397,7 @@ export default function App() {
 //           <NavItem icon={<FlaskConical size={20} />} label="Paper Trading" active={mode === 'paper'} onClick={() => setMode('paper')} />
           <NavItem icon={<Wallet size={20} />} label="Wallet" active={mode === 'wallet'} onClick={() => setMode('wallet')} />
           <div className="pt-2 mt-2 border-t border-zinc-800/50" />
+          <NavItem icon={<Shield size={20} />} label="Trading Control" active={mode === 'operations'} onClick={() => setMode('operations')} />
           <NavItem icon={<Globe size={20} />} label="System Status" active={mode === 'status'} badge={backendConnected ? 'OK' : undefined} onClick={() => setMode('status')} />
           <NavItem icon={<Settings size={20} />} label="Settings" active={mode === 'settings'} onClick={() => setMode('settings')} />
         </nav>
@@ -2273,6 +2275,8 @@ export default function App() {
             <OpinionLayerView />
           ) : mode === 'status' ? (
             <StatusView key="status" />
+          ) : mode === 'operations' ? (
+            <OperationsPage />
           ) : null}
         </AnimatePresence>
       </main>

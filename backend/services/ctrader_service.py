@@ -595,9 +595,29 @@ class CTraderService:
         """Return stored account balance (fetched automatically after authentication)."""
         return {
             "balance": self.balance,
+            "available": self.balance - self.margin if hasattr(self, 'margin') else self.balance,
             "equity": self.equity,
-            "margin": self.margin,
+            "margin_used": self.margin,
+            "unrealized_pnl": 0.0,
+            "broker": "ctrader"
         }
+
+    def get_positions(self) -> list:
+        """
+        Return all non-zero open positions.
+        Returns a list of dicts.
+        """
+        # TODO: Implement real position fetch for CTrader
+        return []
+
+    def cancel_order(self, order_id: str) -> dict:
+        """
+        Cancel an open order.
+        Returns a dict with 'success' and 'message'.
+        """
+        # TODO: Implement real order cancellation for CTrader
+        return {"success": False, "message": "Not implemented"}
+
     def status(self) -> dict:
         creds = self._load_credentials()
         balance_info = self.get_balance() if hasattr(self, 'get_balance') else {"balance": 0.0}

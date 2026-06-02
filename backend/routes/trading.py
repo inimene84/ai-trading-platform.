@@ -6,12 +6,35 @@ from fastapi.responses import StreamingResponse
 import json
 import asyncio
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List, Dict, Any
+from pydantic import BaseModel
 
 from backend.database.connection import SessionLocal
 from backend.database.models import TradingSignal, Trade, PortfolioSnapshot
 from backend.services.trading_loop import trading_loop
 from backend.services.ai_analysis import ai_analysis_service
+
+class StartLoopRequest(BaseModel):
+    interval_minutes: int = 5
+    symbols: Optional[List[str]] = None
+    strategy: str = "combined"
+
+class LoopStatusResponse(BaseModel):
+    state: str
+    running: bool
+    interval_minutes: int
+    symbols: List[str]
+    strategy: str
+    last_cycle: Optional[str]
+    next_cycle: Optional[str]
+    cycle_count: int
+    error: Optional[str]
+
+class TradingConfigResponse(BaseModel):
+    mode: str
+    interval_minutes: int
+    symbols: List[str]
+    risk_limits: Dict[str, Any]
 
 load_dotenv()
 
@@ -321,39 +344,27 @@ async def get_status():
     }
 
 
-@router.get("/config")
+@router.get("/config", response_model=TradingConfigResponse)
 async def get_config():
-    """Get current configuration (masked secrets)."""
-    load_dotenv(override=True)
-
-    def mask(val):
-        if not val or val.startswith('your_'):
-            return ''
-        if len(val) <= 8:
-            return '****'
-        return val[:4] + '****' + val[-4:]
-
-    return {
-        'llm': {
-            'xai_api_key': mask(os.getenv('XAI_API_KEY', '')),
-            'xai_model': os.getenv('XAI_MODEL', 'grok-beta'),
-            'kie_api_key': mask(os.getenv('KIE_API_KEY', '')),
-            'anthropic_api_key': mask(os.getenv('ANTHROPIC_API_KEY', '')),
-            'openai_api_key': mask(os.getenv('OPENAI_API_KEY', '')),
-        },
-        'brokers': {
-            'dry_run_all': os.getenv('DRY_RUN_ALL', 'true'),
-            'binance_testnet': os.getenv('BINANCE_TESTNET', 'true'),
-            'ctrader_env': os.getenv('CTRADER_ENV', 'demo'),
-            'alpaca_paper': os.getenv('ALPACA_PAPER', 'true'),
-        },
-        'risk': {
-            'risk_per_trade': os.getenv('RISK_PER_TRADE', '0.01'),
-            'max_positions': os.getenv('MAX_POSITIONS', '5'),
-            'min_signal_strength': os.getenv('MIN_SIGNAL_STRENGTH', '0.55'),
-            'min_risk_reward': os.getenv('MIN_RISK_REWARD', '1.5'),
-        }
+    """Get current configuration limits and status."""
+    from backend.services.risk_config import get_trading_mode, get_risk_config
+    mode = get_trading_mode()
+    config = get_risk_config()
+    risk_limits = {
+        "max_positions": config.max_positions,
+        "max_directional_exposure_usdt": config.max_directional_exposure_usdt,
+        "trade_usdt_amount": config.trade_usdt_amount,
+        "kill_floor_usdt": config.kill_floor_usdt,
+        "min_signal_strength": config.min_signal_strength,
+        "sl_cooldown_minutes": config.sl_cooldown_minutes,
+        "emergency_drawdown_pct": config.emergency_drawdown_pct,
     }
+    return TradingConfigResponse(
+        mode=mode,
+        interval_minutes=trading_loop._interval_minutes,
+        symbols=trading_loop._symbols,
+        risk_limits=risk_limits,
+    )
 
 
 # ── Market Data Feeds ────────────────────────────────────────────────────────
@@ -427,30 +438,30 @@ async def get_forex():
 
 # ── Trading Loop Control ──────────────────────────────────────────────────────
 
-@router.post("/loop/start")
-async def start_loop(request: dict = None):
+@router.post("/loop/start", response_model=LoopStatusResponse)
+async def start_loop(req: StartLoopRequest = None):
     """Start the automated trading loop."""
-    request = request or {}
-    interval = request.get("interval_minutes", 5)
-    symbols = request.get("symbols", None)
-    strategy = request.get("strategy", "combined")
-    result = await trading_loop.start(
-        interval_minutes=interval, symbols=symbols, strategy=strategy
+    if req is None:
+        req = StartLoopRequest()
+    await trading_loop.start(
+        interval_minutes=req.interval_minutes,
+        symbols=req.symbols,
+        strategy=req.strategy,
     )
-    return result
+    return LoopStatusResponse(**trading_loop.status)
 
 
-@router.post("/loop/stop")
+@router.post("/loop/stop", response_model=LoopStatusResponse)
 async def stop_loop():
     """Stop the automated trading loop."""
-    result = await trading_loop.stop()
-    return result
+    await trading_loop.stop()
+    return LoopStatusResponse(**trading_loop.status)
 
 
-@router.get("/loop/status")
+@router.get("/loop/status", response_model=LoopStatusResponse)
 async def loop_status():
     """Get trading loop status."""
-    return trading_loop.status
+    return LoopStatusResponse(**trading_loop.status)
 
 
 # ── Positions ─────────────────────────────────────────────────────────────────

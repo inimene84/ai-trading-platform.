@@ -260,13 +260,27 @@ class InfluxDBWriter:
             "Content-Type": "text/plain; charset=utf-8",
         }
 
-        try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                resp = await client.post(url, params=params, headers=headers, content=line)
-                if resp.status_code not in (200, 204):
-                    logger.warning(f"InfluxDB write error [{bucket}]: {resp.status_code} {resp.text[:200]}")
-        except Exception as exc:
-            logger.warning(f"InfluxDB write failed [{bucket}]: {exc}")
+        max_retries = 3
+        backoff = 0.5  # start with 500ms
+        for attempt in range(max_retries):
+            try:
+                async with httpx.AsyncClient(timeout=5.0) as client:
+                    resp = await client.post(url, params=params, headers=headers, content=line)
+                    if resp.status_code in (200, 204):
+                        return
+                    else:
+                        logger.warning(
+                            f"InfluxDB write error [{bucket}] (attempt {attempt + 1}/{max_retries}): "
+                            f"{resp.status_code} {resp.text[:200]}"
+                        )
+            except Exception as exc:
+                logger.warning(
+                    f"InfluxDB write failed [{bucket}] (attempt {attempt + 1}/{max_retries}): {exc}"
+                )
+            
+            if attempt < max_retries - 1:
+                await asyncio.sleep(backoff)
+                backoff *= 2  # 0.5s -> 1s -> 2s
 
     async def write_binance_wallet(self, balance: float, available: float,
                                     equity: float, unrealized_pnl: float,

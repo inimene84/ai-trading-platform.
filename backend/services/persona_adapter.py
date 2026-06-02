@@ -5,8 +5,9 @@ Adapts ai-hedge-fund investor persona agents for crypto trading.
 Each persona receives crypto-specific metrics (funding, OI, volatility,
 exchange flows, recent returns) and responds in their signature style.
 
-Supported personas: buffett, burry, druckenmiller, cathie_wood, peter_lynch,
-phil_fisher, munger, taleb, ackman, damodaran, pabrai, jhunjhunwala
+Persona prompts and weights are loaded from YAML config files in
+``backend/agents/config/personas/``.  The LLM model is selected via
+the centralised router in ``backend/llm/router.py``.
 """
 
 import asyncio
@@ -14,23 +15,109 @@ import json
 import logging
 import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Dict, List, Optional
 
 import httpx
+import yaml
+
+from backend.llm.router import pick_model, get_api_key
 
 logger = logging.getLogger(__name__)
 
-# LLM config (reuses existing backend LLM infra)
-_DEFAULT_PROVIDER = os.getenv("PERSONA_LLM_PROVIDER", "groq")
-_DEFAULT_MODEL = os.getenv("PERSONA_LLM_MODEL", "gemini/gemini-2.5-flash-lite")
-# API key: prefer LITELLM_API_KEY, then PERSONA_LLM_API_KEY, then GROQ_API_KEY
-_DEFAULT_API_KEY = (
-    os.getenv("LITELLM_API_KEY")
-    or os.getenv("PERSONA_LLM_API_KEY")
-    or os.getenv("GROQ_API_KEY", "")
-)
-# Allow overriding base URL via environment (e.g., for LiteLLM proxy)
-_DEFAULT_BASE_URL = os.getenv("PERSONA_LLM_BASE_URL", "https://api.groq.com/openai/v1")
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Persona Registry — loads from YAML config
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@dataclass
+class PersonaConfig:
+    """Single persona definition loaded from YAML."""
+    id: str
+    name: str
+    style: str
+    time_horizon: str
+    risk_tolerance: str
+    weight: float
+    prompt_template: str
+
+
+class PersonaRegistry:
+    """
+    Lazy-loading registry of persona configs from YAML files.
+    Caches after first load.
+    """
+    _instance: Optional["PersonaRegistry"] = None
+    _loaded: bool = False
+    _personas: Dict[str, PersonaConfig] = {}
+    _config_dir: Path = Path(__file__).resolve().parent.parent / "agents" / "config" / "personas"
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
+    def _load(self):
+        if self._loaded:
+            return
+        self._personas = {}
+        if not self._config_dir.exists():
+            logger.warning(f"Persona config dir not found: {self._config_dir}")
+            self._loaded = True
+            return
+        for yaml_file in sorted(self._config_dir.glob("*.yaml")):
+            try:
+                with open(yaml_file, "r", encoding="utf-8") as f:
+                    data = yaml.safe_load(f)
+                if not data or not isinstance(data, dict):
+                    continue
+                persona = PersonaConfig(
+                    id=data.get("id", yaml_file.stem),
+                    name=data.get("name", yaml_file.stem),
+                    style=data.get("style", "unknown"),
+                    time_horizon=data.get("time_horizon", "swing"),
+                    risk_tolerance=data.get("risk_tolerance", "medium"),
+                    weight=float(data.get("weight", 0.05)),
+                    prompt_template=data.get("prompt_template", ""),
+                )
+                self._personas[persona.id] = persona
+            except Exception as e:
+                logger.warning(f"Failed to load persona config {yaml_file.name}: {e}")
+        self._loaded = True
+        logger.info(f"PersonaRegistry: loaded {len(self._personas)} personas from {self._config_dir}")
+
+    def get(self, persona_id: str) -> Optional[PersonaConfig]:
+        self._load()
+        return self._personas.get(persona_id)
+
+    def all(self) -> Dict[str, PersonaConfig]:
+        self._load()
+        return dict(self._personas)
+
+    def weights(self) -> Dict[str, float]:
+        self._load()
+        return {pid: p.weight for pid, p in self._personas.items()}
+
+    def prompts(self) -> Dict[str, str]:
+        self._load()
+        return {pid: p.prompt_template for pid, p in self._personas.items()}
+
+    def active_ids(self) -> List[str]:
+        """Return active persona IDs, respecting ACTIVE_PERSONAS env override."""
+        self._load()
+        env = os.getenv("ACTIVE_PERSONAS", "")
+        if env:
+            return [p.strip() for p in env.split(",") if p.strip() in self._personas]
+        return list(self._personas.keys())
+
+    def reload(self):
+        """Force reload from disk (useful for hot-reloading)."""
+        self._loaded = False
+        self._load()
+
+
+# Module-level singleton
+_registry = PersonaRegistry()
 
 
 @dataclass
@@ -42,127 +129,18 @@ class PersonaOpinion:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Persona system prompts (crypto-adapted)
-# ═══════════════════════════════════════════════════════════════════════════════
-
-_PERSONA_PROMPTS = {
-    "warren_buffett": (
-        "You are Warren Buffett analyzing a crypto asset.\n"
-        "Principles: Only buy assets with durable competitive advantage (network effect, \n"
-        "developer activity, institutional adoption). Avoid speculation.\n"
-        "Look for: strong holder base, low leverage, consistent fees/revenue, \n"
-        "growing institutional treasury allocation.\n"
-        "Style: plain-spoken, patient, value-oriented. Cite specific metrics."
-    ),
-    "michael_burry": (
-        "You are Michael Burry analyzing a crypto asset.\n"
-        "Principles: Deep value contrarian. Hunt for mispriced assets hated by the crowd.\n"
-        "Look for: extreme funding-rate negativity, high short interest, \n"
-        "strong on-chain fundamentals despite price weakness, insider/whale accumulation.\n"
-        "Style: terse, data-driven, skeptical of consensus. Flag hidden risks."
-    ),
-    "stanley_druckenmiller": (
-        "You are Stanley Druckenmiller analyzing a crypto asset.\n"
-        "Principles: Macro-driven, asymmetric bets. Cut losses fast, let winners run.\n"
-        "Look for: liquidity inflection points, central bank policy tailwinds, \n"
-        "dollar weakness signals, momentum shifts in futures open interest.\n"
-        "Style: bold, macro-aware, willing to take concentrated positions."
-    ),
-    "cathie_wood": (
-        "You are Cathie Wood analyzing a crypto asset.\n"
-        "Principles: Disruptive innovation. 5-year horizon. Ignore short-term volatility.\n"
-        "Look for: protocol innovation, developer growth, new use cases (DeFi, RWA, AI), \n"
-        "declining issuance schedules, staking yield sustainability.\n"
-        "Style: optimistic about technology, long-term focused, high conviction."
-    ),
-    "peter_lynch": (
-        "You are Peter Lynch analyzing a crypto asset.\n"
-        "Principles: Invest in what you understand. Growth at a reasonable price.\n"
-        "Look for: undervalued relative to user growth, revenue per user expanding, \n"
-        "narrative gaining real-world traction, not just hype.\n"
-        "Style: accessible, practical, \"ten-bagger\" hunting."
-    ),
-    "charlie_munger": (
-        "You are Charlie Munger analyzing a crypto asset.\n"
-        "Principles: Invert, always invert. Avoid stupidity rather than seek brilliance.\n"
-        "Look for: what could kill this asset? Regulatory risk, centralization, \n"
-        "unsustainable yield, concentration of supply.\n"
-        "Style: blunt, wisdom-driven, focuses on what NOT to do."
-    ),
-    "nassim_taleb": (
-        "You are Nassim Taleb analyzing a crypto asset.\n"
-        "Principles: Skin in the game. Antifragility. Tail-risk obsessed.\n"
-        "Look for: convex payoff structures, options skew, liquidation cascade risks, \n"
-        "protocol death spirals, correlation breakdowns during stress.\n"
-        "Style: philosophical, skeptical of models, obsessed with tail risks."
-    ),
-    "bill_ackman": (
-        "You are Bill Ackman analyzing a crypto asset.\n"
-        "Principles: Activist, high-conviction, platform-quality focus.\n"
-        "Look for: governance improvements, treasury management, fee switch potential, \n"
-        "undervalued but fixable protocols.\n"
-        "Style: confident, detailed thesis, willing to be loud and contrarian."
-    ),
-    "phil_fisher": (
-        "You are Phil Fisher analyzing a crypto asset.\n"
-        "Principles: Scuttlebutt research. Talk to developers, users, competitors.\n"
-        "Look for: product quality, R&D velocity, community health, \n"
-        "competitive moat through continuous innovation.\n"
-        "Style: meticulous, research-intensive, growth-at-any-price if quality is there."
-    ),
-    "aswath_damodaran": (
-        "You are Aswath Damodaran analyzing a crypto asset.\n"
-        "Principles: Valuation is story + numbers. Every asset has a fair value.\n"
-        "Look for: token cash flows (fees burned, staking yield), network value / transaction ratio, \n"
-        "discount rates reflecting crypto risk premium.\n"
-        "Style: academic, structured, builds valuation models from first principles."
-    ),
-    "mohnish_pabrai": (
-        "You are Mohnish Pabrai analyzing a crypto asset.\n"
-        "Principles: Dhando investor. Heads I win big, tails I don't lose much.\n"
-        "Look for: asymmetric setups, deeply discounted to liquidation value, \n"
-        "strong community support at low prices, minimal downside.\n"
-        "Style: patient, risk-averse, focused on margin of safety."
-    ),
-    "rakesh_jhunjhunwala": (
-        "You are Rakesh Jhunjhunwala analyzing a crypto asset.\n"
-        "Principles: The Big Bull. Conviction + patience. Buy fear, sell euphoria.\n"
-        "Look for: mass retail fear but whale accumulation, strong domestic adoption, \n"
-        "undervalued relative to historical cycles.\n"
-        "Style: bold, optimistic, long-term holder mentality."
-    ),
-}
-
-_PERSONA_WEIGHTS = {
-    # --- Crypto-open (boosted) ---
-    "cathie_wood": 0.14,           # ARK crypto bull, most relevant
-    "stanley_druckenmiller": 0.12, # macro trader, respects crypto momentum
-    "bill_ackman": 0.10,           # activist, adapts to market reality
-    "rakesh_jhunjhunwala": 0.10,   # growth-oriented, bullish on momentum
-    "michael_burry": 0.10,         # contrarian but data-driven
-    # --- Neutral / framework personas ---
-    "peter_lynch": 0.09,           # growth at reasonable price
-    "aswath_damodaran": 0.08,      # valuation discipline
-    "phil_fisher": 0.07,           # quality growth focus
-    "mohnish_pabrai": 0.06,        # Buffett-like but less crypto-hostile
-    # --- Crypto perma-bears (reduced) ---
-    "warren_buffett": 0.06,        # perma-bear on crypto, reduced
-    "charlie_munger": 0.05,        # perma-bear on crypto, minimal weight
-    "nassim_taleb": 0.03,          # perma-bear + extreme tail-risk bias, minimal
-}
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# LLM caller
+# LLM caller — uses central router
 # ═══════════════════════════════════════════════════════════════════════════════
 
 async def _call_llm(system: str, user: str) -> dict:
     """Call the LLM and return parsed JSON with signal, confidence, reasoning."""
-    api_key = _DEFAULT_API_KEY
+    model_cfg = pick_model("persona_analysis")
+    api_key = get_api_key(model_cfg)
     if not api_key:
         logger.warning("No LLM API key for persona adapter")
         return {"signal": "neutral", "confidence": 0.0, "reasoning": "No API key"}
 
+    base_url = model_cfg.base_url or "https://api.groq.com/openai/v1"
     messages = [
         {"role": "system", "content": system},
         {"role": "user", "content": user},
@@ -171,13 +149,13 @@ async def _call_llm(system: str, user: str) -> dict:
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.post(
-                f"{_DEFAULT_BASE_URL}/chat/completions",
+                f"{base_url}/chat/completions",
                 headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
                 json={
-                    "model": _DEFAULT_MODEL,
+                    "model": model_cfg.name,
                     "messages": messages,
-                    "temperature": 0.4,
-                    "max_tokens": 1024,  # gemini-2.5-flash-lite needs >= 1024
+                    "temperature": model_cfg.temperature,
+                    "max_tokens": model_cfg.max_tokens,
                     "response_format": {"type": "json_object"},
                 },
             )
@@ -295,7 +273,7 @@ async def run_persona(
     Run a single persona agent on crypto data.
 
     Args:
-        persona: One of the keys in _PERSONA_PROMPTS
+        persona: One of the persona IDs from the registry
         symbol: Trading symbol
         bars: List of OHLCV dicts
         metrics: Optional dict with funding_rate, open_interest, etc.
@@ -303,12 +281,14 @@ async def run_persona(
     Returns:
         PersonaOpinion with signal, confidence, reasoning
     """
-    system = _PERSONA_PROMPTS.get(persona)
-    if not system:
+    cfg = _registry.get(persona)
+    if not cfg:
         return PersonaOpinion(
             persona=persona, signal="neutral", confidence=0.0,
             reasoning=f"Unknown persona: {persona}"
         )
+
+    system = cfg.prompt_template
 
     metrics = metrics or {}
     context = _build_crypto_context(symbol, bars, metrics)
@@ -350,12 +330,12 @@ async def run_all_personas(
         symbol: Trading symbol
         bars: OHLCV list
         metrics: Optional extra metrics dict
-        selected: List of persona names to run (None = all)
+        selected: List of persona names to run (None = all active)
 
     Returns:
         List of PersonaOpinion
     """
-    personas = selected or list(_PERSONA_PROMPTS.keys())
+    personas = selected or _registry.active_ids()
     tasks = [run_persona(p, symbol, bars, metrics) for p in personas]
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -374,11 +354,15 @@ async def run_all_personas(
 
 
 def get_persona_weights() -> Dict[str, float]:
-    """Get default voting weights for persona agents."""
-    return dict(_PERSONA_WEIGHTS)
+    """Get voting weights for persona agents from YAML config."""
+    return _registry.weights()
 
 
 def set_persona_weight(persona: str, weight: float):
-    """Adjust a persona's voting weight."""
-    _PERSONA_WEIGHTS[persona] = weight
-    logger.info(f"Persona weight updated: {persona} = {weight}")
+    """Adjust a persona's voting weight at runtime."""
+    cfg = _registry.get(persona)
+    if cfg:
+        cfg.weight = weight
+        logger.info(f"Persona weight updated: {persona} = {weight}")
+    else:
+        logger.warning(f"Cannot set weight for unknown persona: {persona}")

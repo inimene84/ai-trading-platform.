@@ -158,8 +158,15 @@ class SentimentReader:
                     return result
 
             return None
+        except Exception as e:
+            logger.warning(f"Sentiment query error for {symbol}: {e}")
+            return None
         finally:
-            client.close()
+            if client:
+                try:
+                    client.close()
+                except Exception:
+                    pass
 
     def get_market_alerts(self, symbol: str, lookback_minutes: int = 60) -> List[Dict]:
         """

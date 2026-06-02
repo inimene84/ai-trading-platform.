@@ -184,6 +184,7 @@ class PaperTradingEngine:
             ))
             db.commit()
         except Exception as e:
+            db.rollback()
             logger.warning(f"Paper portfolio DB persist failed: {e}")
         logger.info(f"Paper portfolio created: {name} (id={pid}, balance={balance}, leverage={leverage}x)")
         return pid
@@ -278,6 +279,7 @@ class PaperTradingEngine:
                 ))
                 db.commit()
             except Exception as e:
+                db.rollback()
                 logger.warning(f"Paper order DB persist failed: {e}")
 
             # Auto-fill market orders
@@ -308,6 +310,7 @@ class PaperTradingEngine:
                 db_order.status = "cancelled"
                 db.commit()
         except Exception as e:
+            db.rollback()
             logger.warning(f"Paper cancel DB persist failed: {e}")
         return UnifiedOrderResponse(True, order_id, "Order cancelled", "paper")
 
@@ -438,6 +441,7 @@ class PaperTradingEngine:
                 db_pf.margin_used = pf.get("margin_used", 0.0)
             db.commit()
         except Exception as e:
+            db.rollback()
             logger.warning(f"Paper fill DB persist failed: {e}")
 
         logger.info(
@@ -613,6 +617,23 @@ class UnifiedTrading:
             session = self._sessions.get(sid)
         if not session:
             return UnifiedOrderResponse(False, "", "No active session. Call init_session first.", "")
+
+        # Safeguard: if global trading mode is not LIVE, force route to paper trading engine
+        from backend.services.trading_mode import get_trading_mode, TradingMode
+        global_mode = get_trading_mode()
+        
+        if session.mode == "live" and global_mode != TradingMode.LIVE:
+            logger.warning(
+                f"[SAFETY GUARD] Session mode is LIVE, but global TRADING_MODE={global_mode.value.upper()}. "
+                f"Forcing {order.symbol} order into paper execution."
+            )
+            if not session.paper_portfolio_id:
+                pid = self._paper.create_portfolio(
+                    name="Safety Fallback Paper Portfolio",
+                    balance=100_000.0,
+                )
+                session.paper_portfolio_id = pid
+            return self._paper.place_order(session.paper_portfolio_id, order)
 
         if session.mode == "paper":
             if not session.paper_portfolio_id:

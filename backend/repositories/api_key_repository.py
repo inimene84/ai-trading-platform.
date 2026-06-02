@@ -29,9 +29,13 @@ class ApiKeyRepository:
             existing_key.description = description
             existing_key.is_active = is_active
             existing_key.updated_at = func.now()
-            self.db.commit()
-            self.db.refresh(existing_key)
-            return existing_key
+            try:
+                self.db.commit()
+                self.db.refresh(existing_key)
+                return existing_key
+            except Exception:
+                self.db.rollback()
+                raise
         else:
             # Create new key
             api_key = ApiKey(
@@ -40,10 +44,14 @@ class ApiKeyRepository:
                 description=description,
                 is_active=is_active
             )
-            self.db.add(api_key)
-            self.db.commit()
-            self.db.refresh(api_key)
-            return api_key
+            try:
+                self.db.add(api_key)
+                self.db.commit()
+                self.db.refresh(api_key)
+                return api_key
+            except Exception:
+                self.db.rollback()
+                raise
 
     def get_api_key_by_provider(self, provider: str) -> Optional[ApiKey]:
         """Get API key by provider name"""
@@ -79,9 +87,13 @@ class ApiKeyRepository:
             api_key.is_active = is_active
         
         api_key.updated_at = func.now()
-        self.db.commit()
-        self.db.refresh(api_key)
-        return api_key
+        try:
+            self.db.commit()
+            self.db.refresh(api_key)
+            return api_key
+        except Exception:
+            self.db.rollback()
+            raise
 
     def delete_api_key(self, provider: str) -> bool:
         """Delete an API key by provider"""
@@ -89,9 +101,13 @@ class ApiKeyRepository:
         if not api_key:
             return False
         
-        self.db.delete(api_key)
-        self.db.commit()
-        return True
+        try:
+            self.db.delete(api_key)
+            self.db.commit()
+            return True
+        except Exception:
+            self.db.rollback()
+            raise
 
     def deactivate_api_key(self, provider: str) -> bool:
         """Deactivate an API key instead of deleting it"""
@@ -101,8 +117,12 @@ class ApiKeyRepository:
         
         api_key.is_active = False
         api_key.updated_at = func.now()
-        self.db.commit()
-        return True
+        try:
+            self.db.commit()
+            return True
+        except Exception:
+            self.db.rollback()
+            raise
 
     def update_last_used(self, provider: str) -> bool:
         """Update the last_used timestamp for an API key"""
@@ -114,8 +134,12 @@ class ApiKeyRepository:
             return False
         
         api_key.last_used = func.now()
-        self.db.commit()
-        return True
+        try:
+            self.db.commit()
+            return True
+        except Exception:
+            self.db.rollback()
+            raise
 
     def bulk_create_or_update(self, api_keys_data: List[dict]) -> List[ApiKey]:
         """Bulk create or update multiple API keys"""

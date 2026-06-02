@@ -11,6 +11,19 @@ from typing import Optional
 
 @dataclass
 class StrategySignal:
+    """
+    Represents a trading signal emitted by a strategy.
+    
+    Inputs:
+        symbol: The trading pair symbol.
+        signal: The action to take, one of "BUY", "SELL", or "NEUTRAL".
+        confidence: The confidence score of the signal, from 0.0 to 1.0.
+        entry_price: Optional expected entry price for the signal.
+        stop_loss: Optional stop-loss price level.
+        take_profit: Optional take-profit price level.
+        strategy: The name of the strategy that generated the signal.
+        reasoning: Textual explanation for why the signal was emitted.
+    """
     symbol: str
     signal: str           # BUY, SELL, NEUTRAL
     confidence: float     # 0.0 – 1.0
@@ -28,7 +41,15 @@ class BaseStrategy(ABC):
     def generate_signal(self, symbol: str, bars: list[dict], **kwargs) -> StrategySignal:
         """
         Compute a trading signal from OHLCV bar dicts.
-        bars: [{"timestamp": int, "open": f, "high": f, "low": f, "close": f, "volume": f}, ...]
+        
+        Args:
+            symbol: The trading pair symbol (e.g., 'BTCUSDT').
+            bars: A list of dicts, typically ordered chronologically.
+                  Example: [{"timestamp": int, "open": float, "high": float, "low": float, "close": float, "volume": float}, ...]
+            **kwargs: Additional parameters such as market regime or config overrides.
+            
+        Returns:
+            StrategySignal: The computed trading signal, including the action (BUY/SELL/NEUTRAL) and confidence score.
         """
         ...
 

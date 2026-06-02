@@ -1,33 +1,41 @@
-# QuantumTrade Pro — AI Trading Platform
+# QuantumTrade Pro — AI Hedge Fund Platform
 
 An AI-powered multi-asset trading platform with real-time data, multi-agent analysis, workflow automation, backtesting, and risk management.
 
+> **Note:** This project began as a fork of `virattt/ai-hedge-fund` but has been heavily customized. It now includes extensive additional features such as Binance and cTrader integrations, Kronos workflow support, n8n webhook pipelines, InfluxDB time-series storage, and Qdrant vector database integration for news and sentiment analysis. This is a fully independent and expanded project.
+
 ## Architecture
 
-```
-ai-trading-platform/
-├── backend/           # Python FastAPI backend
-│   ├── agents/        # AI analyst agents (Warren Buffett, Cathie Wood, etc.)
-│   ├── backtesting/   # Backtesting engine
-│   ├── brokers/       # Broker integrations (cTrader, Binance, etc.)
-│   ├── database/      # SQLAlchemy models & connection
-│   ├── routes/        # API endpoints
-│   ├── services/      # Business logic (trading loop, AI analysis, etc.)
-│   ├── strategies/    # Trading strategies (trend, scalping, breakout, etc.)
-│   └── main.py        # FastAPI application entry point
-│
-├── frontend/          # React + Vite + Tailwind frontend
-│   ├── src/
-│   │   ├── components/   # View components (Portfolio, Signals, Markets, etc.)
-│   │   ├── services/     # API + market data services
-│   │   └── App.tsx       # Main application shell
-│   ├── server.ts         # Express middleware (telemetry proxies)
-│   └── vite.config.ts    # Vite + proxy config
-│
-├── .env.example       # Environment variable template
-├── pyproject.toml      # Python dependencies (Poetry)
-├── run.bat             # Windows launcher
-└── run.sh              # Linux / macOS launcher
+The platform architecture is divided into three main logical components:
+
+- **Backend:** FastAPI + Trading Loop + Strategies + LLM Agents + Qdrant (Vectors) + InfluxDB (Time-series).
+- **Frontend:** React dashboard featuring Portfolio View, AI Signals, Market Data, and Workflow Flows.
+- **External Systems:** Broker APIs (Binance / cTrader), n8n for workflow automation, InfluxDB, and Qdrant.
+
+### Data Flow Diagram
+
+```mermaid
+flowchart TD
+    %% External Data & Systems
+    Data[Market Data] --> Strategies
+    News[News/Social] --> n8n[n8n Webhooks]
+    
+    %% Storage
+    n8n --> Qdrant[(Qdrant Vector DB)]
+    n8n --> Influx[(InfluxDB)]
+    
+    %% AI & Agents
+    Qdrant --> OpinionLayer[Opinion Layer]
+    Influx --> OpinionLayer
+    OpinionLayer --> Personas[LLM Agents: Buffett, Burry, etc.]
+    Personas --> CombinedStrategy
+    
+    %% Trading Engine
+    Strategies[Individual Strategies] --> CombinedStrategy[Combined Strategy]
+    CombinedStrategy --> UnifiedTrading[Unified Trading Engine]
+    
+    %% Execution
+    UnifiedTrading --> Brokers[Brokers: Binance / cTrader]
 ```
 
 ## Quickstart

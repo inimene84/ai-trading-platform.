@@ -8,9 +8,10 @@ from datetime import datetime, timezone
 from backend.services.unified_trading import UnifiedOrder, OrderSide, OrderType
 from backend.services.risk_config import RiskConfig
 from backend.strategies.combined import CombinedStrategy
-from backend.services.market_regime import MarketRegimeService
-from backend.agents.opinion_layer import AgentOpinionLayer
-from backend.services.kronos_gate import KronosGate
+from backend.strategies.market_regime import MarketRegimeDetector
+from backend.services.opinion_layer import analyze_symbol as opinion_analyze
+from backend.services.kronos_gate import apply_kronos_gate
+from backend.services import kronos_service
 
 logger = logging.getLogger(__name__)
 
@@ -30,9 +31,9 @@ class DecisionEngine:
     def __init__(self, risk_config: RiskConfig):
         self.config = risk_config
         self.strategy = CombinedStrategy()
-        self.regime_service = MarketRegimeService()
-        self.opinion_layer = AgentOpinionLayer() if os.getenv("ENABLE_PERSONAS", "true").lower() == "true" else None
-        self.kronos = KronosGate()
+        self.regime_detector = MarketRegimeDetector()
+        self.enable_personas = os.getenv("ENABLE_PERSONAS", "true").lower() == "true"
+        self.enable_kronos = os.getenv("ENABLE_KRONOS", "true").lower() == "true"
 
     async def evaluate_symbol(
         self,
@@ -58,7 +59,9 @@ class DecisionEngine:
             if self.config.pyramid_mode:
                 if len(pyramid_layers) < self.config.pyramid_max_layers:
                     # Strategy signal for pyramid
-                    regime = self.regime_service.detect_regime(bars)
+                    import pandas as pd
+                    df = pd.DataFrame(bars)
+                    regime = self.regime_detector.detect(df)
                     signal = self.strategy.generate_signal(symbol, bars, regime=regime)
                     if signal and signal.signal == existing_position.direction and signal.confidence >= self.config.min_signal_strength:
                         # Pyramid conditions met
@@ -69,27 +72,77 @@ class DecisionEngine:
         if cooldown_active:
             return None
             
-        # 3. Kronos Gate
-        if not self.kronos.is_trade_allowed(symbol, "ALL"):
-            return None
+        # 3. Kronos Gate — pre-filter using foundation model prediction
+        if self.enable_kronos:
+            try:
+                import pandas as pd
+                df = pd.DataFrame(bars)
+                kronos_result = await kronos_service.predict(df, symbol)
+                # We'll use the gate result to potentially modify signal later
+            except Exception as e:
+                logger.warning(f"Kronos prediction failed for {symbol}: {e}")
+                kronos_result = {}
+        else:
+            kronos_result = {}
 
-        # 4. Strategy execution
-        regime = self.regime_service.detect_regime(bars)
+        # 4. Strategy execution — detect regime and generate signal
+        import pandas as pd
+        df = pd.DataFrame(bars)
+        regime = self.regime_detector.detect(df)
         signal = self.strategy.generate_signal(symbol, bars, regime=regime)
         if not signal or signal.signal not in ["BUY", "SELL"] or signal.confidence < self.config.min_signal_strength:
             return None
 
-        # 5. AI Opinion Layer
-        if self.opinion_layer:
-            opinion = await self.opinion_layer.evaluate_signal(signal, bars)
-            if opinion and opinion.confidence < self.config.ai_analysis_threshold:
-                # Override check
-                if signal.confidence > (self.config.ai_analysis_threshold + self.config.opinion_override_margin):
-                    pass # Strategy overrides weak AI
-                else:
-                    return None
-            elif not opinion:
-                # Fallback if opinion fails
+        # 4b. Apply Kronos Gate to the strategy signal
+        if kronos_result:
+            gate_result = apply_kronos_gate(
+                strategy_signal=signal.signal,
+                strategy_confidence=signal.confidence,
+                kronos_result=kronos_result,
+                symbol=symbol,
+            )
+            if gate_result.action == "veto":
+                logger.info(f"[{symbol}] Kronos VETOED signal: {gate_result.reasoning}")
+                return None
+            elif gate_result.action == "flip":
+                logger.info(f"[{symbol}] Kronos FLIPPED signal: {gate_result.reasoning}")
+                # Update signal direction and confidence from gate
+                signal.signal = gate_result.final_signal
+                signal.confidence = gate_result.confidence
+            elif gate_result.action == "boost":
+                logger.info(f"[{symbol}] Kronos BOOSTED signal: {gate_result.reasoning}")
+                signal.confidence = gate_result.confidence
+            elif gate_result.action == "dampen":
+                logger.info(f"[{symbol}] Kronos DAMPENED signal: {gate_result.reasoning}")
+                signal.confidence = gate_result.confidence
+
+        # Re-check after gate modification
+        if signal.signal not in ["BUY", "SELL"] or signal.confidence < self.config.min_signal_strength:
+            return None
+
+        # 5. AI Opinion Layer — multi-agent weighted consensus
+        if self.enable_personas:
+            try:
+                opinion = await opinion_analyze(
+                    symbol=symbol,
+                    bars=bars,
+                    include_kronos=True,
+                    include_social=True,
+                    include_alerts=True,
+                    include_personas=True,
+                )
+                if opinion and opinion.confidence < self.config.ai_analysis_threshold:
+                    # Strategy can override weak AI if its own confidence is high enough
+                    if signal.confidence > (self.config.ai_analysis_threshold + self.config.opinion_override_margin):
+                        logger.info(f"[{symbol}] Strategy overrides weak AI opinion (strategy conf={signal.confidence:.2f})")
+                    else:
+                        logger.info(
+                            f"[{symbol}] AI opinion too weak (conf={opinion.confidence:.2f} < {self.config.ai_analysis_threshold}), skipping"
+                        )
+                        return None
+            except Exception as e:
+                logger.warning(f"[{symbol}] Opinion layer error: {e}")
+                # Fallback: require higher strategy confidence if opinion layer fails
                 if signal.confidence < self.config.min_signal_strength + 0.1:
                     return None
 
@@ -137,5 +190,6 @@ class DecisionEngine:
             stop_loss=sl,
             take_profit=tp,
             confidence=signal.confidence,
+            reasoning=f"Regime: {self.regime_detector.detect(pd.DataFrame(bars)) if bars else 'N/A'}",
             is_pyramid=is_pyramid
         )

@@ -31,23 +31,18 @@ from backend.strategies.trend_following import TrendFollowingStrategy
 from backend.strategies.mean_reversion import MeanReversionStrategy
 from backend.strategies.breakout import BreakoutStrategy
 
-# Default weights when no regime is provided (balanced fallback)
+import os
+import json
+from pathlib import Path
+
+# Legacy module-level globals kept as fallback defaults if config is missing
 _DEFAULT_WEIGHTS = {"trend_following": 0.40, "mean_reversion": 0.30, "breakout": 0.30}
-
-# Per-regime strong-signal override thresholds
-# RANGING blocks weak trend signals from overriding the vote
 _REGIME_STRONG_THRESHOLD: dict[str, float] = {
-    "TRENDING": 0.52,
-    "RANGING":  0.78,   # trend must be VERY strong to win in ranging market
-    "VOLATILE": 0.62,
-    "BREAKOUT": 0.55,
-    "UNKNOWN":  0.55,
+    "TRENDING": 0.52, "RANGING":  0.78, "VOLATILE": 0.62, "BREAKOUT": 0.55, "UNKNOWN":  0.55,
 }
-
-# Regime-aware priority order: which strategy is checked first for strong signal
 _REGIME_PRIORITY: dict[str, list[str]] = {
     "TRENDING": ["trend_following", "breakout", "mean_reversion"],
-    "RANGING":  ["mean_reversion", "breakout", "trend_following"],  # ← was backwards!
+    "RANGING":  ["mean_reversion", "breakout", "trend_following"],
     "VOLATILE": ["breakout", "trend_following", "mean_reversion"],
     "BREAKOUT": ["breakout", "trend_following", "mean_reversion"],
     "UNKNOWN":  ["trend_following", "breakout", "mean_reversion"],
@@ -61,8 +56,26 @@ class CombinedStrategy(BaseStrategy):
         self._trend = TrendFollowingStrategy()
         self._mean  = MeanReversionStrategy()
         self._break = BreakoutStrategy()
+        
+        # Load JSON config
+        self._config = {}
+        config_path = Path(__file__).parent / "config" / "combined.json"
+        if config_path.exists():
+            try:
+                with open(config_path, "r", encoding="utf-8") as f:
+                    self._config = json.load(f)
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning(f"Failed to load combined.json: {e}")
+
         # weights here are the FALLBACK when no regime is passed
-        self._default_weights = weights or _DEFAULT_WEIGHTS
+        if weights:
+            self._default_weights = weights
+        else:
+            self._default_weights = self._config.get("DEFAULT_WEIGHTS", _DEFAULT_WEIGHTS)
+        
+        self._regime_thresholds = self._config.get("REGIME_STRONG_THRESHOLD", _REGIME_STRONG_THRESHOLD)
+        self._regime_priority = self._config.get("REGIME_PRIORITY", _REGIME_PRIORITY)
 
     def generate_signal(
         self,
@@ -83,8 +96,8 @@ class CombinedStrategy(BaseStrategy):
         """
         # ── Resolve weights and thresholds for this regime ────────────────────
         weights        = regime_weights or self._default_weights
-        strong_thresh  = _REGIME_STRONG_THRESHOLD.get(regime, 0.55)
-        priority_order = _REGIME_PRIORITY.get(regime, _REGIME_PRIORITY["UNKNOWN"])
+        strong_thresh  = self._regime_thresholds.get(regime, self._regime_thresholds.get("UNKNOWN", 0.55))
+        priority_order = self._regime_priority.get(regime, self._regime_priority.get("UNKNOWN", ["trend_following", "breakout", "mean_reversion"]))
 
         sigs = {
             "trend_following": self._trend.generate_signal(symbol, bars),

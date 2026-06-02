@@ -23,10 +23,14 @@ class FlowRunRepository:
             run_number=run_number,
             status=FlowRunStatus.IDLE.value
         )
-        self.db.add(flow_run)
-        self.db.commit()
-        self.db.refresh(flow_run)
-        return flow_run
+        try:
+            self.db.add(flow_run)
+            self.db.commit()
+            self.db.refresh(flow_run)
+            return flow_run
+        except Exception:
+            self.db.rollback()
+            raise
     
     def get_flow_run_by_id(self, run_id: int) -> Optional[HedgeFundFlowRun]:
         """Get a flow run by its ID"""
@@ -91,9 +95,13 @@ class FlowRunRepository:
         if error_message is not None:
             flow_run.error_message = error_message
         
-        self.db.commit()
-        self.db.refresh(flow_run)
-        return flow_run
+        try:
+            self.db.commit()
+            self.db.refresh(flow_run)
+            return flow_run
+        except Exception:
+            self.db.rollback()
+            raise
     
     def delete_flow_run(self, run_id: int) -> bool:
         """Delete a flow run by ID"""
@@ -101,19 +109,27 @@ class FlowRunRepository:
         if not flow_run:
             return False
         
-        self.db.delete(flow_run)
-        self.db.commit()
-        return True
+        try:
+            self.db.delete(flow_run)
+            self.db.commit()
+            return True
+        except Exception:
+            self.db.rollback()
+            raise
     
     def delete_flow_runs_by_flow_id(self, flow_id: int) -> int:
         """Delete all runs for a specific flow. Returns count of deleted runs."""
-        deleted_count = (
-            self.db.query(HedgeFundFlowRun)
-            .filter(HedgeFundFlowRun.flow_id == flow_id)
-            .delete()
-        )
-        self.db.commit()
-        return deleted_count
+        try:
+            deleted_count = (
+                self.db.query(HedgeFundFlowRun)
+                .filter(HedgeFundFlowRun.flow_id == flow_id)
+                .delete()
+            )
+            self.db.commit()
+            return deleted_count
+        except Exception:
+            self.db.rollback()
+            raise
     
     def get_flow_run_count(self, flow_id: int) -> int:
         """Get total count of runs for a flow"""

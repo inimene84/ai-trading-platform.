@@ -1,13 +1,12 @@
-# AI Hedge Fund - Backend [WIP] 🚧
-This project is currently a work in progress.  To track progress, please get updates [here](https://x.com/virattt).
+# QuantumTrade Pro - Backend
 
-This is the backend server for the AI Hedge Fund project. It provides a simple REST API to interact with the AI Hedge Fund system, allowing you to run the hedge fund through a web interface.
+This is the backend server for QuantumTrade Pro — AI Hedge Fund Platform. It provides a FastAPI-based REST API that powers a complete trading ecosystem, including a unified trading loop, strategy execution, AI analyst agents, and backtesting.
+
+> **Note:** This project began as a fork of `virattt/ai-hedge-fund` but has been heavily customized. It now includes extensive additional features such as Binance and cTrader integrations, Kronos workflow support, n8n webhook pipelines, InfluxDB time-series storage, and Qdrant vector database integration for news and sentiment analysis. This is a fully independent and expanded project.
 
 ## Overview
 
-This backend project is a FastAPI application that serves as the server-side component of the AI Hedge Fund system. It exposes endpoints for running the hedge fund trading system and backtester.
-
-This backend is designed to work with a future frontend application that will allow users to interact with the AI Hedge Fund system through their browser.
+This backend application is the core of the AI Hedge Fund system. It exposes endpoints for running the hedge fund trading loop, executing backtests, and interacting with the AI agent ecosystem. It is designed to work seamlessly with the frontend React dashboard.
 
 ## Installation
 
@@ -70,6 +69,15 @@ The API will be available at:
 
 - `POST /hedge-fund/run`: Run the AI Hedge Fund with specified parameters
 - `GET /ping`: Simple endpoint to test server connectivity
+
+## Strategies
+
+The platform's trading logic has been unified under a single interface to ensure consistency between live trading and backtesting:
+- **`CombinedStrategy`**: The primary entry point for generating signals. It dynamically weights and delegates to underlying sub-strategies (Trend Following, Mean Reversion, Breakout) based on the current market condition.
+- **`MarketRegimeDetector`**: Automatically detects the current market condition (e.g., TRENDING, RANGING, VOLATILE, BREAKOUT) based on recent OHLCV bars.
+- **`StrategySignal`**: The standard output for all strategies, defined in `backend/strategies/base.py`. It includes `signal` (BUY/SELL/NEUTRAL), `confidence`, `entry_price`, `stop_loss`, and `take_profit`.
+
+All sub-strategies implement `BaseStrategy.generate_signal()`. For more information, see `backend/strategies/base.py`.
 
 ## Project Structure
 

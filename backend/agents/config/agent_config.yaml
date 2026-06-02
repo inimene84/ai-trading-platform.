@@ -1,0 +1,33 @@
+# Agent Configuration for Opinion Layer
+# =====================================
+# Controls weights, thresholds, and active agents for the trading opinion pipeline.
+
+# Base agent weights (non-persona technical agents)
+base_agents:
+  technical_analyst: 0.25
+  kronos_foundation: 0.20
+  social_sentiment: 0.20
+  market_alerts: 0.05
+
+# Active personas (can be toggled without code changes)
+# Override with ACTIVE_PERSONAS env var (comma-separated)
+active_personas:
+  - warren_buffett
+  - michael_burry
+  - stanley_druckenmiller
+  - cathie_wood
+  - peter_lynch
+  - charlie_munger
+  - nassim_taleb
+  - bill_ackman
+  - phil_fisher
+  - aswath_damodaran
+  - mohnish_pabrai
+  - rakesh_jhunjhunwala
+
+# Direction thresholds for opinion aggregation
+aggregation:
+  buy_threshold: 0.15
+  sell_threshold: -0.15
+  confidence_score_weight: 0.6
+  confidence_conviction_weight: 0.4
