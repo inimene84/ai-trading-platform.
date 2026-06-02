@@ -9,7 +9,7 @@ Interface compatible with ctrader_service for drop-in integration with trading_l
 import logging
 import os
 from pathlib import Path
-from typing import Optional
+from typing import Dict, Optional
 
 from dotenv import load_dotenv
 
@@ -30,7 +30,7 @@ SYMBOL_MAP = {
     'AVAX-USD': 'AVAXUSDT',
     'DOT-USD': 'DOTUSDT',
     'LINK-USD': 'LINKUSDT',
-    'MATIC-USD': 'MATICUSDT',
+    'MATIC-USD': 'POLUSDT',
     'LTC-USD': 'LTCUSDT',
     'UNI-USD': 'UNIUSDT',
     'ATOM-USD': 'ATOMUSDT',
@@ -44,7 +44,7 @@ SYMBOL_MAP = {
     'BTCUSDT': 'BTCUSDT', 'ETHUSDT': 'ETHUSDT', 'SOLUSDT': 'SOLUSDT',
     'BNBUSDT': 'BNBUSDT', 'XRPUSDT': 'XRPUSDT', 'ADAUSDT': 'ADAUSDT',
     'DOGEUSDT': 'DOGEUSDT', 'AVAXUSDT': 'AVAXUSDT', 'DOTUSDT': 'DOTUSDT',
-    'LINKUSDT': 'LINKUSDT', 'MATICUSDT': 'MATICUSDT', 'LTCUSDT': 'LTCUSDT',
+    'LINKUSDT': 'LINKUSDT', 'POLUSDT': 'POLUSDT', 'LTCUSDT': 'LTCUSDT',
     'UNIUSDT': 'UNIUSDT', 'ATOMUSDT': 'ATOMUSDT', 'NEARUSDT': 'NEARUSDT',
     'OPUSDT': 'OPUSDT', 'ARBUSDT': 'ARBUSDT', 'APTUSDT': 'APTUSDT',
     'INJUSDT': 'INJUSDT', 'SUIUSDT': 'SUIUSDT',
@@ -57,8 +57,8 @@ UNSUPPORTED_SYMBOLS = {'EURUSD=X', 'GBPUSD=X', 'USDJPY=X', 'EURJPY=X', 'EURGBP=X
 MIN_QTY = {
     'BTCUSDT': 0.001, 'ETHUSDT': 0.001, 'SOLUSDT': 0.1,
     'BNBUSDT': 0.01,  'XRPUSDT': 1.0,   'ADAUSDT': 1.0,
-    'DOGEUSDT': 1.0,  'AVAXUSDT': 0.1,  'DOTUSDT': 0.1,
-    'LINKUSDT': 0.1,  'MATICUSDT': 1.0, 'LTCUSDT': 0.001,
+    'DOGEUSDT': 1.0,  'AVAXUSDT': 1.0,  'DOTUSDT': 0.1,
+    'LINKUSDT': 0.01, 'POLUSDT': 1.0, 'LTCUSDT': 0.001,
     'UNIUSDT': 0.1,   'ATOMUSDT': 0.01, 'NEARUSDT': 0.1,
     'OPUSDT': 0.1,    'ARBUSDT': 1.0,   'APTUSDT': 0.1,
     'INJUSDT': 0.1,   'SUIUSDT': 1.0,
@@ -68,11 +68,26 @@ MIN_QTY = {
 QTY_PRECISION = {
     'BTCUSDT': 3, 'ETHUSDT': 3, 'SOLUSDT': 1,
     'BNBUSDT': 2, 'XRPUSDT': 0, 'ADAUSDT': 0,
-    'DOGEUSDT': 0, 'AVAXUSDT': 1, 'DOTUSDT': 1,
-    'LINKUSDT': 1, 'MATICUSDT': 0, 'LTCUSDT': 3,
+    'DOGEUSDT': 0, 'AVAXUSDT': 0, 'DOTUSDT': 1,
+    'LINKUSDT': 2, 'POLUSDT': 0, 'LTCUSDT': 3,
     'UNIUSDT': 1, 'ATOMUSDT': 2, 'NEARUSDT': 1,
     'OPUSDT': 1, 'ARBUSDT': 0, 'APTUSDT': 1,
-    'INJUSDT': 1, 'SUIUSDT': 0,
+    'INJUSDT': 1,   'SUIUSDT': 0,
+}
+
+# Price precision per symbol (loaded from futures_exchange_info at runtime)
+PRICE_PRECISION: Dict[str, int] = {}
+
+# Price tick sizes per symbol (min increment — from /fapi/v1/exchangeInfo PRICE_FILTER)
+# Used by _round_price() to avoid Binance -1111 precision errors on SL/TP orders.
+TICK_SIZES = {
+    'BTCUSDT':  0.1,       'ETHUSDT':  0.01,     'SOLUSDT':  0.001,
+    'BNBUSDT':  0.01,      'XRPUSDT':  0.0001,   'ADAUSDT':  0.00001,
+    'DOGEUSDT': 0.00001,   'AVAXUSDT': 0.001,    'DOTUSDT':  0.001,
+    'LINKUSDT': 0.001,     'POLUSDT':  0.0001,   'LTCUSDT':  0.01,
+    'UNIUSDT':  0.001,     'ATOMUSDT': 0.001,    'NEARUSDT': 0.0001,
+    'OPUSDT':   0.0001,    'ARBUSDT':  0.0001,   'APTUSDT':  0.001,
+    'INJUSDT':  0.001,     'SUIUSDT':  0.00001,
 }
 
 
@@ -81,7 +96,7 @@ class BinanceFuturesService:
 
     def __init__(self):
         self.api_key    = os.getenv('BINANCE_API_KEY', '')
-        self.api_secret = os.getenv('BINANCE_API_SECRET', '')
+        self.api_secret = os.getenv('BINANCE_SECRET_KEY', '') or os.getenv('BINANCE_API_SECRET', '')
         self.testnet    = os.getenv('BINANCE_TESTNET', 'false').lower() == 'true'
         self.leverage   = int(os.getenv('BINANCE_LEVERAGE', '10'))
         self.margin_type = os.getenv('BINANCE_MARGIN_TYPE', 'ISOLATED')
@@ -92,6 +107,16 @@ class BinanceFuturesService:
             f"BinanceFuturesService: testnet={self.testnet} "
             f"leverage={self.leverage}x margin={self.margin_type} dry_run={self.dry_run}"
         )
+
+        # Load price precision per symbol from exchange info
+        try:
+            client = self._get_client()
+            exchange_info = client.futures_exchange_info()
+            for sym_info in exchange_info.get('symbols', []):
+                PRICE_PRECISION[sym_info['symbol']] = sym_info.get('pricePrecision', 2)
+            logger.info(f"Price precision loaded for {len(PRICE_PRECISION)} symbols")
+        except Exception as e:
+            logger.warning(f"Could not load price precision: {e} — defaulting to 2dp")
 
     # ── Private helpers ───────────────────────────────────────────────────────
 
@@ -128,7 +153,10 @@ class BinanceFuturesService:
             client.futures_change_margin_type(symbol=sym, marginType=self.margin_type)
             logger.info(f"[{sym}] Margin → {self.margin_type}")
         except Exception as e:
-            if '-4046' not in str(e):  # -4046 = already set, safe to ignore
+            err = str(e)
+            if '-4046' in err or '-4175' in err:  # -4046=already set, -4175=credit status (BNFCR)
+                pass  # safe to ignore
+            else:
                 logger.warning(f"[{sym}] margin_type: {e}")
         # Leverage
         try:
@@ -140,23 +168,53 @@ class BinanceFuturesService:
 
     def _round_qty(self, sym: str, qty: float) -> float:
         decimals = QTY_PRECISION.get(sym, 3)
+        min_q = MIN_QTY.get(sym, 0.001)
         if decimals == 0:
-            return float(int(qty))
-        return round(qty, decimals)
+            rounded = float(int(qty))
+        else:
+            rounded = round(qty, decimals)
+        # Never go below min_qty after rounding (e.g. BTC 0.000314 rounds to 0.0)
+        if rounded < min_q:
+            rounded = min_q
+        return rounded
+
+    def _round_price(self, symbol: str, price: float) -> float:
+        """Round price to exchange-specified precision for the symbol.
+        Falls back to tick-size rounding if exchange info was not loaded."""
+        precision = PRICE_PRECISION.get(symbol)
+        if precision is not None:
+            return round(price, precision)
+        # Fallback: tick-size based (legacy)
+        import math
+        tick = TICK_SIZES.get(symbol, 0.001)
+        rounded = round(price / tick) * tick
+        if tick >= 1:
+            decimals = 0
+        else:
+            decimals = max(0, -int(math.floor(math.log10(tick))))
+        return round(rounded, decimals)
 
     def _min_quantity(self, sym: str, price: float) -> float:
         """Return tradeable quantity based on TRADE_USDT_AMOUNT env var (default 10 USDT)."""
         min_qty = MIN_QTY.get(sym, 0.001)
         trade_usdt = float(os.getenv("TRADE_USDT_AMOUNT", "10.0"))
+        # Per-symbol min notional (Binance varies: BTC=50, ETH/LTC/LINK=20, others=5)
+        min_notional_map = {
+            'BTCUSDT': 50.0, 'ETHUSDT': 20.0, 'LTCUSDT': 20.0, 'LINKUSDT': 20.0,
+        }
+        min_notional = min_notional_map.get(sym, 5.0)
         if price > 0:
             notional_qty = trade_usdt / price
-            # Binance min notional = 20 (without leverage)
-            min_notional_qty = 20.0 / price
+            min_notional_qty = min_notional / price
             qty = max(min_qty, notional_qty, min_notional_qty)
         else:
             qty = min_qty
-        logger.info(f"[Binance] Quantity for {sym}: {qty:.6f} @ ${price:.2f} (${trade_usdt} USDT)")
-        return self._round_qty(sym, qty)
+        rounded = self._round_qty(sym, qty)
+        # Final safety: ensure rounded qty still meets min_qty
+        if rounded < min_qty:
+            rounded = self._round_qty(sym, min_qty)
+        logger.info(f"[Binance] Quantity for {sym}: {rounded:.6f} @ ${price:.2f} (${trade_usdt} USDT, minNotional=${min_notional})")
+        return rounded
 
     # ── Public interface ──────────────────────────────────────────────────────
 
@@ -278,69 +336,154 @@ class BinanceFuturesService:
             # Resolve quantity
             if not quantity:
                 quantity = self._min_quantity(futures_sym, price)
+            else:
+                quantity = self._round_qty(futures_sym, quantity)
+
+            # ── Pre-trade margin check ──────────────────────────────────────────
+            acct = client.futures_account()
+            available = float(acct.get('availableBalance', 0))
+            notional = quantity * price
+            # Isolated margin requirement ≈ notional / leverage
+            required_margin = notional / self.leverage
+            if action != 'close' and available < required_margin:
+                logger.warning(
+                    f"[Binance Futures] SKIP {futures_sym}: available={available:.4f} < "
+                    f"required_margin={required_margin:.4f} (notional={notional:.2f} / "
+                    f"leverage={self.leverage}x)"
+                )
+                return {
+                    'status': 'skipped',
+                    'broker': 'binance_futures',
+                    'reason': f'Insufficient margin: available={available:.4f}, '
+                              f'required={required_margin:.4f}',
+                    'available': available,
+                    'required_margin': required_margin,
+                }
 
             # Determine side and reduceOnly flag
-            if action == 'close':
-                # Close long → SELL; close short → BUY
+            passed_reduce_only = kwargs.get('reduce_only', False)
+            if passed_reduce_only or action == 'close':
+                # Closing a position: flip side vs original direction
                 side        = 'SELL' if direction.upper() == 'BUY' else 'BUY'
                 reduce_only = True
             else:
                 side        = direction.upper()
                 reduce_only = False
 
+            # Hedge Mode positionSide: always the POSITION side (LONG/SHORT)
+            position_side = 'LONG' if direction.upper() == 'BUY' else 'SHORT'
+
             logger.info(
-                f"[Binance Futures] {action.upper()} {side} {quantity} {futures_sym} "
+                f"[Binance Futures] {action.upper()} {side} ({position_side}) {quantity} {futures_sym} "
                 f"@ ~{price:.4f} leverage={self.leverage}x comment={comment}"
             )
 
             # ── Main order ────────────────────────────────────────────────────
-            result = client.futures_create_order(
-                symbol=futures_sym,
-                side=side,
-                type='MARKET',
-                quantity=quantity,
-                reduceOnly=reduce_only,
-            )
+            order_params = {
+                "symbol": futures_sym,
+                "side": side,
+                "type": 'MARKET',
+                "quantity": quantity,
+                "positionSide": position_side,
+            }
+            # Note: In Hedge Mode, we DO NOT send reduceOnly as positionSide handles it.
+            # Sending it causes APIError -1106.
+                
+            result = client.futures_create_order(**order_params)
             order_id = str(result.get('orderId', ''))
             filled_price = float(result.get('avgPrice') or result.get('price') or price or 0.0)
             logger.info(f"  ✓ Order {order_id} filled @ {filled_price}")
 
+            logger.info(f"  [DEBUG] SL/TP Check -> reduce_only={reduce_only}, stop_loss={stop_loss}, take_profit={take_profit}")
+
+            # ── Cleanup Orphaned Orders on Close ──────────────────────────────
+            if reduce_only:
+                try:
+                    # In hedge mode, we need to specify positionSide to cancel orders
+                    client.futures_cancel_all_open_orders(symbol=futures_sym)
+                    logger.info(f"  ✓ Cancelled all remaining open orders for {futures_sym}")
+                except Exception as e:
+                    logger.warning(f"  [!] Failed to cancel open orders for {futures_sym}: {e}")
+
             # ── Stop-loss order (STOP_MARKET, reduceOnly) ─────────────────────
             if not reduce_only and stop_loss:
-                try:
-                    sl_side = 'SELL' if side == 'BUY' else 'BUY'
-                    client.futures_create_order(
-                        symbol=futures_sym,
-                        side=sl_side,
-                        type='STOP_MARKET',
-                        stopPrice=round(stop_loss, 2),
-                        quantity=quantity,
-                        reduceOnly=True,
-                        timeInForce='GTC',
-                    )
-                    logger.info(f"  [SL] @ {stop_loss:.4f}")
-                except Exception as sl_e:
-                    logger.warning(f"  [SL] Failed: {sl_e}")
+                sl_valid = (side == 'BUY' and stop_loss < price) or (side == 'SELL' and stop_loss > price)
+                if not sl_valid:
+                    logger.warning(f"  [SL] Invalid stop_loss={stop_loss} for {side} @ {price} — skipping")
+                else:
+                    try:
+                        sl_side = 'SELL' if side == 'BUY' else 'BUY'
+                        sl_params = {
+                            "symbol": futures_sym,
+                            "side": sl_side,
+                            "type": 'STOP_MARKET',
+                            "stopPrice": self._round_price(futures_sym, stop_loss),
+                            "quantity": quantity,
+                            "timeInForce": 'GTC',
+                            "positionSide": position_side,
+                        }
+                        sl_order = self._safe_create_order(client, sl_params)
+                        sl_algo_id = sl_order.get('algoId') or sl_order.get('orderId')
+                        logger.info(f"  [SL] Placed for {futures_sym} @ {stop_loss} (id={sl_algo_id})")
+                    except Exception as sl_e:
+                        # C1 FIX: SL failed → position is naked → EMERGENCY CLOSE immediately.
+                        # Never silently continue; fail-closed is the only safe choice.
+                        logger.error(
+                            f"  [SL] FAILED to place stop-loss for {futures_sym}: {sl_e}"
+                            f" — initiating emergency close to prevent naked position"
+                        )
+                        try:
+                            emg_side = 'SELL' if side == 'BUY' else 'BUY'
+                            client.futures_create_order(
+                                symbol=futures_sym,
+                                side=emg_side,
+                                type='MARKET',
+                                quantity=quantity,
+                                positionSide=position_side,
+                            )
+                            logger.critical(
+                                f"  [SL-FAILSAFE] {futures_sym} closed at market due to SL failure"
+                            )
+                        except Exception as close_e:
+                            logger.critical(
+                                f"  [SL-FAILSAFE] MARKET CLOSE ALSO FAILED for {futures_sym}: {close_e}"
+                                f" — MANUAL INTERVENTION REQUIRED"
+                            )
+                        return {
+                            'status': 'error',
+                            'broker': 'binance_futures',
+                            'message': f'SL placement failed ({sl_e}) — emergency close attempted',
+                            'order_id': order_id,
+                            'symbol': futures_sym,
+                            'sl_error': str(sl_e),
+                        }
 
             # ── Take-profit order (TAKE_PROFIT_MARKET, reduceOnly) ────────────
             if not reduce_only and take_profit:
-                try:
-                    tp_side = 'SELL' if side == 'BUY' else 'BUY'
-                    client.futures_create_order(
-                        symbol=futures_sym,
-                        side=tp_side,
-                        type='TAKE_PROFIT_MARKET',
-                        stopPrice=round(take_profit, 2),
-                        quantity=quantity,
-                        reduceOnly=True,
-                        timeInForce='GTC',
-                    )
-                    logger.info(f"  [TP] @ {take_profit:.4f}")
-                except Exception as tp_e:
-                    logger.warning(f"  [TP] Failed: {tp_e}")
+                tp_valid = (side == 'BUY' and take_profit > price) or (side == 'SELL' and take_profit < price)
+                if not tp_valid:
+                    logger.warning(f"  [TP] Invalid take_profit={take_profit} for {side} @ {price} — skipping")
+                else:
+                    try:
+                        tp_side = 'SELL' if side == 'BUY' else 'BUY'
+                        tp_params = {
+                            "symbol": futures_sym,
+                            "side": tp_side,
+                            "type": 'TAKE_PROFIT_MARKET',
+                            "stopPrice": self._round_price(futures_sym, take_profit),
+                            "quantity": quantity,
+                            "timeInForce": 'GTC',
+                            "positionSide": position_side,
+                        }
+                        tp_order = self._safe_create_order(client, tp_params)
+                        tp_algo_id = tp_order.get('algoId') or tp_order.get('orderId')
+                        logger.info(f"  [TP] Placed for {futures_sym} @ {take_profit} (id={tp_algo_id})")
+                    except Exception as tp_e:
+                        logger.warning(f"  [TP] Failed: {tp_e}")
 
             return {
                 'status':       'sent',
+                'message':      f'Order {order_id} filled @ {filled_price}',
                 'broker':       'binance_futures',
                 'order_id':     order_id,
                 'symbol':       futures_sym,
@@ -352,8 +495,51 @@ class BinanceFuturesService:
             }
 
         except Exception as e:
+            # -2022: position already flat (exchange SL fired before this close reached Binance)
+            if '-2022' in str(e) or 'ReduceOnly Order is rejected' in str(e):
+                logger.info(f'[Binance Futures] {symbol} already flat (-2022) -- marking closed')
+                return {'status': 'already_flat', 'broker': 'binance_futures',
+                        'already_closed': True, 'order_id': '', 'symbol': symbol,
+                        'message': '-2022 position already closed on exchange'}
             logger.error(f"[Binance Futures] place_order error: {e}")
-            return {'status': 'error', 'broker': 'binance_futures', 'error': str(e)}
+            return {'status': 'error', 'broker': 'binance_futures', 'message': str(e), 'error': str(e)}
+
+    def _safe_create_order(self, client, order_params):
+        """Try placing an order and dynamically reduce precision if Binance complains about it."""
+        import copy
+        import math
+        params = copy.deepcopy(order_params)
+        
+        while True:
+            try:
+                return client.futures_create_order(**params)
+            except Exception as e:
+                err_str = str(e)
+                if "-1111" in err_str and "stopPrice" in params:
+                    # Too much precision. Let's find the current decimals and reduce by 1
+                    sp_str = str(params["stopPrice"])
+                    if "." in sp_str:
+                        decimals = len(sp_str.split(".")[1])
+                        if decimals > 0:
+                            new_decimals = decimals - 1
+                            params["stopPrice"] = float(f"{params['stopPrice']:.{new_decimals}f}")
+                            continue
+                raise e
+
+
+    def cancel_order(self, order_id: str, symbol: Optional[str] = None) -> dict:
+        try:
+            client = self._get_client()
+            if symbol:
+                futures_sym = self._to_futures_symbol(symbol)
+                result = client.futures_cancel_order(symbol=futures_sym, orderId=order_id)
+            else:
+                # Binance requires a symbol to cancel an order by ID. 
+                # This is a limitation we must work around by trying active symbols or returning an error.
+                return {'success': False, 'message': 'Binance Futures requires a symbol to cancel an order.'}
+            return {'success': True, 'message': 'Order cancelled', 'raw': result}
+        except Exception as e:
+            return {'success': False, 'message': str(e)}
 
 
 # ── Module-level singleton ────────────────────────────────────────────────────

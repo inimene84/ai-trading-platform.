@@ -36,10 +36,10 @@ class InfluxDBWriter:
     BUCKET_NEWS    = "news-sentiment"
 
     def __init__(self):
-        self.url   = os.getenv("INFLUXDB_URL", "http://72.60.18.113:8086").rstrip("/")
+        self.url   = os.getenv("INFLUXDB_URL", "").rstrip("/")
         self.token = os.getenv("INFLUXDB_TOKEN", "")
         self.org   = os.getenv("INFLUXDB_ORG", "hedge-fund")
-        self._enabled = bool(self.token)
+        self._enabled = bool(self.token and self.url)
         if not self._enabled:
             logger.warning("InfluxDB token not set – metrics disabled")
 
@@ -268,8 +268,6 @@ class InfluxDBWriter:
         except Exception as exc:
             logger.warning(f"InfluxDB write failed [{bucket}]: {exc}")
 
-
-# Singleton instance
     async def write_binance_wallet(self, balance: float, available: float,
                                     equity: float, unrealized_pnl: float,
                                     margin_used: float) -> None:
@@ -307,6 +305,7 @@ class InfluxDBWriter:
                 'notional_value': float(quantity * (mark_price or entry_price)),
             }
         )
+
 
 # Singleton instance
 influx = InfluxDBWriter()

@@ -26,12 +26,6 @@ async def start_order_poller():
 
 async def _poll_loop():
     """Main polling loop - runs until process exits."""
-    # Only run when Binance Futures is the active broker
-    broker_name = os.getenv("ACTIVE_BROKER", "ctrader")
-    if broker_name != "binance_futures":
-        logger.info(f"Order poller: ACTIVE_BROKER={broker_name}, skipping (only runs for binance_futures)")
-        return
-
     try:
         from backend.services.binance_futures_service import BinanceFuturesService
         svc = BinanceFuturesService()
@@ -42,7 +36,10 @@ async def _poll_loop():
 
     while True:
         try:
-            await _sync_open_orders(svc)
+            # Only run when Binance Futures is the active broker
+            broker_name = os.getenv("ACTIVE_BROKER", "ctrader")
+            if broker_name == "binance_futures":
+                await _sync_open_orders(svc)
         except Exception as e:
             logger.warning(f"Order poller cycle error: {e}")
         await asyncio.sleep(_POLL_INTERVAL)
@@ -56,13 +53,14 @@ async def _sync_open_orders(svc):
 
     db = SessionLocal()
     try:
-        # 1. Query DB for open trades that have a binance_order_id
+        # 1. Query DB for open trades that have a real binance_order_id (not paper trades)
         open_trades = (
             db.query(Trade)
             .filter(
                 Trade.status == "open",
                 Trade.binance_order_id.isnot(None),
                 Trade.binance_order_id != "",
+                ~Trade.binance_order_id.like("paper_%"),  # Skip paper orders
             )
             .all()
         )

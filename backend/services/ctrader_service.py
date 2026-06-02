@@ -494,14 +494,23 @@ class CTraderService:
 
     def place_order(
         self,
-        yfinance_symbol: str,
-        direction: str,
+        yfinance_symbol: str = "",
+        direction: str = "",
         volume: float = 1.0,   # in standard lots; 1.0 lot = 100,000 raw units (minimum for IC Trading)
         stop_loss_price: Optional[float] = None,
         take_profit_price: Optional[float] = None,
         current_price: Optional[float] = None,
+        **kwargs,
     ) -> dict:
         """Place a market order. In dry-run mode, simulates the order."""
+        # Handle UnifiedTrading style kwargs
+        yfinance_symbol = yfinance_symbol or kwargs.get("symbol", "")
+        direction = direction or kwargs.get("direction", "")
+        volume = volume if "volume" in locals() and volume != 1.0 else kwargs.get("quantity", volume)
+        stop_loss_price = stop_loss_price or kwargs.get("stop_loss", kwargs.get("stop_loss_price"))
+        take_profit_price = take_profit_price or kwargs.get("take_profit", kwargs.get("take_profit_price"))
+        current_price = current_price or kwargs.get("price", kwargs.get("current_price"))
+
         ct_symbol = self.SYMBOL_MAP.get(yfinance_symbol, yfinance_symbol.replace("-USD", "USD").replace("=X", ""))
         side = "BUY" if direction.upper() == "BUY" else "SELL"
 
@@ -598,8 +607,8 @@ class CTraderService:
             "env": creds.get("env", "demo"),
             "dry_run": self._dry_run,
             "account_id": creds.get("account_id"),
-            "login": 9937385,
-            "broker": "IC Trading",
+            "login": self._trader_login,
+            "broker": self._broker_name,
             "open_positions": 0,
             "symbols_supported": list(self.SYMBOL_MAP.keys()),
             "symbol_map": self.SYMBOL_MAP,

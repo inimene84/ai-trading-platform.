@@ -3,7 +3,7 @@
  * Connects to the backend /api/news/* endpoints
  */
 
-const BASE = '/api/backend/api/news';
+const BASE = '/api/news';
 
 export interface NewsItem {
   title: string;

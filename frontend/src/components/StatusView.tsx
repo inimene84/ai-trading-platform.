@@ -114,7 +114,7 @@ export const StatusView = () => {
     try {
       await apiService.startLoop({
         interval_minutes: 5,
-        symbols: ['BTC-USD', 'ETH-USD', 'SOL-USD', 'EURUSD=X', 'GBPUSD=X'],
+        symbols: ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT', 'ADAUSDT', 'DOTUSDT'],
         strategy: 'combined',
       });
       showToast('Trading loop started', 'success');

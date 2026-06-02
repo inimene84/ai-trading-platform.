@@ -25,15 +25,17 @@ from backend.services.binance_market_data import binance_market_data
 from backend.services import kronos_service
 from backend.strategies.market_regime import MarketRegimeDetector
 from backend.services.unified_trading import UnifiedTrading, UnifiedOrder, OrderSide, OrderType
+from backend.services.position_manager import get_position_manager, ExitOpinion
 
 load_dotenv()
 
 # ── Broker selector ──────────────────────────────────────────────────────────
-_ACTIVE_BROKER_NAME = os.getenv("ACTIVE_BROKER", "ctrader")
-if _ACTIVE_BROKER_NAME == "binance_futures":
-    _active_broker = binance_futures_broker
-else:
-    _active_broker = ctrader_broker
+def get_active_broker():
+    """Dynamically resolve the active broker based on environment."""
+    broker_name = os.getenv("ACTIVE_BROKER", "ctrader")
+    if broker_name == "binance_futures":
+        return binance_futures_broker
+    return ctrader_broker
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -54,7 +56,7 @@ class TradingLoopService:
         self._symbols = [s.strip() for s in env_syms.split(',') if s.strip()] if env_syms else [
             'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT',
             'ADAUSDT', 'DOGEUSDT', 'AVAXUSDT', 'DOTUSDT', 'LINKUSDT',
-            'MATICUSDT', 'LTCUSDT', 'UNIUSDT', 'ATOMUSDT', 'NEARUSDT',
+            'POLUSDT', 'LTCUSDT', 'UNIUSDT', 'ATOMUSDT', 'NEARUSDT',
             'OPUSDT', 'ARBUSDT', 'APTUSDT', 'INJUSDT', 'SUIUSDT'
         ]
         self._strategy_name = "combined"
@@ -63,11 +65,23 @@ class TradingLoopService:
         self._cycle_count = 0
         # Market regime detector — one instance shared across all cycles/symbols
         self._regime_detector = MarketRegimeDetector()
+        self._unified_trading = None  # Will be set to singleton in start()
+        self._pyramid_layers = {}
+        self._execution_lock = asyncio.Lock()
+        # Cooldown tracker: symbol → datetime when SL/emergency exit fired
+        # Prevents immediate re-entry after a losing close (30 min cooldown)
+        self._sl_cooldown: dict = {}
+        self._sl_cooldown_minutes = int(os.getenv("SL_COOLDOWN_MINUTES", "30"))
+        # Opinion override safety knobs
+        self._opinion_override_margin = float(os.getenv("OPINION_OVERRIDE_MARGIN", "0.15"))
+        self._opinion_close_cooldown_min = int(os.getenv("OPINION_CLOSE_COOLDOWN_MIN", "30"))
+        self._min_position_hold_min = int(os.getenv("MIN_POSITION_HOLD_MIN", "20"))
 
     @property
     def status(self) -> dict:
         # Fetch real balance from active broker
-        balance_info = _active_broker.get_balance() if hasattr(_active_broker, 'get_balance') else {"balance": 0.0}
+        broker = get_active_broker()
+        balance_info = broker.get_balance() if hasattr(broker, 'get_balance') else {"balance": 0.0}
         return {
             "state": self._state,
             "running": self._running,
@@ -78,14 +92,14 @@ class TradingLoopService:
             "next_cycle": self._next_cycle,
             "cycle_count": self._cycle_count,
             "error": self._error,
-            "cash": balance_info.get("balance", 0.0),
-            "equity": balance_info.get("equity", 0.0),
-            "margin_used": balance_info.get("margin", 0.0),
+            "cash": 0.0,  # Paper trading
+            "equity": 0.0,  # Paper trading
+            "margin_used": 0.0,  # Paper trading
         }
 
     async def start(
         self,
-        interval_minutes: int = 15,
+        interval_minutes: int = 5,
         symbols: list[str] | None = None,
         strategy: str = "combined",
     ):
@@ -100,6 +114,10 @@ class TradingLoopService:
         self._running = True
         self._state = "running"
         self._error = None
+        self._unified_trading = UnifiedTrading()  # Set singleton instance
+        
+        # Reconstruct pyramid layers from DB
+        self._reconstruct_pyramid_layers()
 
         self._task = asyncio.create_task(self._loop())
         logger.info(
@@ -107,6 +125,60 @@ class TradingLoopService:
             f"symbols={self._symbols}, strategy={strategy}"
         )
         return {"message": "Trading loop started", "status": self.status}
+
+    def _reconstruct_pyramid_layers(self):
+        """Populate self._pyramid_layers from open trades in DB."""
+        db = SessionLocal()
+        try:
+            open_trades = db.query(Trade).filter(Trade.status.in_(["open", "filled"])).all()
+            self._pyramid_layers = {}
+            for t in open_trades:
+                self._pyramid_layers.setdefault(t.symbol, []).append(t.entry_price)
+            if self._pyramid_layers:
+                logger.info(f"Reconstructed pyramid layers for symbols: {list(self._pyramid_layers.keys())}")
+        except Exception as e:
+            logger.warning(f"Failed to reconstruct pyramid layers: {e}")
+        finally:
+            db.close()
+
+    async def _sync_positions_with_broker(self, db):
+        """Sync DB trades with actual broker positions.
+        Uses BinanceFuturesService directly — UnifiedTrading.get_positions() returns empty.
+        """
+        try:
+            from backend.services.binance_futures_service import BinanceFuturesService as _BFS_SYNC
+            _bfs_sync = _BFS_SYNC()
+            broker_raw = await asyncio.get_event_loop().run_in_executor(None, _bfs_sync.get_positions)
+            # Only symbols with non-zero position amount
+            broker_symbols = {
+                bp['symbol'] for bp in broker_raw
+                if float(bp.get('quantity') or bp.get('positionAmt') or 0) != 0
+            }
+            
+            db_trades = db.query(Trade).filter(Trade.status.in_(["open", "filled"])).all()
+            
+            updated = 0
+            for t in db_trades:
+                if t.symbol not in broker_symbols:
+                    # Position was closed externally (e.g. SL/TP hit on Binance)
+                    logger.info(f"  [ {t.symbol} ] Position not found in broker, marking as closed in DB.")
+                    t.status = "closed"
+                    t.closed_at = datetime.now(timezone.utc)
+                    t.notes = (t.notes or "") + " | Closed externally (sync)"
+                    
+                    # Also cleanup pyramid layers
+                    if t.symbol in self._pyramid_layers:
+                        del self._pyramid_layers[t.symbol]
+                    # Set cooldown so we don't immediately re-enter after SL hit
+                    self._sl_cooldown[t.symbol] = datetime.now(timezone.utc)
+                    updated += 1
+            
+            if updated > 0:
+                db.commit()
+                logger.info(f"Synced {updated} closed position(s) from broker.")
+                
+        except Exception as e:
+            logger.warning(f"Failed to sync positions with broker: {e}")
 
     async def stop(self):
         """Stop the trading loop."""
@@ -156,460 +228,265 @@ class TradingLoopService:
             self._state = "stopped"
 
     async def _run_cycle(self):
-        """Execute one trading cycle across all symbols."""
+        """Execute one trading cycle across all symbols in parallel."""
         self._cycle_count += 1
         self._last_cycle = datetime.now(timezone.utc).isoformat()
         _cycle_start = datetime.now(timezone.utc).timestamp()
-        _signals_generated = 0
-        _trades_executed = 0
-        _errors = 0
         self._state = "running"
+
+        # ── C8: ACCOUNT-LEVEL KILL SWITCH ──────────────────────────────────
+        try:
+            _acct = binance_futures_broker._get_client().futures_account()
+            _equity = float(_acct.get('totalMarginBalance', 0))
+            _kill_floor = float(os.getenv('TRADING_KILL_FLOOR_USDT', '65'))
+            if _equity > 0 and _equity < _kill_floor:
+                logger.critical(
+                    f"[KILL SWITCH] Equity ${_equity:.2f} < floor ${_kill_floor:.2f} — STOPPING LOOP"
+                )
+                self._state = "stopped"
+                self._running = False
+                self._error = "KILL_SWITCH_TRIGGERED"
+                return {"signals": 0, "trades": 0, "kill_switch": True}
+        except Exception as _ks_e:
+            logger.warning(f"[KILL SWITCH] Check skipped: {_ks_e}")
+        # ─────────────────────────────────────────────────────────────────────
+
+        # ── STEP 0: Emergency Position Manager BEFORE broker sync ──────────
+        # We check DB open trades against LIVE Binance prices BEFORE the sync
+        # so positions that are still open on Binance get the drawdown check.
+        _exits_triggered = 0
+        try:
+            pm = get_position_manager()
+            db_pre = SessionLocal()
+            try:
+                from sqlalchemy import func as _func
+                pre_open = db_pre.query(Trade).filter(Trade.status.in_(["open", "filled"])).all()
+                if pre_open:
+                    logger.warning(f"  [POSITION MGR] Pre-sync review: {len(pre_open)} open positions")
+                    # Use BinanceFuturesService directly — UnifiedTrading returns 0 positions
+                    from backend.services.binance_futures_service import BinanceFuturesService as _BFS
+                    live_prices = {}
+                    try:
+                        _bfs = _BFS()
+                        for bp in _bfs.get_positions():
+                            live_prices[bp['symbol']] = float(bp.get('mark_price') or bp.get('entry_price') or 0)
+                    except Exception as _bfs_err:
+                        logger.error(f"  [STEP 0] Price fetch error: {_bfs_err}")
+
+                    ut_pre = UnifiedTrading()  # FIX: was undefined - NameError on emergency exit
+                    for trade in pre_open:
+                        try:
+                            live_px = live_prices.get(trade.symbol, 0.0)
+                            if live_px <= 0:
+                                continue  # can't check without a price
+                            entry_px = trade.entry_price or 0.0
+                            if not entry_px:
+                                continue
+                            direction = trade.direction or "BUY"
+                            if direction == "BUY":
+                                pnl_pct = ((live_px - entry_px) / entry_px) * 100
+                            else:
+                                pnl_pct = ((entry_px - live_px) / entry_px) * 100
+                            emergency_threshold = pm.emergency_drawdown_pct
+                            if pnl_pct <= emergency_threshold:
+                                logger.warning(
+                                    f"  [EMERGENCY EXIT] {trade.symbol}: PnL={pnl_pct:.1f}% "
+                                    f"<= threshold {emergency_threshold:.1f}% — FORCE CLOSING"
+                                )
+                                close_side = OrderSide.SELL if direction == "BUY" else OrderSide.BUY
+                                res = ut_pre.place_order(UnifiedOrder(
+                                    symbol=trade.symbol,
+                                    side=close_side,
+                                    order_type=OrderType.MARKET,
+                                    quantity=trade.quantity,
+                                    reduce_only=True,
+                                ))
+                                if res.success:
+                                    trade.exit_price = res.filled_price or live_px
+                                    trade.pnl = (pnl_pct / 100) * entry_px * trade.quantity
+                                    trade.status = "closed"
+                                    trade.closed_at = datetime.now(timezone.utc)
+                                    trade.notes = (trade.notes or "") + f" | EMERGENCY EXIT: PnL={pnl_pct:.1f}%"
+                                    db_pre.add(trade)
+                                    if trade.symbol in self._pyramid_layers:
+                                        del self._pyramid_layers[trade.symbol]
+                                    # Mark cooldown so we don't immediately re-enter
+                                    self._sl_cooldown[trade.symbol] = datetime.now(timezone.utc)
+                                    _exits_triggered += 1
+                                    logger.warning(f"  [EMERGENCY EXIT] {trade.symbol} CLOSED. PnL={pnl_pct:.1f}%")
+                                else:
+                                    # already_flat = success (exchange SL already fired)
+                                    if hasattr(res, 'message') and ('-2022' in str(res.message) or 'already' in str(res.message).lower()):
+                                        logger.info(f"  [EMERGENCY EXIT] {trade.symbol} already flat on exchange — marking DB closed")
+                                        trade.status = 'closed'
+                                        trade.closed_at = datetime.now(timezone.utc)
+                                        trade.notes = (trade.notes or '') + ' | EMERGENCY-EXIT: already flat on exchange'
+                                        db_pre.add(trade)
+                                        if trade.symbol in self._pyramid_layers:
+                                            del self._pyramid_layers[trade.symbol]
+                                        self._sl_cooldown[trade.symbol] = datetime.now(timezone.utc)
+                                        _exits_triggered += 1
+                                    else:
+                                        logger.error(f"  [EMERGENCY EXIT] {trade.symbol} FAILED: {res.message}")
+                        except Exception as e:
+                            logger.error(f"  [EMERGENCY EXIT] {trade.symbol} error: {e}")
+                    if _exits_triggered:
+                        db_pre.commit()
+            except Exception as e:
+                logger.error(f"Pre-sync PM error: {e}")
+                db_pre.rollback()
+            finally:
+                db_pre.close()
+        except Exception as e:
+            logger.error(f"Pre-sync PM outer error: {e}")
         self._error = None
 
         logger.info(
-            f"=== Trading Cycle #{self._cycle_count} at {self._last_cycle} ==="
+            f"=== Trading Cycle #{self._cycle_count} at {self._last_cycle} (Parallel) ==="
         )
 
-        min_confidence   = float(os.getenv("MIN_SIGNAL_STRENGTH", "0.60"))
-        ai_threshold     = float(os.getenv("AI_ANALYSIS_THRESHOLD", "0.60"))  # was 0.65 — lowered so borderline signals get AI review too
-        max_positions    = int(os.getenv("MAX_POSITIONS", "4"))
-        lot_size         = 0.0  # default; actual qty from broker_result
-
+        min_confidence = float(os.getenv("MIN_SIGNAL_STRENGTH", "0.60"))
+        ai_threshold = float(os.getenv("AI_ANALYSIS_THRESHOLD", "0.60"))
+        max_positions = int(os.getenv("MAX_POSITIONS", "4"))
+        # Pyramid DCA config
+        self._pyramid_mode = os.getenv("PYRAMID_MODE", "false").lower() == "true"
+        self._pyramid_max_layers = int(os.getenv("PYRAMID_MAX_LAYERS", "5"))
+        # CRITICAL: directional exposure cap (correlation risk)
+        self._max_directional_exposure_usdt = float(os.getenv("MAX_DIRECTIONAL_EXPOSURE_USDT", "500"))
+        # Pyramid layer separation
+        self._pyramid_atr_multiplier = float(os.getenv("PYRAMID_ATR_MULTIPLIER", "1.0"))
+        self._pyramid_min_conf_increase = float(os.getenv("PYRAMID_MIN_CONF_INCREASE", "0.05"))
+        self._pyramid_usdt_per_layer = float(os.getenv("PYRAMID_USDT_PER_LAYER", os.getenv("TRADE_USDT_AMOUNT", "10")))
+        self._pyramid_max_wallet_pct = float(os.getenv("PYRAMID_MAX_WALLET_PCT", "0.70"))
+        # Tighter pyramid: only add if price improves by at least 0.5% vs last layer
+        self._pyramid_min_improvement = float(os.getenv("PYRAMID_MIN_IMPROVEMENT", "0.005"))
+        self._sl_atr_mult = float(os.getenv("SL_ATR_MULT", "1.0"))
+        self._tp_atr_mult = float(os.getenv("TP_ATR_MULT", "2.5"))
+        
         db = SessionLocal()
         try:
-            # Count current open positions
-            open_count = db.query(Trade).filter(Trade.status == "open").count()
+            # Sync DB trades with actual broker positions
+            await self._sync_positions_with_broker(db)
+            
+            # Count unique symbols with open positions (including filled)
+            from sqlalchemy import func
+            self._open_count = db.query(func.count(func.distinct(Trade.symbol))).filter(Trade.status.in_(["open", "filled"])).scalar() or 0
+        finally:
+            db.close()
 
-            for symbol in self._symbols:
-                try:
-                    # Skip forex/crypto outside market hours
-                    if not self._is_market_open(symbol):
-                        logger.info(f"  {symbol}: market closed - skipping")
-                        continue
-
-                    # Fetch data - try Binance first, fallback to yfinance
-                    bars = await self._fetch_bars(symbol)
-                    if not bars or len(bars) < 50:
-                        logger.warning(
-                            f"Insufficient data for {symbol}: {len(bars) if bars else 0} bars"
-                        )
-                        continue
-
-                    # Fetch Binance-native market data (funding rate, OI, 24h ticker)
-                    binance_extra = await self._fetch_binance_extra(symbol)
-
-                    # ── Detect market regime ──────────────────────────────
+        # ── STEP 1A: Position Manager — Review ALL open positions for exits ──
+        _exits_triggered = 0
+        try:
+            pm = get_position_manager()
+            db_check = SessionLocal()
+            try:
+                open_trades = db_check.query(Trade).filter(Trade.status.in_(["open", "filled"])).all()
+                logger.warning(f"  [POSITION MGR] Reviewing {len(open_trades)} open positions for exits...")
+                for trade in open_trades:
                     try:
-                        regime_result = await asyncio.to_thread(
-                            self._regime_detector.detect, bars
-                        )
-                        _regime_str = regime_result.regime
-                        _regime_weights = regime_result.weights()
-                    except Exception as _re:
-                        logger.warning(f"  RegimeDetector [{symbol}] error: {_re}")
-                        _regime_str = "UNKNOWN"
-                        _regime_weights = None
-
-                    # ── Run strategy with regime-aware weights ────────────────
-                    signal = await asyncio.to_thread(
-                        self._run_strategy, symbol, bars,
-                        _regime_str, _regime_weights
-                    )
-                    if not signal:
-                        continue
-
-
-                    # === Kronos AI Model Prediction ===
-                    try:
-                        import pandas as _pd
-                        _bars_df = _pd.DataFrame(bars)
-                        kronos_result = await kronos_service.predict(_bars_df, symbol)
-                        logger.info(
-                            f"  Kronos [{symbol}]: {kronos_result['signal']} "
-                            f"{kronos_result['predicted_change_pct']:+.2f}%"
-                        )
-                    except Exception as _ke:
-                        logger.warning(f"  Kronos [{symbol}] error: {_ke}")
-                        kronos_result = {"signal": "NEUTRAL", "confidence": 0.0,
-                                        "predicted_close": None, "predicted_change_pct": 0.0,
-                                        "error": str(_ke)}
-
-                    # ── Kronos Signal Gate (veto/boost layer) ────────────────
-                    # Kronos is an ML model that predicts price direction.
-                    # Previously its output was purely decorative (logged only).
-                    # Now it actively gates signals BEFORE AI analysis.
-                    _k_signal = kronos_result.get("signal", "NEUTRAL")
-                    _k_conf   = float(kronos_result.get("confidence", 0.0))
-                    _k_change = float(kronos_result.get("predicted_change_pct", 0.0))
-
-                    if signal.signal in ("BUY", "SELL") and _k_signal not in ("NEUTRAL", ""):
-                        _kronos_agrees = (
-                            (signal.signal == "BUY"  and _k_signal == "UP")   or
-                            (signal.signal == "BUY"  and _k_signal == "BUY")  or
-                            (signal.signal == "SELL" and _k_signal == "DOWN") or
-                            (signal.signal == "SELL" and _k_signal == "SELL")
-                        )
-                        _kronos_contradicts = not _kronos_agrees
-
-                        if _kronos_contradicts and _k_conf >= 0.75 and signal.confidence < 0.72:
-                            # Strong Kronos contradiction with moderate strategy signal → VETO
-                            logger.warning(
-                                f"  ⛔ KRONOS VETO [{symbol}]: strategy={signal.signal}({signal.confidence:.2f}) "
-                                f"but Kronos={_k_signal}(conf={_k_conf:.2f}, {_k_change:+.2f}%) → NEUTRAL"
-                            )
-                            signal.signal = "NEUTRAL"
-                            signal.confidence = 0.0
-                        elif _kronos_contradicts and _k_conf >= 0.60:
-                            # Moderate Kronos contradiction → reduce confidence
-                            _old_conf = signal.confidence
-                            signal.confidence = max(signal.confidence * 0.75, 0.0)
-                            logger.info(
-                                f"  ⚠️  KRONOS DOWNGRADE [{symbol}]: strategy={signal.signal} "
-                                f"conf {_old_conf:.2f}→{signal.confidence:.2f} "
-                                f"(Kronos={_k_signal} conf={_k_conf:.2f})"
-                            )
-                        elif _kronos_agrees and _k_conf >= 0.60:
-                            # Kronos confirms → small confidence boost
-                            _old_conf = signal.confidence
-                            signal.confidence = min(signal.confidence * 1.08, 1.0)
-                            logger.info(
-                                f"  ✅ KRONOS BOOST [{symbol}]: {signal.signal} "
-                                f"conf {_old_conf:.2f}→{signal.confidence:.2f} "
-                                f"(Kronos={_k_signal} conf={_k_conf:.2f})"
-                            )
-
-                    logger.info(
-                        f"  {symbol}: {signal.signal} "
-                        f"confidence={signal.confidence:.2f} "
-                        f"price={signal.entry_price}"
-                    )
-
-                    # Store signal in DB
-                    db_signal = TradingSignal(
-                        symbol=symbol,
-                        direction=signal.signal,
-                        confidence=signal.confidence,
-                        entry_price=signal.entry_price,
-                        stop_loss=signal.stop_loss,
-                        take_profit=signal.take_profit,
-                        strategy=signal.strategy or self._strategy_name,
-                    )
-                    db.add(db_signal)
-                    db.commit()  # commit so signal exists before potential order
-                    _signals_generated += 1
-
-                    # ── InfluxDB: write OHLCV (last bar) + signal ──
-                    last_bar = bars[-1]
-                    await influx.write_ohlcv(
-                        symbol=symbol,
-                        open_=last_bar["open"],
-                        high=last_bar["high"],
-                        low=last_bar["low"],
-                        close=last_bar["close"],
-                        volume=float(last_bar["volume"]),
-                        timeframe="1h",
-                    )
-                    await influx.write_signal(
-                        symbol=symbol,
-                        direction=signal.signal,
-                        confidence=signal.confidence,
-                        entry_price=signal.entry_price or 0.0,
-                        stop_loss=signal.stop_loss,
-                        take_profit=signal.take_profit,
-                        strategy=signal.strategy or self._strategy_name,
-                        ai_used=False,
-                        signal_id=db_signal.id,
-                    )
-
-                    # === Kronos Gate (foundation model veto/boost layer) ===
-                    kronos_gate_applied = False
-                    if signal.signal in ("BUY", "SELL"):
-                        from backend.services.kronos_gate import apply_kronos_gate
-                        # Ensure kronos_result is available (it may already be computed earlier)
-                        kronos_res = kronos_result if 'kronos_result' in dir() else {}
-                        if not kronos_res and bars:
-                            try:
-                                kronos_res = await kronos_service.predict(pd.DataFrame(bars), symbol)
-                            except Exception:
-                                kronos_res = {}
-                        gate = apply_kronos_gate(
-                            strategy_signal=signal.signal,
-                            strategy_confidence=signal.confidence,
-                            kronos_result=kronos_res,
-                            symbol=symbol,
-                        )
-                        if gate.action in ("veto", "flip", "boost", "dampen"):
-                            kronos_gate_applied = True
-                            signal.signal = gate.final_signal
-                            signal.confidence = gate.confidence
-                            logger.info(
-                                f"  KronosGate [{symbol}]: {gate.action.upper()} "
-                                f"{gate.original_signal} → {gate.final_signal} "
-                                f"conf={gate.confidence:.2f}"
-                            )
-                            db_signal.reasoning = f"[KronosGate] {gate.reasoning}\n\n"
-                            db_signal.direction = signal.signal
-                            db_signal.confidence = signal.confidence
-                            db.commit()
-
-                    # === Opinion Layer AI Analysis ===
-                    if signal.signal in ("BUY", "SELL") and signal.confidence >= ai_threshold:
-                        _opinion_start = time.time()
-                        logger.info(f"  {symbol}: conf={signal.confidence:.2f} >= {ai_threshold} - running Opinion Layer...")
+                        trade_bars = await self._fetch_bars(trade.symbol)
+                        if not trade_bars or len(trade_bars) < 10:
+                            continue
+                        curr_price = trade_bars[-1]["close"]
                         from backend.services.opinion_layer import analyze_symbol as analyze_opinion
-                        opinion = await analyze_opinion(
-                            symbol=symbol,
-                            bars=bars,
-                            include_kronos=True,
-                            include_social=True,
-                            include_alerts=True,
+                        exit_opinion = await pm.analyze_open_position(
+                            symbol=trade.symbol,
+                            trade={
+                                "entry_price": trade.entry_price,
+                                "direction": trade.direction,
+                                "quantity": trade.quantity,
+                                "opened_at": trade.timestamp.isoformat() if trade.timestamp else None,
+                                "stop_loss": trade.stop_loss,
+                                "take_profit": trade.take_profit,
+                            },
+                            bars=trade_bars,
+                            current_price=curr_price,
+                            opinion_layer_fn=analyze_opinion,
                         )
-                        logger.info(
-                            f"  Opinion Layer [{symbol}]: {opinion.direction} "
-                            f"conf={opinion.confidence:.2f} "
-                            f"agents={len(opinion.agent_opinions)}"
-                        )
-                        # Veto or boost the strategy signal
-                        if opinion.direction == "HOLD":
-                            signal.signal = "NEUTRAL"
-                            signal.confidence = 0.0
-                            logger.info(f"  Opinion Layer VETO: signal neutralized")
-                        elif opinion.direction in ("BUY", "SELL"):
-                            # If direction aligns with strategy signal -> boost confidence
-                            # If opposing -> use lower confidence and consider veto
-                            if opinion.direction == signal.signal:
-                                boost = min(opinion.confidence * 0.2, 0.15)
-                                signal.confidence = min(signal.confidence + boost, 1.0)
-                                logger.info(f"  Opinion Layer BOOST: conf boosted to {signal.confidence:.2f}")
-                            else:
-                                # Opposing signal: if opinion confidence > strategy confidence, let it override
-                                if opinion.confidence > signal.confidence * 0.8:
-                                    old_signal = signal.signal
-                                    signal.signal = opinion.direction
-                                    signal.confidence = opinion.confidence
-                                    logger.info(
-                                        f"  Opinion Layer OVERRIDES: {old_signal}->{signal.signal} "
-                                        f"conf={signal.confidence:.2f}"
-                                    )
-                                else:
-                                    # Reduce confidence but keep original signal
-                                    signal.confidence *= max(0.6, 1.0 - opinion.confidence * 0.4)
-                                    logger.info(
-                                        f"  Opinion Layer DAMPEN: conf reduced to {signal.confidence:.2f}"
-                                    )
-
-                        # Store reasoning back to DB
-                        db_signal.reasoning = opinion.reasoning
-                        db_signal.ai_analysis = json.dumps({
-                            "direction": opinion.direction,
-                            "confidence": opinion.confidence,
-                            "agent_opinions": [
-                                {"agent": op.agent, "signal": op.signal, "confidence": op.confidence}
-                                for op in opinion.agent_opinions
-                            ],
-                            "kronos": opinion.kronos,
-                            "social": opinion.social,
-                            "alert_count": len(opinion.alerts),
-                            "total_duration_s": time.time() - _opinion_start,
-                        })
-                        db_signal.direction = signal.signal
-                        db_signal.confidence = signal.confidence
-                        db.commit()
-                        # ── InfluxDB: write agent state for each opinion ──
-                        for op in opinion.agent_opinions:
-                            await influx.write_agent_state(
-                                agent=f"opinion_{op.agent}",
-                                symbol=symbol,
-                                direction=op.signal.upper() if op.signal != "bullish" and op.signal != "bearish" and op.signal != "neutral" else op.signal.upper(),
-                                confidence=op.confidence,
-                                reasoning=op.reasoning[:500],
+                        if exit_opinion.exit:
+                            logger.warning(
+                                f"  [POSITION MGR] EXIT {trade.symbol}: {exit_opinion.reasoning}"
                             )
-                        await influx.write_signal(
-                            symbol=symbol,
-                            direction=signal.signal,
-                            confidence=signal.confidence,
-                            entry_price=signal.entry_price or 0.0,
-                            stop_loss=signal.stop_loss,
-                            take_profit=signal.take_profit,
-                            strategy=signal.strategy or self._strategy_name,
-                            ai_used=True,
-                            signal_id=db_signal.id,
-                        )
-                    elif signal.signal in ("BUY", "SELL"):
-                        logger.info(f"  {symbol}: conf={signal.confidence:.2f} < {ai_threshold} - skipping AI (using strategy signal)")
-
-                    # === EXECUTION ===
-                    if signal.signal in ("BUY", "SELL") and signal.confidence >= min_confidence:
-                        existing = (
-                            db.query(Trade)
-                            .filter(Trade.symbol == symbol, Trade.status == "open")
-                            .first()
-                        )
-
-                        if signal.signal == "BUY":
-                            if existing:
-                                db_signal.status = "rejected"
-                                logger.info(f"  {symbol}: already have open BUY - skipping")
-                            elif open_count >= max_positions:
-                                db_signal.status = "rejected"
-                                logger.info(f"  {symbol}: max positions ({max_positions}) reached - skipping")
+                            # Close position immediately
+                            ut = UnifiedTrading()
+                            close_side = OrderSide.SELL if trade.direction == "BUY" else OrderSide.BUY
+                            res = ut.place_order(UnifiedOrder(
+                                symbol=trade.symbol,
+                                side=close_side,
+                                order_type=OrderType.MARKET,
+                                quantity=trade.quantity,
+                                reduce_only=True,
+                            ))
+                            if res.success:
+                                trade.exit_price = res.filled_price or curr_price
+                                if trade.direction == "BUY":
+                                    trade.pnl = (curr_price - trade.entry_price) * trade.quantity
+                                else:
+                                    trade.pnl = (trade.entry_price - curr_price) * trade.quantity
+                                trade.status = "closed"
+                                trade.closed_at = datetime.now(timezone.utc)
+                                trade.notes = (trade.notes or "") + f" | AI EXIT: {exit_opinion.reasoning[:120]}"
+                                db_check.add(trade)
+                                if self._pyramid_mode and trade.symbol in self._pyramid_layers:
+                                    del self._pyramid_layers[trade.symbol]
+                                _exits_triggered += 1
+                                logger.info(f"  -> {trade.symbol} CLOSED via Position Manager. PnL={trade.pnl:+.2f}")
                             else:
-                                # === OPEN LONG via UnifiedTrading router ===
-                                ut = UnifiedTrading()
-                                order = UnifiedOrder(
-                                    symbol=symbol,
-                                    side=OrderSide.BUY,
-                                    order_type=OrderType.MARKET,
-                                    quantity=0.01,  # default lot; broker will normalize
-                                    price=signal.entry_price,
-                                    stop_loss=signal.stop_loss,
-                                    take_profit=signal.take_profit,
-                                )
-                                broker_result = await asyncio.get_event_loop().run_in_executor(
-                                    None, lambda o=order: ut.place_order(o)
-                                )
-                                ok = broker_result.success
-                                broker_note = f"UT:{broker_result.mode}" if ok else f"ut_error:{broker_result.message[:60]}"
+                                # already_flat = success (exchange SL already fired)
+                                if hasattr(res, 'message') and ('-2022' in str(res.message) or 'already' in str(res.message).lower()):
+                                    logger.info(f"  -> {trade.symbol} already flat on exchange — marking DB closed")
+                                    trade.status = 'closed'
+                                    trade.closed_at = datetime.now(timezone.utc)
+                                    trade.notes = (trade.notes or '') + ' | AI-EXIT: already flat on exchange'
+                                    db_check.add(trade)
+                                    if self._pyramid_mode and trade.symbol in self._pyramid_layers:
+                                        del self._pyramid_layers[trade.symbol]
+                                    _exits_triggered += 1
+                                else:
+                                    logger.error(f"  -> FAILED to close {trade.symbol}: {res.message}")
+                                trade.notes = (trade.notes or "") + f" | AI EXIT FAILED: {res.message}"
+                                db_check.add(trade)
+                    except Exception as e:
+                        logger.error(f"  Position review error for {trade.symbol}: {e}")
+                if _exits_triggered > 0:
+                    db_check.commit()
+                    logger.info(f"  Position Manager: {_exits_triggered} positions closed this cycle.")
+                    # Refresh open count after exits
+                    self._open_count = db_check.query(func.count(func.distinct(Trade.symbol))).filter(Trade.status.in_(["open", "filled"])).scalar() or 0
+            except Exception as e:
+                logger.error(f"Position Manager cycle error: {e}")
+                db_check.rollback()
+            finally:
+                db_check.close()
+        except Exception as e:
+            logger.error(f"Position Manager init error: {e}")
 
-                                trade = Trade(
-                                    symbol=symbol,
-                                    direction="BUY",
-                                    quantity=broker_result.get('quantity') or lot_size,
-                                    entry_price=broker_result.get('filled_price') or signal.entry_price,
-                                    stop_loss=signal.stop_loss,
-                                    take_profit=signal.take_profit,
-                                    status="open" if ok else "failed",
-                                    strategy=signal.strategy or self._strategy_name,
-                                    notes=f"conf={signal.confidence:.2f} | {broker_note}",
-                                    signal_id=db_signal.id,
-                                    binance_order_id=broker_result.get('order_id', '') if ok else None,
-                                    exchange='binance_futures' if ok else None,
-                                    filled_price=broker_result.get('filled_price') if ok else None,
-                                )
-                                db.add(trade)
-                                if ok:
-                                    open_count += 1
-                                db_signal.status = "executed" if ok else "failed"
-                                logger.info(f"  -> BUY 1 lot {symbol} @ {signal.entry_price} [{broker_note}]")
-                                _trades_executed += 1
-                                db.flush()  # flush to get trade.id before writing to InfluxDB
-                                await influx.write_trade(
-                                    symbol=symbol,
-                                    direction="BUY",
-                                    quantity=lot_size,
-                                    entry_price=signal.entry_price or 0.0,
-                                    status="open" if ok else "failed",
-                                    strategy=signal.strategy or self._strategy_name,
-                                    stop_loss=signal.stop_loss,
-                                    take_profit=signal.take_profit,
-                                )
+        # Run all symbols in parallel
+        tasks = [
+            self._process_symbol(
+                symbol, min_confidence, ai_threshold, max_positions
+            )
+            for symbol in self._symbols
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
 
-                        elif signal.signal == "SELL":
-                            if existing and existing.direction == "BUY":
-                                # === CLOSE LONG via UnifiedTrading router ===
-                                ut = UnifiedTrading()
-                                close_order = UnifiedOrder(
-                                    symbol=symbol,
-                                    side=OrderSide.SELL,
-                                    order_type=OrderType.MARKET,
-                                    quantity=float(existing.quantity),
-                                    price=signal.entry_price,
-                                )
-                                broker_result = await asyncio.get_event_loop().run_in_executor(
-                                    None, lambda o=close_order: ut.place_order(o)
-                                )
-                                ok = broker_result.success
-                                broker_note = f"UT:{broker_result.mode}:closed" if ok else f"ut_error:{broker_result.message[:60]}"
+        _signals_generated = 0
+        _trades_executed = 0
+        _errors = 0
 
-                                cur_price = signal.entry_price or existing.entry_price
-                                pnl = (cur_price - existing.entry_price) * existing.quantity
-                                existing.exit_price = cur_price
-                                existing.pnl = pnl
-                                existing.status = "closed"
-                                existing.closed_at = datetime.now(timezone.utc)
-                                existing.notes = (existing.notes or "") + f" | Closed conf={signal.confidence:.2f} [{broker_note}]"
-                                if ok:
-                                    open_count -= 1
-                                db_signal.status = "executed" if ok else "failed"
-                                logger.info(f"  -> SELL (close) {symbol} @ {cur_price} PnL={pnl:+.4f} [{broker_note}]")
-                                _trades_executed += 1
-                                await influx.write_trade(
-                                    symbol=symbol,
-                                    direction="SELL",
-                                    quantity=existing.quantity,
-                                    entry_price=cur_price,
-                                    status="closed",
-                                    strategy=existing.strategy or self._strategy_name,
-                                    pnl=pnl,
-                                )
+        for res in results:
+            if isinstance(res, Exception):
+                logger.error(f"Symbol task error: {res}")
+                _errors += 1
+            elif isinstance(res, dict):
+                _signals_generated += res.get("signals", 0)
+                _trades_executed += res.get("trades", 0)
 
-                            elif not existing and open_count < max_positions:
-                                # === OPEN SHORT via active broker ===
-                                broker_result = await asyncio.get_event_loop().run_in_executor(
-                                    None,
-                    lambda s=symbol: _active_broker.place_order(
-                            s,
-                            direction="SELL",
-                            quantity=lot_size,
-                            price=signal.entry_price,
-                            stop_loss=signal.stop_loss,
-                            take_profit=signal.take_profit,
-                        )
-                                )
-                                ok = broker_result.get('status') in ('simulated', 'sent')
-                                broker_note = f"Broker:{broker_result.get('broker','?')}" if ok else f"broker_error:{str(broker_result.get('error','?'))[:60]}"
-
-                                trade = Trade(
-                                    symbol=symbol,
-                                    direction="SELL",
-                                    quantity=broker_result.get('quantity') or lot_size,
-                                    entry_price=broker_result.get('filled_price') or signal.entry_price,
-                                    stop_loss=signal.stop_loss,
-                                    take_profit=signal.take_profit,
-                                    status="open" if ok else "failed",
-                                    strategy=signal.strategy or self._strategy_name,
-                                    notes=f"conf={signal.confidence:.2f} | {broker_note} (short)",
-                                    signal_id=db_signal.id,
-                                    binance_order_id=broker_result.get('order_id', '') if ok else None,
-                                    exchange='binance_futures' if ok else None,
-                                    filled_price=broker_result.get('filled_price') if ok else None,
-                                )
-                                db.add(trade)
-                                if ok:
-                                    open_count += 1
-                                db_signal.status = "executed" if ok else "failed"
-                                logger.info(f"  -> SELL (short) 1 lot {symbol} @ {signal.entry_price} [{broker_note}]")
-                                _trades_executed += 1
-                                db.flush()  # flush to get trade.id before writing to InfluxDB
-                                await influx.write_trade(
-                                    symbol=symbol,
-                                    direction="SELL",
-                                    quantity=lot_size,
-                                    entry_price=signal.entry_price or 0.0,
-                                    status="open" if ok else "failed",
-                                    strategy=signal.strategy or self._strategy_name,
-                                    stop_loss=signal.stop_loss,
-                                    take_profit=signal.take_profit,
-                                )
-                            else:
-                                db_signal.status = "rejected"
-                                logger.info(f"  {symbol}: SELL rejected (existing={existing is not None}, positions={open_count}/{max_positions})")
-
-                    else:
-                        db_signal.status = "expired" if signal.signal == "NEUTRAL" else "rejected"
-
-                    # SL/TP check for open positions
-                    self._check_sl_tp(db, symbol, bars)
-
-                except Exception as e:
-                    logger.warning(f"Symbol processing error: {e}")
-                    continue
-
-            # Save portfolio snapshot (simple version)
-            # Save portfolio snapshot (simple version)
+        # Save portfolio snapshot and system health
+        db = SessionLocal()
+        try:
             self._save_portfolio_snapshot(db)
-
-            # ── InfluxDB: write system health + portfolio ──
+            
             _cycle_ms = (datetime.now(timezone.utc).timestamp() - _cycle_start) * 1000
             await influx.write_system_health(
                 cycle=self._cycle_count,
@@ -620,17 +497,18 @@ class TradingLoopService:
                 errors=_errors,
                 state=self._state,
             )
+            
+            _active_broker = get_active_broker()
             bal = _active_broker.get_balance() if hasattr(_active_broker, 'get_balance') else {}
             await influx.write_portfolio_snapshot(
-                cash=bal.get("balance", 0.0),
+                cash=bal.get("available", 0.0),
                 equity=bal.get("equity", 0.0),
-                margin_used=bal.get("margin", 0.0),
-                open_positions=open_count,
+                margin_used=bal.get("margin_used", 0.0),
+                open_positions=self._open_count,
                 cycle=self._cycle_count,
             )
-
-            # ── InfluxDB: write Binance Futures wallet + positions ────────────
-            if _ACTIVE_BROKER_NAME == 'binance_futures':
+            
+            if os.getenv("ACTIVE_BROKER") == 'binance_futures':
                 try:
                     await influx.write_binance_wallet(
                         balance=bal.get('balance', 0.0),
@@ -653,24 +531,152 @@ class TradingLoopService:
                         )
                 except Exception as _bf_e:
                     logger.warning(f'Binance InfluxDB write error: {_bf_e}')
-
-        except Exception as e:
-            db.rollback()
-            raise
         finally:
             db.close()
+
+    async def _process_symbol(self, symbol: str, min_confidence: float, ai_threshold: float, max_positions: int):
+        from backend.services.decision_engine import DecisionEngine
+        from backend.database.connection import SessionLocal
+        from backend.database.models import Trade, Signal
+        from datetime import datetime, timezone
+        from backend.services.unified_trading import UnifiedTrading, UnifiedOrder, OrderSide, OrderType
+        import asyncio
+
+        db = SessionLocal()
+        _signals = 0
+        _trades = 0
+
+        try:
+            # 1. Fetch existing position
+            existing = db.query(Trade).filter(
+                Trade.symbol == symbol,
+                Trade.status.in_(["open", "filled"])
+            ).first()
+
+            # 2. Fetch bars
+            bars = await self._fetch_bars(symbol)
+            if not bars or len(bars) < 50:
+                return {"signals": 0, "trades": 0}
+
+            if not self._is_market_open(symbol):
+                return {"signals": 0, "trades": 0}
+
+            # 3. Check cooldown
+            cooldown_active = False
+            if symbol in self._sl_cooldown:
+                elapsed = (datetime.now(timezone.utc) - self._sl_cooldown[symbol]).total_seconds() / 60
+                if elapsed < getattr(self.risk_config, "opinion_close_cooldown_min", 30):
+                    cooldown_active = True
+                else:
+                    del self._sl_cooldown[symbol]
+
+            # 4. Evaluate using Decision Engine
+            decision_engine = DecisionEngine(self.risk_config)
+            decision = await decision_engine.evaluate_symbol(
+                symbol=symbol,
+                bars=bars,
+                existing_position=existing,
+                open_count=self._open_count,
+                pyramid_layers=self._pyramid_layers.get(symbol, []),
+                cooldown_active=cooldown_active
+            )
+
+            if decision:
+                _signals = 1
+                
+                # Check directional exposure limit (if not pyramid)
+                _new_notional = decision.quantity * decision.entry_price
+                if not decision.is_pyramid:
+                    all_open = db.query(Trade).filter(Trade.status.in_(["open", "filled"])).all()
+                    _long_notional = sum(t.quantity * (t.entry_price or 0.0) for t in all_open if t.direction == "BUY")
+                    _short_notional = sum(t.quantity * (t.entry_price or 0.0) for t in all_open if t.direction == "SELL")
+                    
+                    if decision.action == "BUY" and (_long_notional + _new_notional > self.risk_config.max_directional_exposure_usdt):
+                        self.logger.warning(f"  [ {symbol} ] BUY blocked: LONG exposure cap reached")
+                        decision = None
+                    elif decision.action == "SELL" and (_short_notional + _new_notional > self.risk_config.max_directional_exposure_usdt):
+                        self.logger.warning(f"  [ {symbol} ] SELL blocked: SHORT exposure cap reached")
+                        decision = None
+
+            if decision:
+                # 5. Execute Order
+                ut = UnifiedTrading()
+                order_side = OrderSide.BUY if decision.action == "BUY" else OrderSide.SELL
+                
+                self.logger.info(f"  [ {symbol} ] Attempting {decision.action} order: qty={decision.quantity:.6f} @ {decision.entry_price} | SL={decision.stop_loss} TP={decision.take_profit}")
+                
+                order = UnifiedOrder(
+                    symbol=symbol, side=order_side, quantity=decision.quantity, price=decision.entry_price,
+                    stop_loss=decision.stop_loss, take_profit=decision.take_profit
+                )
+                
+                res = await asyncio.get_event_loop().run_in_executor(None, lambda: ut.place_order(order))
+                if res.success:
+                    if not existing:
+                        self._open_count += 1
+                    _trades = 1
+                    self.logger.info(f"  [ {symbol} ] SUCCESS: {res.order_id} filled @ {res.filled_price}")
+                    
+                    if decision.is_pyramid:
+                        self._pyramid_layers.setdefault(symbol, []).append(float(res.filled_price or decision.entry_price))
+                    
+                    trade = Trade(
+                        symbol=symbol, direction=decision.action, quantity=res.filled_qty or decision.quantity,
+                        entry_price=res.filled_price or decision.entry_price, status="open",
+                        strategy=self._strategy_name,
+                        binance_order_id=res.order_id,
+                        stop_loss=decision.stop_loss, take_profit=decision.take_profit,
+                        notes=f"pyramid_layer_{len(self._pyramid_layers.get(symbol, []))}" if decision.is_pyramid else None
+                    )
+                    db.add(trade)
+                    db.commit()
+                else:
+                    self.logger.warning(f"  [ {symbol} ] FAILED: {res.message}")
+
+            # SL/TP Check
+            self._check_sl_tp(db, symbol, bars)
+            db.commit()
+
+            return {"signals": _signals, "trades": _trades}
+
+        except Exception as e:
+            self.logger.error(f"Error processing {symbol}: {e}")
+            db.rollback()
+            return {"signals": 0, "trades": 0}
+        finally:
+            db.close()
+            
+    async def _run_cycle_OLD(self):
+        """Execute one trading cycle across all symbols."""
 
     def _save_portfolio_snapshot(self, db):
         """Save portfolio snapshot with real broker balance."""
         try:
-            # Get open trades
-            open_trades = db.query(Trade).filter(Trade.status == "open").all()
+            # Get open trades from DB
+            open_trades = db.query(Trade).filter(Trade.status.in_(["open", "filled"])).all()
             
-            # Get real balance from active broker
-            balance_info = _active_broker.get_balance() if hasattr(_active_broker, 'get_balance') else {"balance": 0.0}
-            real_cash = balance_info.get("balance", 0.0)
-            real_equity = balance_info.get("equity", 0.0)
-
+            # Get balance - use paper portfolio if in paper mode, otherwise live broker
+            paper_mode = os.getenv("PAPER_TRADING", "false").lower() == "true"
+            
+            if paper_mode:
+                # Get balance from paper portfolio
+                ut = UnifiedTrading()
+                paper_pf = ut.get_paper_portfolio()
+                if paper_pf:
+                    real_cash = paper_pf.get("cash", 0.0)
+                    real_equity = real_cash  # Simplified for paper trading
+                    logger.info(f"  Paper portfolio balance: ${real_cash:,.2f}")
+                else:
+                    real_cash = 0.0
+                    real_equity = 0.0
+                    logger.warning("  No paper portfolio found, balance = $0")
+            else:
+                # Get real balance from active broker
+                broker = get_active_broker()
+                balance_info = broker.get_balance() if hasattr(broker, 'get_balance') else {"balance": 0.0}
+                real_cash = balance_info.get("balance", 0.0)
+                real_equity = balance_info.get("equity", 0.0)
+            
             # Save snapshot
             snapshot = PortfolioSnapshot(
                 total_value=real_cash,
@@ -697,7 +703,7 @@ class TradingLoopService:
         current_price = bars[-1]["close"]
         trades = (
             db.query(Trade)
-            .filter(Trade.symbol == symbol, Trade.status == "open")
+            .filter(Trade.symbol == symbol, Trade.status.in_(["open", "filled"]))
             .all()
         )
         for trade in trades:
@@ -722,14 +728,42 @@ class TradingLoopService:
                     pnl = (current_price - trade.entry_price) * trade.quantity
                 else:
                     pnl = (trade.entry_price - current_price) * trade.quantity
-                trade.exit_price = current_price
-                trade.pnl = pnl
-                trade.status = "closed"
-                trade.closed_at = datetime.now(timezone.utc)
-                trade.notes = (trade.notes or "") + " | Closed via SL/TP"
-                logger.info(
-                    f"  -> {symbol} position closed (SL/TP), PnL={pnl:+.2f}"
-                )
+
+                # Send close order via UnifiedTrading BEFORE updating DB
+                ut = UnifiedTrading()
+                close_side = OrderSide.SELL if trade.direction == "BUY" else OrderSide.BUY
+                res = ut.place_order(UnifiedOrder(
+                    symbol=trade.symbol,
+                    side=close_side,
+                    order_type=OrderType.MARKET,
+                    quantity=trade.quantity,
+                    reduce_only=True
+                ))
+
+                if res.success:
+                    trade.exit_price = res.filled_price or current_price
+                    trade.pnl = pnl
+                    trade.status = "closed"
+                    trade.closed_at = datetime.now(timezone.utc)
+                    trade.notes = (trade.notes or "") + f" | Closed via SL/TP ({res.mode})"
+                    if self._pyramid_mode and trade.symbol in self._pyramid_layers:
+                        del self._pyramid_layers[trade.symbol]
+                        logger.info(f"  [ {trade.symbol} ] Pyramid layers cleared (SL/TP hit)")
+                    logger.info(
+                        f"  -> {symbol} position closed (SL/TP), PnL={pnl:+.2f}"
+                    )
+                else:
+                    # already_flat = success (exchange SL already fired)
+                    if hasattr(res, 'message') and ('-2022' in str(res.message) or 'already' in str(res.message).lower()):
+                        logger.info(f"  -> {symbol} already flat on exchange — marking DB closed")
+                        trade.status = 'closed'
+                        trade.closed_at = datetime.now(timezone.utc)
+                        trade.notes = (trade.notes or '') + ' | SL/TP: already flat on exchange'
+                        if self._pyramid_mode and trade.symbol in self._pyramid_layers:
+                            del self._pyramid_layers[trade.symbol]
+                    else:
+                        logger.error(f"  -> Failed to close {symbol} via SL/TP: {res.message}")
+                    trade.notes = (trade.notes or "") + f" | SL/TP close FAILED: {res.message}"
 
     def _is_market_open(self, symbol: str) -> bool:
         """Check if the market is open for the given symbol.

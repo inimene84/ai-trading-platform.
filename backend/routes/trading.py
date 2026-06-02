@@ -18,6 +18,16 @@ load_dotenv()
 router = APIRouter(prefix="/trading", tags=["trading"])
 
 
+def _to_yfinance_symbol(symbol: str) -> str:
+    """Convert Binance-native BTCUSDT → yfinance BTC-USD format."""
+    s = symbol.upper().strip()
+    if s.endswith('USDT'):
+        return s[:-4] + '-USD'
+    if s.endswith('BUSD'):
+        return s[:-4] + '-USD'
+    return s  # already yfinance format or unknown
+
+
 @router.get("/strategies")
 async def list_strategies():
     """List available trading strategies with their current parameters."""
@@ -108,7 +118,7 @@ async def get_portfolio():
             .first()
         )
         # Get open positions
-        open_trades = db.query(Trade).filter(Trade.status == "open").all()
+        open_trades = db.query(Trade).filter(Trade.status.in_(["open", "filled"])).all()
         positions = []
         for t in open_trades:
             positions.append({
@@ -131,7 +141,7 @@ async def get_portfolio():
                 "total_pnl": snap.total_pnl,
                 "total_pnl_pct": (snap.total_pnl / 10000.0) * 100 if snap.total_pnl else 0.0,
                 "positions_value": snap.positions_value,
-                "open_positions_count": snap.open_positions,
+                "open_positions_count": len(positions),
                 "last_updated": snap.timestamp.isoformat() if snap.timestamp else datetime.now().isoformat(),
             }
         else:
@@ -421,7 +431,7 @@ async def get_forex():
 async def start_loop(request: dict = None):
     """Start the automated trading loop."""
     request = request or {}
-    interval = request.get("interval_minutes", 15)
+    interval = request.get("interval_minutes", 5)
     symbols = request.get("symbols", None)
     strategy = request.get("strategy", "combined")
     result = await trading_loop.start(
@@ -450,13 +460,14 @@ async def get_positions():
     """Get all open positions with current P&L."""
     db = SessionLocal()
     try:
-        open_trades = db.query(Trade).filter(Trade.status == "open").all()
+        open_trades = db.query(Trade).filter(Trade.status.in_(["open", "filled"])).all()
         positions = []
         for t in open_trades:
             current_price = t.entry_price
             try:
                 import yfinance as yf
-                ticker = yf.Ticker(t.symbol)
+                yf_sym = _to_yfinance_symbol(t.symbol)
+                ticker = yf.Ticker(yf_sym)
                 hist = ticker.history(period="5d")
                 if not hist.empty:
                     current_price = float(hist["Close"].iloc[-1])
@@ -663,7 +674,8 @@ async def run_analysis_on_demand(request: dict):
     # Fetch bars using the trading loop's method
     import yfinance as yf
     try:
-        ticker = yf.Ticker(symbol)
+        yf_sym = _to_yfinance_symbol(symbol)
+        ticker = yf.Ticker(yf_sym)
         df = ticker.history(period="30d", interval="1h")
         if df.empty:
             df = ticker.history(period="60d", interval="1d")
@@ -754,14 +766,15 @@ async def close_position(position_id: int):
     from datetime import datetime
     db = SessionLocal()
     try:
-        trade = db.query(Trade).filter(Trade.id == position_id, Trade.status == "open").first()
+        trade = db.query(Trade).filter(Trade.id == position_id, Trade.status.in_(["open", "filled"])).first()
         if not trade:
             from fastapi import HTTPException
             raise HTTPException(status_code=404, detail=f"Open position {position_id} not found")
         exit_price = trade.entry_price
         try:
             import yfinance as yf
-            ticker = yf.Ticker(trade.symbol)
+            yf_sym = _to_yfinance_symbol(trade.symbol)
+            ticker = yf.Ticker(yf_sym)
             hist = ticker.history(period="1d")
             if not hist.empty:
                 exit_price = float(hist["Close"].iloc[-1])
@@ -792,7 +805,7 @@ async def modify_position(position_id: int, body: dict):
     from backend.database.models import Trade
     db = SessionLocal()
     try:
-        trade = db.query(Trade).filter(Trade.id == position_id, Trade.status == "open").first()
+        trade = db.query(Trade).filter(Trade.id == position_id, Trade.status.in_(["open", "filled"])).first()
         if not trade:
             from fastapi import HTTPException
             raise HTTPException(status_code=404, detail=f"Open position {position_id} not found")
@@ -1020,6 +1033,30 @@ async def paper_place_order(request: dict):
         "filled_price": resp.filled_price,
         "filled_qty": resp.filled_qty,
     }
+
+@router.post("/order")
+async def place_live_order(request: dict):
+    """Place a live order through the active broker session."""
+    ut = UnifiedTrading()
+    order = UnifiedOrder(
+        symbol=request.get("symbol", "").upper(),
+        side=OrderSide(request.get("side", "buy").lower()),
+        order_type=OrderType(request.get("order_type", "market").lower()),
+        quantity=float(request.get("quantity", 0)),
+        price=float(request.get("price", 0) or 0),
+        stop_loss=float(request.get("stop_loss", 0) or 0),
+        take_profit=float(request.get("take_profit", 0) or 0),
+    )
+    resp = ut.place_order(order)
+    return {
+        "success": resp.success,
+        "order_id": resp.order_id,
+        "message": resp.message,
+        "mode": resp.mode,
+        "filled_price": resp.filled_price,
+        "filled_qty": resp.filled_qty,
+    }
+
 
 
 @router.post("/paper/cancel")

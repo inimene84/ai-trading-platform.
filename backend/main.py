@@ -17,6 +17,7 @@ from backend.services.binance_order_poller import start_order_poller
 from backend.services.unified_trading import UnifiedTrading
 from backend.services.ctrader_service import ctrader_broker
 from backend.services.binance_futures_service import binance_futures_broker
+from backend.services.trading_loop import trading_loop
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -78,12 +79,26 @@ async def startup_event():
         ut.register_broker("binance_futures", binance_futures_broker)
         ut.register_broker("ctrader", ctrader_broker)
         # Auto-init paper session for immediate use
-        ut.init_session(
-            broker="binance_futures",
-            mode="paper",
-            paper_balance=100_000.0,
-            leverage=1.0,
-        )
-        logger.info("✓ Unified Trading Router initialized (paper mode)")
+        paper_trading = os.getenv("PAPER_TRADING", "false").lower() == "true"
+        mode = "paper" if paper_trading else "live"
+        init_kwargs = {
+            "broker": "binance_futures",
+            "mode": mode,
+            "leverage": 1.0,
+        }
+        if paper_trading:
+            init_kwargs["paper_balance"] = 100_000.0
+        ut.init_session(**init_kwargs)
+        logger.info(f"✓ Unified Trading Router initialized ({mode.upper()} MODE)")
     except Exception as e:
         logger.warning(f"⚠ Unified Trading init warning: {e}")
+    
+    # Auto-start trading loop
+    try:
+        # Start trading loop automatically (Safe in both Paper and Live as per user request)
+        asyncio.create_task(trading_loop.start())
+        paper_trading = os.getenv("PAPER_TRADING", "false").lower() == "true"
+        mode_str = "PAPER" if paper_trading else "LIVE"
+        logger.info(f"✓ Trading loop auto-started ({mode_str} MODE)")
+    except Exception as e:
+        logger.warning(f"⚠ Trading loop auto-start failed: {e}")

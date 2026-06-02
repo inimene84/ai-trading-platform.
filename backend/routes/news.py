@@ -1,11 +1,12 @@
 """News and market data routes for the News & Data Panel."""
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
 import asyncio
 import time
 import logging
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Optional, List
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +24,29 @@ def _cached(key: str):
 
 def _set_cache(key: str, data):
     _cache[key] = {"ts": time.time(), "data": data}
+
+# ─── Pydantic Models ───────────────────────────────────────────────────────────
+class SentimentPayload(BaseModel):
+    symbol: str = Field(..., description="Trading symbol (e.g., BTCUSDT)")
+    sentiment_score: float = Field(..., ge=-1.0, le=1.0, description="Sentiment score -1 to 1")
+    impact_score: float = Field(default=0.0, ge=0.0, le=1.0, description="Impact score 0 to 1")
+    source: str = Field(default="rss", description="News source")
+    time_horizon: str = Field(default="short", description="Time horizon: short/medium/long")
+    topics: str = Field(default="", description="Comma-separated topics")
+
+class NewsArchivePayload(BaseModel):
+    title: str
+    content: str
+    source: str
+    url: str
+    published_at: str
+    sentiment: float = Field(..., ge=-1.0, le=1.0)
+    symbols: List[str] = Field(default_factory=list)
+    embedding: Optional[List[float]] = Field(default=None, description="Vector embedding (1536d)")
+
+class NewsSearchQuery(BaseModel):
+    q: str = Field(..., description="Search query")
+    limit: int = Field(default=10, ge=1, le=100)
 
 # ─── Sentiment detection ──────────────────────────────────────────────────────
 POSITIVE_WORDS = {
@@ -346,3 +370,192 @@ async def get_market_sentiment():
     }
     _set_cache("market_sentiment", response)
     return response
+
+
+# ─── POST /api/news/sentiment - n8n pushes here ───────────────────────────────
+@router.post("/sentiment")
+async def receive_news_sentiment(payload: SentimentPayload):
+    """
+    Receive AI-analyzed sentiment data from n8n workflow.
+    Writes to InfluxDB news-sentiment bucket via existing influxdb_writer.
+    """
+    try:
+        from backend.services.influxdb_writer import influx
+        
+        await influx.write_news_sentiment(
+            symbol=payload.symbol,
+            sentiment_score=payload.sentiment_score,
+            impact_score=payload.impact_score,
+            source=payload.source,
+            time_horizon=payload.time_horizon,
+            topics=payload.topics,
+        )
+        
+        logger.info(f"Stored sentiment for {payload.symbol}: score={payload.sentiment_score}")
+        return {
+            "status": "stored",
+            "symbol": payload.symbol,
+            "sentiment_score": payload.sentiment_score,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+    except Exception as e:
+        logger.error(f"Failed to store sentiment: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─── POST /api/news/archive - n8n pushes filtered news + embeddings ────────────
+@router.post("/archive")
+async def archive_news(payload: NewsArchivePayload):
+    """
+    Receive filtered news with embeddings from n8n workflow.
+    Stores in Qdrant for vector search.
+    """
+    try:
+        # Only store if embedding provided (AI-filtered)
+        if not payload.embedding:
+            logger.warning("Archive called without embedding - skipping storage")
+            return {"status": "skipped", "reason": "no_embedding"}
+        
+        from backend.services.qdrant_client import qdrant
+        
+        point_id = await qdrant.store_news_article(
+            title=payload.title,
+            content=payload.content,
+            source=payload.source,
+            url=payload.url,
+            published_at=payload.published_at,
+            sentiment=payload.sentiment,
+            symbols=payload.symbols,
+            embedding=payload.embedding,
+        )
+        
+        logger.info(f"Archived news: {payload.title[:50]}... -> Qdrant point {point_id}")
+        return {
+            "status": "archived",
+            "qdrant_point_id": point_id,
+            "title": payload.title[:100],
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+    except ImportError:
+        # Qdrant client not available yet - log but don't fail
+        logger.warning("Qdrant client not initialized - archive endpoint unavailable")
+        return {"status": "unavailable", "reason": "qdrant_not_configured"}
+    except Exception as e:
+        logger.error(f"Failed to archive news: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─── GET /api/news/search - semantic search via Qdrant ───────────────────────
+@router.get("/search")
+async def search_news(q: str, limit: int = 10):
+    """
+    Search news archive via semantic similarity.
+    """
+    try:
+        from backend.services.qdrant_client import qdrant
+        
+        # Generate embedding for query if no embedding provided
+        results = await qdrant.search_news(q, limit=limit)
+        return {
+            "query": q,
+            "results": results,
+            "count": len(results),
+        }
+    except ImportError:
+        raise HTTPException(status_code=503, detail="Qdrant client not configured")
+    except Exception as e:
+        logger.error(f"Search failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─── GET /api/news/history - paginated historical news ─────────────────────────
+@router.get("/history")
+async def get_news_history(page: int = 1, limit: int = 20):
+    """
+    Return paginated historical news from Qdrant (non-semantic).
+    """
+    try:
+        from backend.services.qdrant_client import qdrant
+        
+        results = await qdrant.get_news_history(page=page, limit=limit)
+        return {
+            "page": page,
+            "limit": limit,
+            "results": results,
+            "count": len(results),
+        }
+    except ImportError:
+        raise HTTPException(status_code=503, detail="Qdrant client not configured")
+    except Exception as e:
+        logger.error(f"History fetch failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─── Google Drive Workflow Stubs ────────────────────────────────────────────────
+class GoogleDriveArchivePayload(BaseModel):
+    """Payload for Google Drive workflow to archive historical news."""
+    articles: List[NewsArchivePayload] = Field(default_factory=list)
+    batch_id: Optional[str] = None
+    source: str = Field(default="google_drive")
+
+
+@router.post("/gdrive/archive")
+async def archive_google_drive_news(payload: GoogleDriveArchivePayload):
+    """
+    Receive batch of archived news from Google Drive workflow.
+    Stores in Qdrant for historical vector search.
+    Only stores AI-filtered articles (those with embeddings).
+    """
+    try:
+        from backend.services.qdrant_client import qdrant
+        
+        stored = []
+        skipped = []
+        
+        for article in payload.articles:
+            if not article.embedding:
+                skipped.append({"title": article.title, "reason": "no_embedding"})
+                continue
+            
+            point_id = await qdrant.store_news_article(
+                title=article.title,
+                content=article.content,
+                source=article.source,
+                url=article.url,
+                published_at=article.published_at,
+                sentiment=article.sentiment,
+                symbols=article.symbols,
+                embedding=article.embedding,
+            )
+            stored.append({"title": article.title[:100], "qdrant_point_id": point_id})
+        
+        return {
+            "status": "processed",
+            "batch_id": payload.batch_id,
+            "stored_count": len(stored),
+            "skipped_count": len(skipped),
+            "stored": stored[:5],  # Preview first 5
+            "skipped_preview": skipped[:5],
+        }
+    except ImportError:
+        logger.warning("Qdrant client not initialized - gdrive archive endpoint unavailable")
+        return {"status": "unavailable", "reason": "qdrant_not_configured"}
+    except Exception as e:
+        logger.error(f"Failed to archive Google Drive news: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/gdrive/status")
+async def gdrive_archive_status():
+    """Check Google Drive archive integration status."""
+    try:
+        from backend.services.qdrant_client import qdrant
+        collection_info = await qdrant.get_collection_info()
+        return {
+            "status": "ready",
+            "collection": collection_info.get("name"),
+            "points_count": collection_info.get("points_count", 0),
+            "vector_size": collection_info.get("vector_size", 1536),
+        }
+    except Exception as e:
+        return {"status": "unavailable", "reason": str(e)}

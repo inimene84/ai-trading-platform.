@@ -197,7 +197,7 @@ export const apiService = {
 
   // ── Positions ───────────────────────────────────────────────────────────
   async getPositions(): Promise<{ positions: Position[]; count: number }> {
-    return request('/trading/paper/positions');
+    return request('/trading/positions');
   },
 
   // ── Trades ──────────────────────────────────────────────────────────────
@@ -365,6 +365,13 @@ export const apiService = {
     });
   },
 
+  async placeOrder(symbol: string, side: 'buy' | 'sell', quantity: number, price = 0) {
+    return request('/trading/order', {
+      method: 'POST',
+      body: JSON.stringify({ symbol, side, order_type: price > 0 ? 'limit' : 'market', quantity, price }),
+    });
+  },
+
   async paperCancelOrder(orderId: string) {
     return request('/trading/paper/cancel', {
       method: 'POST',
@@ -388,6 +395,32 @@ export const apiService = {
     return request('/trading/paper/stats');
   },
 
+  // ── Opinion Layer ────────────────────────────────────────────────────────
+  async analyzeOpinion(symbol: string, bars: any[], includeKronos = true, includeSocial = true, includeAlerts = true, includePersonas = true) {
+    return request('/trading/opinion/analyze', {
+      method: 'POST',
+      body: JSON.stringify({
+        symbol,
+        bars,
+        include_kronos: includeKronos,
+        include_social: includeSocial,
+        include_alerts: includeAlerts,
+        include_personas: includePersonas,
+      }),
+    });
+  },
+
+  async getOpinionWeights() {
+    return request('/trading/opinion/weights');
+  },
+
+  async updateOpinionWeights(weights: Record<string, number>) {
+    return request('/trading/opinion/weights', {
+      method: 'POST',
+      body: JSON.stringify({ weights }),
+    });
+  },
+
   // ── AI Agent ──────────────────────────────────────────────────────────────────────────────
   async aiAgentTrade(prompt: string, provider = 'xai', model = 'grok-beta') {
     return request('/trading/ai/agent-trade', {
@@ -395,7 +428,6 @@ export const apiService = {
       body: JSON.stringify({ prompt, provider, model }),
     });
   },
-
   // ── SSE ────────────────────────────────────────────────────────────────────────────────────
   connectEventStream(topics: string[], onMessage: (msg: any) => void) {
     const base = getBackendUrl();

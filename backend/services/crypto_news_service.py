@@ -44,7 +44,7 @@ SYMBOL_KEYWORDS = {
     'AVAXUSDT': ['avalanche', 'avax'],
     'DOTUSDT': ['polkadot', 'dot'],
     'LINKUSDT': ['chainlink', 'link'],
-    'MATICUSDT': ['polygon', 'matic'],
+    'POLUSDT': ['polygon', 'matic'],
     'LTCUSDT': ['litecoin', 'ltc'],
     'UNIUSDT': ['uniswap', 'uni'],
     'ATOMUSDT': ['cosmos', 'atom'],
