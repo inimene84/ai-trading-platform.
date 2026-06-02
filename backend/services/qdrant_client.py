@@ -6,6 +6,7 @@ Manages crypto news archive with semantic search capabilities.
 import os
 import logging
 import time
+import asyncio
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timezone
 
@@ -28,6 +29,40 @@ try:
 except ImportError:
     QDRANT_AVAILABLE = False
     logger.warning("qdrant-client not installed – news archive disabled")
+    
+    QdrantClient = None
+    AsyncQdrantClient = None
+    
+    class VectorParams:
+        def __init__(self, size: int, distance: Any):
+            self.size = size
+            self.distance = distance
+            
+    class Distance:
+        COSINE = "Cosine"
+        EUCLID = "Euclid"
+        DOT = "Dot"
+        
+    class PointStruct:
+        def __init__(self, id: Any, vector: Any, payload: Any):
+            self.id = id
+            self.vector = vector
+            self.payload = payload
+            
+    class Filter:
+        def __init__(self, must: List[Any] = None, should: List[Any] = None, must_not: List[Any] = None):
+            self.must = must
+            self.should = should
+            self.must_not = must_not
+            
+    class FieldCondition:
+        def __init__(self, key: str, match: Any):
+            self.key = key
+            self.match = match
+            
+    class MatchValue:
+        def __init__(self, value: Any):
+            self.value = value
 
 
 class QdrantNewsClient:
@@ -47,6 +82,7 @@ class QdrantNewsClient:
         self._client = AsyncQdrantClient(
             url=self.url,
             api_key=self.api_key if self.api_key else None,
+            timeout=5.0,
         )
 
     async def ensure_collection(self) -> bool:
@@ -88,34 +124,43 @@ class QdrantNewsClient:
         if not self._client:
             return None
 
-        try:
-            await self.ensure_collection()
+        max_retries = 3
+        backoff = 0.5
+        for attempt in range(max_retries):
+            try:
+                await self.ensure_collection()
 
-            point_id = int(time.time() * 1000000)  # Microsecond precision for uniqueness
-            point = PointStruct(
-                id=point_id,
-                vector=embedding,
-                payload={
-                    "title": title[:500],
-                    "content": content[:2000],
-                    "source": source,
-                    "url": url,
-                    "published_at": published_at,
-                    "sentiment": sentiment,
-                    "symbols": symbols,
-                    "created_at": datetime.now(timezone.utc).isoformat(),
-                },
-            )
+                point_id = int(time.time() * 1000000)  # Microsecond precision for uniqueness
+                point = PointStruct(
+                    id=point_id,
+                    vector=embedding,
+                    payload={
+                        "title": title[:500],
+                        "content": content[:2000],
+                        "source": source,
+                        "url": url,
+                        "published_at": published_at,
+                        "sentiment": sentiment,
+                        "symbols": symbols,
+                        "created_at": datetime.now(timezone.utc).isoformat(),
+                    },
+                )
 
-            await self._client.upsert(
-                collection_name=self.collection_name,
-                points=[point],
-            )
-            return point_id
-        except Exception as e:
-            logger.error(f"Failed to store news article: {e}")
-            # Re-raise to see actual error
-            raise
+                await self._client.upsert(
+                    collection_name=self.collection_name,
+                    points=[point],
+                )
+                return point_id
+            except Exception as e:
+                logger.warning(
+                    f"Qdrant store_news_article failed (attempt {attempt + 1}/{max_retries}): {e}"
+                )
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(backoff)
+                    backoff *= 2
+                else:
+                    logger.error(f"Failed to store news article after {max_retries} attempts: {e}")
+                    raise
 
     async def search_news(
         self,

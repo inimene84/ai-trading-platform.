@@ -1,0 +1,25 @@
+{
+  "_comment": "Configuration for the CombinedStrategy dynamically mapping sub-strategies based on market regime.",
+  "DEFAULT_WEIGHTS": {
+    "_comment": "Fallback weights when no regime is detected.",
+    "trend_following": 0.40,
+    "mean_reversion": 0.30,
+    "breakout": 0.30
+  },
+  "REGIME_STRONG_THRESHOLD": {
+    "_comment": "Strong-signal override thresholds. For RANGING, the threshold is very high so trend signals don't falsely dominate.",
+    "TRENDING": 0.52,
+    "RANGING": 0.78,
+    "VOLATILE": 0.62,
+    "BREAKOUT": 0.55,
+    "UNKNOWN": 0.55
+  },
+  "REGIME_PRIORITY": {
+    "_comment": "Priority order for which strategy is checked first when multiple emit strong signals.",
+    "TRENDING": ["trend_following", "breakout", "mean_reversion"],
+    "RANGING": ["mean_reversion", "breakout", "trend_following"],
+    "VOLATILE": ["breakout", "trend_following", "mean_reversion"],
+    "BREAKOUT": ["breakout", "trend_following", "mean_reversion"],
+    "UNKNOWN": ["trend_following", "breakout", "mean_reversion"]
+  }
+}

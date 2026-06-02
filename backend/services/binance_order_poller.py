@@ -152,6 +152,10 @@ async def _sync_open_orders(svc):
             db.commit()
             logger.info(f"Order poller: synced {updated} trade(s)")
 
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Order poller sync database error: {e}")
+        raise
     finally:
         db.close()
 

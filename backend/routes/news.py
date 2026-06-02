@@ -442,6 +442,9 @@ async def archive_news(payload: NewsArchivePayload):
         return {"status": "unavailable", "reason": "qdrant_not_configured"}
     except Exception as e:
         logger.error(f"Failed to archive news: {e}")
+        err_msg = str(e).lower()
+        if "connection" in err_msg or "timeout" in err_msg or "refused" in err_msg or "unreachable" in err_msg:
+            raise HTTPException(status_code=503, detail="Qdrant vector database is unreachable")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -542,6 +545,9 @@ async def archive_google_drive_news(payload: GoogleDriveArchivePayload):
         return {"status": "unavailable", "reason": "qdrant_not_configured"}
     except Exception as e:
         logger.error(f"Failed to archive Google Drive news: {e}")
+        err_msg = str(e).lower()
+        if "connection" in err_msg or "timeout" in err_msg or "refused" in err_msg or "unreachable" in err_msg:
+            raise HTTPException(status_code=503, detail="Qdrant vector database is unreachable")
         raise HTTPException(status_code=500, detail=str(e))
 
 

@@ -47,6 +47,8 @@ class TradingLoopService:
     """Background trading loop that scans markets and generates paper trades."""
 
     def __init__(self):
+        from backend.services.risk_config import get_risk_config
+        self.risk_config = get_risk_config()
         self._task: Optional[asyncio.Task] = None
         self._running = False
         self._state = "stopped"  # stopped, running, error
@@ -71,11 +73,6 @@ class TradingLoopService:
         # Cooldown tracker: symbol → datetime when SL/emergency exit fired
         # Prevents immediate re-entry after a losing close (30 min cooldown)
         self._sl_cooldown: dict = {}
-        self._sl_cooldown_minutes = int(os.getenv("SL_COOLDOWN_MINUTES", "30"))
-        # Opinion override safety knobs
-        self._opinion_override_margin = float(os.getenv("OPINION_OVERRIDE_MARGIN", "0.15"))
-        self._opinion_close_cooldown_min = int(os.getenv("OPINION_CLOSE_COOLDOWN_MIN", "30"))
-        self._min_position_hold_min = int(os.getenv("MIN_POSITION_HOLD_MIN", "20"))
 
     @property
     def status(self) -> dict:
@@ -115,6 +112,10 @@ class TradingLoopService:
         self._state = "running"
         self._error = None
         self._unified_trading = UnifiedTrading()  # Set singleton instance
+        
+        from backend.services.trading_mode import get_trading_mode
+        mode = get_trading_mode()
+        logger.warning(f"TradingLoopService starting in mode={mode.value.upper()}")
         
         # Reconstruct pyramid layers from DB
         self._reconstruct_pyramid_layers()
@@ -178,6 +179,7 @@ class TradingLoopService:
                 logger.info(f"Synced {updated} closed position(s) from broker.")
                 
         except Exception as e:
+            db.rollback()
             logger.warning(f"Failed to sync positions with broker: {e}")
 
     async def stop(self):
@@ -234,11 +236,35 @@ class TradingLoopService:
         _cycle_start = datetime.now(timezone.utc).timestamp()
         self._state = "running"
 
+        # ── RISK GUARD GATEKEEPER ──────────────────────────────────────────
+        from backend.services.risk_guard import enforce_risk_limits, RiskBreach
+        db_risk = SessionLocal()
+        try:
+            open_trades = db_risk.query(Trade).filter(Trade.status.in_(["open", "filled"])).all()
+            latest_snapshot = (
+                db_risk.query(PortfolioSnapshot)
+                .order_by(PortfolioSnapshot.timestamp.desc())
+                .first()
+            )
+            enforce_risk_limits(db_risk, self.risk_config, open_trades, latest_snapshot)
+        except RiskBreach as rb:
+            logger.error(f"[RISK BREACH] {rb.reason}. Activating kill-switch and stopping loop.")
+            self._state = "error"
+            self._running = False
+            self._error = f"RISK_BREACH: {rb.reason}"
+            return {"signals": 0, "trades": 0, "risk_breach": True}
+        except Exception as e:
+            logger.error(f"[RISK GUARD] Failed to check limits: {e}")
+            db_risk.rollback()
+        finally:
+            db_risk.close()
+        # ─────────────────────────────────────────────────────────────────────
+
         # ── C8: ACCOUNT-LEVEL KILL SWITCH ──────────────────────────────────
         try:
             _acct = binance_futures_broker._get_client().futures_account()
             _equity = float(_acct.get('totalMarginBalance', 0))
-            _kill_floor = float(os.getenv('TRADING_KILL_FLOOR_USDT', '65'))
+            _kill_floor = self.risk_config.kill_floor_usdt
             if _equity > 0 and _equity < _kill_floor:
                 logger.critical(
                     f"[KILL SWITCH] Equity ${_equity:.2f} < floor ${_kill_floor:.2f} — STOPPING LOOP"
@@ -345,23 +371,23 @@ class TradingLoopService:
             f"=== Trading Cycle #{self._cycle_count} at {self._last_cycle} (Parallel) ==="
         )
 
-        min_confidence = float(os.getenv("MIN_SIGNAL_STRENGTH", "0.60"))
-        ai_threshold = float(os.getenv("AI_ANALYSIS_THRESHOLD", "0.60"))
-        max_positions = int(os.getenv("MAX_POSITIONS", "4"))
+        min_confidence = self.risk_config.min_signal_strength
+        ai_threshold = self.risk_config.ai_analysis_threshold
+        max_positions = self.risk_config.max_positions
         # Pyramid DCA config
-        self._pyramid_mode = os.getenv("PYRAMID_MODE", "false").lower() == "true"
-        self._pyramid_max_layers = int(os.getenv("PYRAMID_MAX_LAYERS", "5"))
+        self._pyramid_mode = self.risk_config.pyramid_mode
+        self._pyramid_max_layers = self.risk_config.pyramid_max_layers
         # CRITICAL: directional exposure cap (correlation risk)
-        self._max_directional_exposure_usdt = float(os.getenv("MAX_DIRECTIONAL_EXPOSURE_USDT", "500"))
+        self._max_directional_exposure_usdt = self.risk_config.max_directional_exposure_usdt
         # Pyramid layer separation
-        self._pyramid_atr_multiplier = float(os.getenv("PYRAMID_ATR_MULTIPLIER", "1.0"))
-        self._pyramid_min_conf_increase = float(os.getenv("PYRAMID_MIN_CONF_INCREASE", "0.05"))
-        self._pyramid_usdt_per_layer = float(os.getenv("PYRAMID_USDT_PER_LAYER", os.getenv("TRADE_USDT_AMOUNT", "10")))
-        self._pyramid_max_wallet_pct = float(os.getenv("PYRAMID_MAX_WALLET_PCT", "0.70"))
+        self._pyramid_atr_multiplier = self.risk_config.pyramid_atr_multiplier
+        self._pyramid_min_conf_increase = self.risk_config.pyramid_min_conf_increase
+        self._pyramid_usdt_per_layer = self.risk_config.pyramid_usdt_per_layer
+        self._pyramid_max_wallet_pct = self.risk_config.pyramid_max_wallet_pct
         # Tighter pyramid: only add if price improves by at least 0.5% vs last layer
-        self._pyramid_min_improvement = float(os.getenv("PYRAMID_MIN_IMPROVEMENT", "0.005"))
-        self._sl_atr_mult = float(os.getenv("SL_ATR_MULT", "1.0"))
-        self._tp_atr_mult = float(os.getenv("TP_ATR_MULT", "2.5"))
+        self._pyramid_min_improvement = self.risk_config.pyramid_min_improvement
+        self._sl_atr_mult = self.risk_config.sl_atr_mult
+        self._tp_atr_mult = self.risk_config.tp_atr_mult
         
         db = SessionLocal()
         try:
@@ -537,7 +563,7 @@ class TradingLoopService:
     async def _process_symbol(self, symbol: str, min_confidence: float, ai_threshold: float, max_positions: int):
         from backend.services.decision_engine import DecisionEngine
         from backend.database.connection import SessionLocal
-        from backend.database.models import Trade, Signal
+        from backend.database.models import Trade, TradingSignal
         from datetime import datetime, timezone
         from backend.services.unified_trading import UnifiedTrading, UnifiedOrder, OrderSide, OrderType
         import asyncio
@@ -592,10 +618,10 @@ class TradingLoopService:
                     _short_notional = sum(t.quantity * (t.entry_price or 0.0) for t in all_open if t.direction == "SELL")
                     
                     if decision.action == "BUY" and (_long_notional + _new_notional > self.risk_config.max_directional_exposure_usdt):
-                        self.logger.warning(f"  [ {symbol} ] BUY blocked: LONG exposure cap reached")
+                        logger.warning(f"  [ {symbol} ] BUY blocked: LONG exposure cap reached")
                         decision = None
                     elif decision.action == "SELL" and (_short_notional + _new_notional > self.risk_config.max_directional_exposure_usdt):
-                        self.logger.warning(f"  [ {symbol} ] SELL blocked: SHORT exposure cap reached")
+                        logger.warning(f"  [ {symbol} ] SELL blocked: SHORT exposure cap reached")
                         decision = None
 
             if decision:
@@ -603,7 +629,7 @@ class TradingLoopService:
                 ut = UnifiedTrading()
                 order_side = OrderSide.BUY if decision.action == "BUY" else OrderSide.SELL
                 
-                self.logger.info(f"  [ {symbol} ] Attempting {decision.action} order: qty={decision.quantity:.6f} @ {decision.entry_price} | SL={decision.stop_loss} TP={decision.take_profit}")
+                logger.info(f"  [ {symbol} ] Attempting {decision.action} order: qty={decision.quantity:.6f} @ {decision.entry_price} | SL={decision.stop_loss} TP={decision.take_profit}")
                 
                 order = UnifiedOrder(
                     symbol=symbol, side=order_side, quantity=decision.quantity, price=decision.entry_price,
@@ -615,7 +641,7 @@ class TradingLoopService:
                     if not existing:
                         self._open_count += 1
                     _trades = 1
-                    self.logger.info(f"  [ {symbol} ] SUCCESS: {res.order_id} filled @ {res.filled_price}")
+                    logger.info(f"  [ {symbol} ] SUCCESS: {res.order_id} filled @ {res.filled_price}")
                     
                     if decision.is_pyramid:
                         self._pyramid_layers.setdefault(symbol, []).append(float(res.filled_price or decision.entry_price))
@@ -631,7 +657,7 @@ class TradingLoopService:
                     db.add(trade)
                     db.commit()
                 else:
-                    self.logger.warning(f"  [ {symbol} ] FAILED: {res.message}")
+                    logger.warning(f"  [ {symbol} ] FAILED: {res.message}")
 
             # SL/TP Check
             self._check_sl_tp(db, symbol, bars)
@@ -640,7 +666,7 @@ class TradingLoopService:
             return {"signals": _signals, "trades": _trades}
 
         except Exception as e:
-            self.logger.error(f"Error processing {symbol}: {e}")
+            logger.error(f"Error processing {symbol}: {e}")
             db.rollback()
             return {"signals": 0, "trades": 0}
         finally:
