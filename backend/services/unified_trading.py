@@ -126,19 +126,7 @@ class TradingSession:
     is_connected: bool = False
 
 
-class BrokerProtocol(Protocol):
-    """Common interface that every live broker must implement.
-    Existing brokers (BinanceFuturesService, CTraderService) can be adapted."""
-
-    def place_order(self, symbol: str, direction: str, quantity: float = 0.0,
-                    price: float = 0.0, stop_loss: float = 0.0,
-                    take_profit: float = 0.0, action: str = "open",
-                    **kwargs) -> dict: ...
-
-    def get_balance(self) -> dict: ...
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
+from backend.brokers import IBroker# ═══════════════════════════════════════════════════════════════════════════════
 # Paper Trading Engine
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -257,7 +245,9 @@ class PaperTradingEngine:
                 if net_new > 0:
                     ref = order.price if order.price > 0 else order.stop_price
                     if ref <= 0 and order.order_type == OrderType.MARKET:
-                        ref = 1000.0  # dummy ref for margin calc; filled immediately anyway
+                        # Try to use last filled price as reference if available
+                        last_fills = [t.price for t in pf["trades"] if t.symbol == order.symbol]
+                        ref = last_fills[-1] if last_fills else 1000.0  # better than 1000.0 but still fallback
                     required = net_new * ref / meta["leverage"]
                     if required > pf["cash"]:
                         return UnifiedOrderResponse(False, oid,
@@ -546,12 +536,12 @@ class UnifiedTrading:
                     obj._sessions: Dict[str, TradingSession] = {}
                     obj._default_session_id: Optional[str] = None
                     obj._paper = PaperTradingEngine()
-                    obj._brokers: Dict[str, BrokerProtocol] = {}
+                    obj._brokers: Dict[str, IBroker] = {}
                     obj._session_lock = threading.Lock()
                     cls._instance = obj
         return cls._instance
 
-    def register_broker(self, name: str, broker: BrokerProtocol):
+    def register_broker(self, name: str, broker: IBroker):
         """Register a live broker adapter."""
         self._brokers[name] = broker
         logger.info(f"Registered broker: {name}")
@@ -644,6 +634,7 @@ class UnifiedTrading:
                 price=order.price,
                 stop_loss=order.stop_loss,
                 take_profit=order.take_profit,
+                reduce_only=order.reduce_only
             )
             ok = result.get("status") in ("simulated", "sent", "filled")
             return UnifiedOrderResponse(
@@ -708,6 +699,43 @@ class UnifiedTrading:
         sess = self.get_session(session_id)
         if sess and sess.paper_portfolio_id:
             return self._paper.get_orders(sess.paper_portfolio_id, status)
+        return []
+
+    def get_positions(self, session_id: Optional[str] = None) -> List[BrokerPosition]:
+        """Get open positions for the current session (paper or live)."""
+        with self._session_lock:
+            sid = session_id or self._default_session_id
+            session = self._sessions.get(sid)
+        if not session:
+            return []
+
+        if session.mode == "paper":
+            return self._paper.get_positions(session.paper_portfolio_id)
+
+        # Live mode
+        broker = self._brokers.get(session.broker)
+        if not broker:
+            return []
+
+        try:
+            if hasattr(broker, "get_positions"):
+                raw_pos = broker.get_positions()
+                # Map raw broker positions to Unified BrokerPosition
+                return [
+                    BrokerPosition(
+                        symbol=p.get("symbol", ""),
+                        side=p.get("side", "long").lower(),
+                        quantity=float(p.get("quantity", 0.0)),
+                        avg_price=float(p.get("entry_price", 0.0)),
+                        current_price=float(p.get("mark_price", 0.0)),
+                        unrealized_pnl=float(p.get("unrealized_pnl", 0.0)),
+                    )
+                    for p in raw_pos
+                    if abs(float(p.get("quantity", 0.0))) > 0
+                ]
+        except Exception as e:
+            logger.error(f"Failed to get live positions: {e}")
+        
         return []
 
 

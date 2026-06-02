@@ -359,16 +359,22 @@ export const OpinionLayerView: React.FC = () => {
     setLoading(true);
     setError('');
     try {
-      // Fetch bars from market data service
-      const bars = await apiService.get(`/api/market-data/bars?symbol=${symbol}&timeframe=1h&limit=100`);
-      const res = await apiService.post('/trading/opinion/analyze', {
+      // Fetch bars directly through frontend proxy (not via apiService which prepends /api/backend)
+      const barsRes = await fetch(`/api/market-data/bars?symbol=${symbol}&timeframe=1h&limit=100`);
+      if (!barsRes.ok) {
+        throw new Error(`Market data error: ${barsRes.status}`);
+      }
+      const barsData = await barsRes.json();
+      const bars = barsData.data || barsData;
+
+      const res = await apiService.analyzeOpinion(
         symbol,
-        bars: bars.data || bars,
-        include_kronos: true,
-        include_social: true,
-        include_alerts: true,
-        include_personas: true,
-      });
+        bars,
+        true,  // include_kronos
+        true,  // include_social
+        true,  // include_alerts
+        true,  // include_personas
+      );
       setResult(res);
     } catch (e: any) {
       setError(e.message || 'Analysis failed');

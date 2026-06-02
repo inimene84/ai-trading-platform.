@@ -19,7 +19,6 @@ export interface ActiveTrade {
 }
 
 interface ActiveTradeCardProps {
-  key?: string | number;
   trade: ActiveTrade;
   onClose: (tradeId: number | string) => void;
   onModify: (tradeId: number | string, sl: number | null, tp: number | null) => void;

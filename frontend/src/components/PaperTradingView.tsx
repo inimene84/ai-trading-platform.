@@ -102,12 +102,12 @@ export default function PaperTradingView() {
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <div className="bg-slate-800 rounded p-3 border border-slate-700">
           <div className="text-slate-400 text-xs">Cash</div>
-          <div className="text-white font-mono text-lg">${stats?.cash.toFixed(2) ?? '--'}</div>
+          <div className="text-white font-mono text-lg">${(stats?.cash || 0).toFixed(2)}</div>
         </div>
         <div className="bg-slate-800 rounded p-3 border border-slate-700">
           <div className="text-slate-400 text-xs">Total PnL</div>
           <div className={`font-mono text-lg ${(stats?.total_pnl ?? 0) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-            ${stats?.total_pnl.toFixed(2) ?? '--'}
+            ${(stats?.total_pnl || 0).toFixed(2)}
           </div>
         </div>
         <div className="bg-slate-800 rounded p-3 border border-slate-700">

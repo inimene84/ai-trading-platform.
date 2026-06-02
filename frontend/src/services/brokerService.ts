@@ -24,10 +24,9 @@ class BrokerService {
   }
 
   async executeBinance(params: OrderParams): Promise<ExecutionResult> {
-    // Forward to backend live broker
+    // Forward to backend live broker endpoint
     try {
-      const res = await apiService.paperPlaceOrder(params.symbol, params.side, params.quantity, params.price || 0);
-      // Note: if you want REAL binance, use a live endpoint here
+      const res = await apiService.placeOrder(params.symbol, params.side, params.quantity, params.price || 0);
       const result: ExecutionResult = {
         success: true,
         orderId: res.order_id || `BN-${Math.random().toString(36).substr(2, 9).toUpperCase()}`,
@@ -48,7 +47,7 @@ class BrokerService {
 
   async executeCTrader(params: OrderParams): Promise<ExecutionResult> {
     try {
-      const res = await apiService.paperPlaceOrder(params.symbol, params.side, params.quantity, params.price || 0);
+      const res = await apiService.placeOrder(params.symbol, params.side, params.quantity, params.price || 0);
       const result: ExecutionResult = {
         success: true,
         orderId: res.order_id || `CT-${Math.random().toString(36).substr(2, 9).toUpperCase()}`,

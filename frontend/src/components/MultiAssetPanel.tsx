@@ -51,7 +51,7 @@ const FOREX_PAIRS = [
 ];
 
 const ALL_AVAILABLE = [...CRYPTO_PAIRS, ...FOREX_PAIRS];
-const DEFAULT_WATCHLIST = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'EURUSD=X', 'GBPUSD=X'];
+const DEFAULT_WATCHLIST = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT', 'ADAUSDT', 'DOTUSDT'];
 const STORAGE_KEY = 'multiAssetWatchlist';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────

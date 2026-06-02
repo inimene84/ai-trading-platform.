@@ -1,0 +1,93 @@
+model_list:
+  # ── OpenRouter Free Router (auto-picks working free models) ──
+  - model_name: openrouter/free
+    litellm_params:
+      model: openrouter/free
+      api_key: os.environ/OPENROUTER_API_KEY
+      temperature: 0.4
+      max_tokens: 256
+      rpm: 30
+
+  # ── GEMINI (has credits as backup) ──
+  - model_name: gemini-2.5-flash
+    litellm_params:
+      model: gemini/gemini-2.5-flash
+      api_key: os.environ/GOOGLE_API_KEY
+      temperature: 0.4
+      max_tokens: 256
+      rpm: 30
+
+  - model_name: gemini-1.5-flash
+    litellm_params:
+      model: gemini/gemini-1.5-flash
+      api_key: os.environ/GOOGLE_API_KEY
+      temperature: 0.4
+      max_tokens: 256
+      rpm: 20
+
+  # ── FREE MODELS via OpenRouter ──
+  - model_name: gpt-4o
+    litellm_params:
+      model: openrouter/openai/gpt-4o
+      api_key: os.environ/OPENROUTER_API_KEY
+      temperature: 0.4
+      max_tokens: 256
+      rpm: 30
+
+  - model_name: kimi-k2-instruct
+    litellm_params:
+      model: openrouter/moonshotai/kimi-k2
+      api_key: os.environ/OPENROUTER_API_KEY
+      temperature: 0.4
+      max_tokens: 256
+      rpm: 20
+
+  - model_name: magistral-small
+    litellm_params:
+      model: openrouter/mistralai/magistral-small-2506
+      api_key: os.environ/OPENROUTER_API_KEY
+      temperature: 0.4
+      max_tokens: 256
+      rpm: 20
+
+  # ── Free tier fallback models ──
+  - model_name: llama-3-8b
+    litellm_params:
+      model: openrouter/meta-llama/llama-3-8b-instruct
+      api_key: os.environ/OPENROUTER_API_KEY
+      temperature: 0.4
+      max_tokens: 256
+      rpm: 20
+
+  - model_name: gemma-2b
+    litellm_params:
+      model: openrouter/google/gemma-2b-it
+      api_key: os.environ/OPENROUTER_API_KEY
+      temperature: 0.4
+      max_tokens: 256
+      rpm: 20
+
+general_settings:
+  master_key: sk-1234
+  rate_limit_alerts: false
+  log_level: INFO
+
+router_settings:
+  # Fallback chain: start with openrouter/free, fallback to gemini
+  fallbacks:
+    - gpt-4o:
+        - openrouter/free
+        - gemini-2.5-flash
+        - kimi-k2-instruct
+        - magistral-small
+        - llama-3-8b
+    - openrouter/free:
+        - gemini-2.5-flash
+        - gpt-4o
+    - gemini-2.5-flash:
+        - openrouter/free
+        - gpt-4o
+    - kimi-k2-instruct:
+        - openrouter/free
+        - gemini-2.5-flash
+        - gpt-4o

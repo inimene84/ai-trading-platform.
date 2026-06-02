@@ -22,9 +22,15 @@ logger = logging.getLogger(__name__)
 
 # LLM config (reuses existing backend LLM infra)
 _DEFAULT_PROVIDER = os.getenv("PERSONA_LLM_PROVIDER", "groq")
-_DEFAULT_MODEL = os.getenv("PERSONA_LLM_MODEL", "deepseek-r1-distill-llama-70b")
-_DEFAULT_API_KEY = os.getenv("GROQ_API_KEY", "")
-_DEFAULT_BASE_URL = "https://api.groq.com/openai/v1"
+_DEFAULT_MODEL = os.getenv("PERSONA_LLM_MODEL", "gemini/gemini-2.5-flash-lite")
+# API key: prefer LITELLM_API_KEY, then PERSONA_LLM_API_KEY, then GROQ_API_KEY
+_DEFAULT_API_KEY = (
+    os.getenv("LITELLM_API_KEY")
+    or os.getenv("PERSONA_LLM_API_KEY")
+    or os.getenv("GROQ_API_KEY", "")
+)
+# Allow overriding base URL via environment (e.g., for LiteLLM proxy)
+_DEFAULT_BASE_URL = os.getenv("PERSONA_LLM_BASE_URL", "https://api.groq.com/openai/v1")
 
 
 @dataclass
@@ -128,18 +134,21 @@ _PERSONA_PROMPTS = {
 }
 
 _PERSONA_WEIGHTS = {
-    "warren_buffett": 0.08,
-    "michael_burry": 0.10,
-    "stanley_druckenmiller": 0.10,
-    "cathie_wood": 0.08,
-    "peter_lynch": 0.07,
-    "charlie_munger": 0.08,
-    "nassim_taleb": 0.12,
-    "bill_ackman": 0.07,
-    "phil_fisher": 0.07,
-    "aswath_damodaran": 0.08,
-    "mohnish_pabrai": 0.08,
-    "rakesh_jhunjhunwala": 0.07,
+    # --- Crypto-open (boosted) ---
+    "cathie_wood": 0.14,           # ARK crypto bull, most relevant
+    "stanley_druckenmiller": 0.12, # macro trader, respects crypto momentum
+    "bill_ackman": 0.10,           # activist, adapts to market reality
+    "rakesh_jhunjhunwala": 0.10,   # growth-oriented, bullish on momentum
+    "michael_burry": 0.10,         # contrarian but data-driven
+    # --- Neutral / framework personas ---
+    "peter_lynch": 0.09,           # growth at reasonable price
+    "aswath_damodaran": 0.08,      # valuation discipline
+    "phil_fisher": 0.07,           # quality growth focus
+    "mohnish_pabrai": 0.06,        # Buffett-like but less crypto-hostile
+    # --- Crypto perma-bears (reduced) ---
+    "warren_buffett": 0.06,        # perma-bear on crypto, reduced
+    "charlie_munger": 0.05,        # perma-bear on crypto, minimal weight
+    "nassim_taleb": 0.03,          # perma-bear + extreme tail-risk bias, minimal
 }
 
 
@@ -168,14 +177,34 @@ async def _call_llm(system: str, user: str) -> dict:
                     "model": _DEFAULT_MODEL,
                     "messages": messages,
                     "temperature": 0.4,
-                    "max_tokens": 512,
+                    "max_tokens": 1024,  # gemini-2.5-flash-lite needs >= 1024
                     "response_format": {"type": "json_object"},
                 },
             )
             resp.raise_for_status()
             data = resp.json()
             content = data["choices"][0]["message"]["content"]
-            parsed = json.loads(content)
+            
+            # Robust JSON extraction
+            import re
+            
+            # Remove <think>...</think> tags if present
+            content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
+            
+            # Extract anything between the first { and last }
+            json_match = re.search(r"\{.*\}", content, re.DOTALL)
+            if json_match:
+                content = json_match.group(0)
+            else:
+                # Fallback if no braces found (should not happen if LLM followed instructions)
+                content = "{}"
+
+            try:
+                parsed = json.loads(content)
+            except json.JSONDecodeError:
+                logger.warning(f"Persona JSON parse failed. Raw content: {content}")
+                parsed = {}
+
             return {
                 "signal": parsed.get("signal", "neutral").lower(),
                 "confidence": float(parsed.get("confidence", 0)) / 100.0,
@@ -246,6 +275,9 @@ def _build_crypto_context(symbol: str, bars: list, metrics: dict) -> str:
         sma_50 = sum([b["close"] for b in bars[-50:]]) / 50
         lines.append(f"Price vs SMA50: {((price - sma_50) / sma_50 * 100):+.2f}%")
 
+    trade_mem = metrics.get("trade_memory", {})
+    if trade_mem.get("count", 0) > 0:
+        lines.append(f"Trade Memory: {trade_mem.get('summary', '')}")
     return "\n".join(lines)
 
 

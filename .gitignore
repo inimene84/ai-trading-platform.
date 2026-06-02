@@ -40,3 +40,7 @@ htmlcov/
 # ── OS ───────────────────────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
+# VPS-specific
+*.log
+.build.log
+hedge_fund.db

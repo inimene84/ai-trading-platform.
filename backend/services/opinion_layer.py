@@ -28,6 +28,32 @@ from backend.services.persona_adapter import run_all_personas, get_persona_weigh
 
 logger = logging.getLogger(__name__)
 
+from backend.database.connection import SessionLocal, engine
+from backend.database.models import Trade, TradingSignal
+import sqlalchemy as sa
+
+def _get_trade_memory(symbol: str, limit: int = 5) -> dict:
+    try:
+        with SessionLocal() as db:
+            trades = db.query(Trade).filter(
+                sa.and_(Trade.symbol == symbol, Trade.status == "closed")
+            ).order_by(Trade.closed_at.desc()).limit(limit).all()
+            if not trades:
+                return {"count": 0, "summary": "No recent closed trades"}
+            total_pnl = sum((t.pnl or 0) for t in trades)
+            wins = sum(1 for t in trades if (t.pnl or 0) > 0)
+            avg_pnl = total_pnl / len(trades)
+            summary = (
+                f"Last {len(trades)} trades: {wins}W/{len(trades)-wins}L, "
+                f"Avg PnL: {avg_pnl:+.4f}, Total: {total_pnl:+.4f}"
+            )
+            return {"count": len(trades), "wins": wins, "losses": len(trades)-wins,
+                    "avg_pnl": avg_pnl, "total_pnl": total_pnl, "summary": summary}
+    except Exception as e:
+        logging.getLogger(__name__).warning(f"Trade memory query failed for {symbol}: {e}")
+        return {"count": 0, "summary": f"Error: {e}"}
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Types
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -190,10 +216,16 @@ def _run_social_opinion(symbol: str) -> AgentOpinion:
         confidence = sent.get("confidence", 0.0)
         sources = sent.get("sources", {})
 
+        def _fmt_src(k, v):
+            try:
+                return f"{k}({float(v):+.2f})"
+            except (TypeError, ValueError):
+                return f"{k}({v})"
+
         reasoning = (
             f"Social score {sent.get('sentiment_score', 0):+.3f} "
             f"from {sent.get('article_count', 0)} posts. "
-            f"Sources: {', '.join(f'{k}({v:+.2f})' for k, v in list(sources.items())[:3])}"
+            f"Sources: {', '.join(_fmt_src(k, v) for k, v in list(sources.items())[:3])}"
         )
 
         return AgentOpinion(
@@ -270,11 +302,12 @@ def _run_alert_opinion(symbol: str) -> AgentOpinion:
 
 # Agent weights in the final vote (includes persona agents)
 _AGENT_WEIGHTS = {
-    "technical_analyst": 0.20,
-    "kronos_foundation": 0.15,
-    "social_sentiment": 0.12,
-    "market_alerts": 0.10,
+    "technical_analyst": 0.25,    # Only real signal right now — boost it
+    "kronos_foundation": 0.20,    # ML price model — high value when active
+    "social_sentiment": 0.20,     # BTC proxy covers all coins via fallback — boosted
+    "market_alerts": 0.05,        # Bonus weight when whale/pump data available
     # Persona agents (from persona_adapter) - weights imported at runtime
+    # NOTE: persona total ≈ 1.0 - above = 0.30 → personas share remaining 0.30
 }
 
 _SIGNAL_MAP = {
@@ -303,32 +336,44 @@ def _aggregate_opinions(
     Adapted from portfolio_management_agent logic.
     """
     weighted_sum = 0.0
-    total_weight = 0.0
+    total_possible_weight = 0.0
+    conviction_sum = 0.0   # sum of weighted confidence magnitudes (direction-agnostic)
     opinion_lines = []
 
     for op in opinions:
         weight = _get_combined_weights().get(op.agent, 0.05)
         numeric = _SIGNAL_MAP.get(op.signal, 0)
+        
+        # Directional score: bullish pushes positive, bearish negative
         weighted_sum += numeric * weight * op.confidence
-        total_weight += weight * op.confidence
+        # Conviction: how sure any agent is (regardless of direction)
+        conviction_sum += weight * op.confidence
+        total_possible_weight += weight
+        
         opinion_lines.append(
             f"  • {op.agent}: {op.signal.upper()} (conf={op.confidence:.2f}, weight={weight})"
         )
 
-    if total_weight > 0:
-        final_score = weighted_sum / total_weight
+    if total_possible_weight > 0:
+        final_score = weighted_sum / total_possible_weight
+        # Average conviction (0-1): how strongly agents feel overall
+        avg_conviction = conviction_sum / total_possible_weight
     else:
         final_score = 0.0
+        avg_conviction = 0.0
 
     # Map score to direction
-    if final_score > 0.25:
+    if final_score > 0.15:
         direction = "BUY"
-    elif final_score < -0.25:
+    elif final_score < -0.15:
         direction = "SELL"
     else:
         direction = "HOLD"
 
-    confidence = abs(final_score)
+    # Confidence = directional clarity blended with average conviction
+    # abs(final_score) measures directional consensus; avg_conviction measures overall engagement
+    # Weight: 60% directional + 40% conviction — avoids zero when agents cancel
+    confidence = min(0.6 * abs(final_score) + 0.4 * avg_conviction, 1.0)
 
     # Build reasoning
     reasoning = (
@@ -456,6 +501,19 @@ async def analyze_symbol(
             logger.warning(f"Market alerts failed for {symbol}: {e}")
 
     # Persona agents (async LLM calls, concurrent)
+    # Trade memory injection
+    trade_mem = _get_trade_memory(symbol)
+    if not metrics:
+        metrics = {}
+    metrics["trade_memory"] = trade_mem
+    if trade_mem.get("count", 0) > 0:
+        opinions.append(AgentOpinion(
+            agent="trade_memory",
+            signal="neutral",
+            confidence=min(0.3, trade_mem.get("count", 0) * 0.06),
+            reasoning=trade_mem.get("summary", ""),
+            metadata=trade_mem,
+        ))
     if include_personas:
         try:
             persona_results = await run_all_personas(symbol, bars, metrics)
@@ -474,6 +532,29 @@ async def analyze_symbol(
     opinion = _aggregate_opinions(symbol, opinions, kronos_result, social_result, alerts)
 
     elapsed = (datetime.now(timezone.utc) - started).total_seconds()
+
+    # ── DEBUG: per-agent vote table emitted every cycle ──────────────────────
+    sep = "─" * 55
+    vote_lines = [f"┌{sep}┐", f"│  OPINION LAYER DEBUG — {symbol:<28}│",
+                  f"│  Result: {opinion.direction:<6} conf={opinion.confidence:.2f}  score={opinion.confidence:.2f}  ({elapsed:.1f}s){'':>5}│",
+                  f"├{sep}┤"]
+    weights = _get_combined_weights()
+    for op in opinion.agent_opinions:
+        w = weights.get(op.agent, 0.05)
+        bar = "▲" if op.signal == "bullish" else ("▼" if op.signal == "bearish" else "━")
+        vote_lines.append(
+            f"│  {bar} {op.agent:<24} {op.signal.upper():<8} conf={op.confidence:.2f}  w={w:.2f}  │"
+        )
+    vote_lines.append(f"├{sep}┤")
+    vote_lines.append(f"│  Kronos: {kronos_result.get('signal','N/A'):<8} "
+                       f"{kronos_result.get('predicted_change_pct',0):+.2f}%   "
+                       f"Social: {social_result.get('direction','N/A'):<8} "
+                       f"score={social_result.get('sentiment_score',0):+.3f}  │")
+    vote_lines.append(f"│  Alerts active: {len(alerts):<4}  Trade memory: {opinion.agent_opinions and any(o.agent=='trade_memory' for o in opinion.agent_opinions)}{'':>14}│")
+    vote_lines.append(f"└{sep}┘")
+    logger.info("\n".join(vote_lines))
+    # ─────────────────────────────────────────────────────────────────────────
+
     logger.info(
         f"Opinion Layer for {symbol}: {opinion.direction} "
         f"conf={opinion.confidence:.2f} ({elapsed:.1f}s, {len(opinions)} agents)"
