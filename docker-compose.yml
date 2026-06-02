@@ -23,19 +23,17 @@ services:
       GEMINI_API_KEY: ${GOOGLE_API_KEY}
       XAI_API_KEY: ${XAI_API_KEY}
       OPENAI_API_KEY: ${OPENAI_API_KEY}
-      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
       PERSONA_LLM_PROVIDER: litellm
-      PERSONA_LLM_MODEL: gemini-2.5-flash
-      GROQ_API_KEY: sk-1234 # LiteLLM master key
+      PERSONA_LLM_MODEL: openrouter/free
       PERSONA_LLM_BASE_URL: http://litellm:4000/v1
-      REDIS_URL: redis://redis:6379/0
-      ENABLE_PERSONAS: true
-      EMERGENCY_DRAWDOWN_PCT: -2.0
-      MAX_POSITION_HOLD_HOURS: "8.0"
-      EXIT_OPINION_THRESHOLD: 0.35
-      PYRAMID_MAX_LAYERS: 10
-      INFLUXDB_SENTIMENT_BUCKET: news-sentiment
-    command: ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    command:
+      - uvicorn
+      - backend.main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
     healthcheck:
       test:
         - CMD
@@ -60,32 +58,23 @@ services:
         max-size: 10m
         max-file: 5
     restart: unless-stopped
+    ports:
+      - 8001:8000
     volumes:
       - app-data:/app/data
       - app-logs:/app/logs
-      - ./backend/services/position_manager.py:/app/backend/services/position_manager.py
-      - ./backend/services/trading_loop.py:/app/backend/services/trading_loop.py
-      - ./backend/services/opinion_layer.py:/app/backend/services/opinion_layer.py
-      - ./backend/services/influxdb_sentiment_reader.py:/app/backend/services/influxdb_sentiment_reader.py
-      - ./backend/services/persona_adapter.py:/app/backend/services/persona_adapter.py
-      - ./backend/services/binance_futures_service.py:/app/backend/services/binance_futures_service.py
     networks:
       - trading-net
-    ports:
-      - "8001:8000"
   litellm:
     image: ghcr.io/berriai/litellm:main-latest
     container_name: ai-trading-litellm
-    env_file:
-      - .env
     environment:
       GEMINI_API_KEY: ${GOOGLE_API_KEY}
       XAI_API_KEY: ${XAI_API_KEY}
       OPENAI_API_KEY: ${OPENAI_API_KEY}
-      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
       LITELLM_MODEL_FALLBACK: true
-      LITELLM_MASTER_KEY: sk-1234
-      DATABASE_URL: ""
+      LITELLM_MASTER_KEY: ${LITELLM_API_KEY}
     command: --config /tmp/litellm-config.yaml --port 4000
     logging:
       driver: json-file
@@ -108,6 +97,35 @@ services:
       - redis-data:/data
     networks:
       - trading-net
+  qdrant:
+    image: qdrant/qdrant:v1.14.1
+    container_name: vps-qdrant
+    restart: unless-stopped
+    ports:
+      - 6333:6333 # For local testing, backend uses Docker network
+    volumes:
+      - ./qdrant-storage:/qdrant/storage
+    networks:
+      - trading-net
+  influxdb:
+    image: influxdb:2.7
+    container_name: vps-influxdb
+    environment:
+      - DOCKER_INFLUXDB_INIT_MODE=setup
+      - DOCKER_INFLUXDB_INIT_USERNAME=admin
+      - DOCKER_INFLUXDB_INIT_PASSWORD=hedgefund123
+      - DOCKER_INFLUXDB_INIT_ORG=hedge-fund
+      - DOCKER_INFLUXDB_INIT_BUCKET=news-sentiment
+      - DOCKER_INFLUXDB_INIT_RETENTION=7d
+      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=${INFLUXDB_TOKEN}
+    restart: unless-stopped
+    ports:
+      - 8086:8086
+    volumes:
+      - influxdb-storage:/var/lib/influxdb2
+    networks:
+      - trading-net
+      - n8n_default
   nginx:
     image: nginx:alpine
     container_name: ai-trading-nginx
@@ -122,8 +140,12 @@ services:
     networks:
       - trading-net
 networks:
-  trading-net: 
+  trading-net:
+    external: true
+  n8n_default:
+    external: true
 volumes:
   app-data: 
   app-logs: 
-  redis-data:
+  redis-data: 
+  influxdb-storage:

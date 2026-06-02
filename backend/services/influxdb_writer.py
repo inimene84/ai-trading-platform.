@@ -36,10 +36,10 @@ class InfluxDBWriter:
     BUCKET_NEWS    = "news-sentiment"
 
     def __init__(self):
-        self.url   = os.getenv("INFLUXDB_URL", "http://72.60.18.113:8086").rstrip("/")
+        self.url   = os.getenv("INFLUXDB_URL", "").rstrip("/")
         self.token = os.getenv("INFLUXDB_TOKEN", "")
         self.org   = os.getenv("INFLUXDB_ORG", "hedge-fund")
-        self._enabled = bool(self.token)
+        self._enabled = bool(self.token and self.url)
         if not self._enabled:
             logger.warning("InfluxDB token not set – metrics disabled")
 
