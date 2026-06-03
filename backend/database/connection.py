@@ -21,7 +21,13 @@ else:
     # SQLite fallback
     DATABASE_PATH = BACKEND_DIR / "hedge_fund.db"
     DATABASE_URL = f"sqlite:///{DATABASE_PATH}"
-    engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+    engine = create_engine(
+        DATABASE_URL, 
+        connect_args={"check_same_thread": False},
+        pool_size=50,
+        max_overflow=50,
+        pool_timeout=60
+    )
 
 # Create SessionLocal class
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
