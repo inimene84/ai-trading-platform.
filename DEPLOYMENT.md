@@ -72,8 +72,28 @@ cd /opt
 
 # 5. Verify
  docker compose ps
- curl http://localhost/api/backend/health
+ curl http://localhost:8081/health
+ curl http://localhost:8081/api/backend/trading/status
 ```
+
+## Hostinger VPS quick fix (on the server)
+
+```bash
+cd /root/ai-trading-platform-v3   # or your clone path
+git pull origin main
+chmod +x scripts/hostinger_vps_apply.sh scripts/vps_realtime_watchdog.sh
+PROJECT_DIR=$PWD ./scripts/hostinger_vps_apply.sh
+```
+
+**Nginx:** Production must rewrite `/api/backend/*` to the FastAPI paths (see `nginx.conf`). Without this, the React dashboard cannot reach `/trading/*` endpoints.
+
+**Real-time watchdog:** Add to crontab to auto-restart unhealthy containers:
+
+```bash
+*/3 * * * * cd /root/ai-trading-platform-v3 && ./scripts/vps_realtime_watchdog.sh >> /var/log/quantumtrade-watchdog.log 2>&1
+```
+
+**Remote from Cloud Agent:** Configure secrets `SSH_HOST`, `SSH_USER`, `SSH_PRIVATE_KEY`, then run `./scripts/ssh_vps_remote.sh`.
 
 ## Nightly MySQL Backup Job
 
