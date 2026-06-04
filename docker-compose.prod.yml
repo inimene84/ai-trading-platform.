@@ -26,6 +26,8 @@ services:
       GROQ_API_KEY: sk-1234 # LiteLLM master key
       PERSONA_LLM_BASE_URL: http://litellm:4000/v1
       REDIS_URL: redis://redis:6379/0
+      # Safety: disable risk guard during testing (re-enable for live trading by setting DISABLE_RISK_GUARD=false in .env)
+      DISABLE_RISK_GUARD: ${DISABLE_RISK_GUARD:-true}
     command: ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000"]
     healthcheck:
       test:
@@ -59,7 +61,7 @@ services:
     ports:
       - "8001:8000"
   litellm:
-    image: ghcr.io/berriai/litellm:main-v1.82.3-stable.patch.2
+    image: ghcr.io/berriai/litellm:main-latest
     container_name: ai-trading-litellm
     environment:
       GEMINI_API_KEY: ${GOOGLE_API_KEY}
@@ -67,6 +69,7 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       KIE_API_KEY: ${KIE_API_KEY:-}
+      KIE_BEARER_TOKEN: "Bearer ${KIE_API_KEY:-}"
       LITELLM_MODEL_FALLBACK: true
       LITELLM_MASTER_KEY: ${LITELLM_API_KEY:-sk-1234}
     command: --config /tmp/litellm-config.yaml --port 4000
