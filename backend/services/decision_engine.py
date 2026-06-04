@@ -59,8 +59,13 @@ class DecisionEngine:
             if self.config.pyramid_mode:
                 if len(pyramid_layers) < self.config.pyramid_max_layers:
                     # Strategy signal for pyramid
-                    regime = self.regime_detector.detect(bars)
-                    signal = self.strategy.generate_signal(symbol, bars, regime=regime)
+                    regime_result = self.regime_detector.detect(bars)
+                    signal = self.strategy.generate_signal(
+                        symbol,
+                        bars,
+                        regime=regime_result.regime,
+                        regime_weights=regime_result.weights()
+                    )
                     if signal and signal.signal == existing_position.direction and signal.confidence >= self.config.min_signal_strength:
                         # Pyramid conditions met
                         return self._create_entry_decision(symbol, bars, signal, existing_position.direction, is_pyramid=True)
@@ -84,8 +89,13 @@ class DecisionEngine:
             kronos_result = {}
 
         # 4. Strategy execution — detect regime and generate signal
-        regime = self.regime_detector.detect(bars)
-        signal = self.strategy.generate_signal(symbol, bars, regime=regime)
+        regime_result = self.regime_detector.detect(bars)
+        signal = self.strategy.generate_signal(
+            symbol,
+            bars,
+            regime=regime_result.regime,
+            regime_weights=regime_result.weights()
+        )
         if not signal or signal.signal not in ["BUY", "SELL"] or signal.confidence < self.config.min_signal_strength:
             return None
 
