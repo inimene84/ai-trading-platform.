@@ -59,9 +59,7 @@ class DecisionEngine:
             if self.config.pyramid_mode:
                 if len(pyramid_layers) < self.config.pyramid_max_layers:
                     # Strategy signal for pyramid
-                    import pandas as pd
-                    df = pd.DataFrame(bars)
-                    regime = self.regime_detector.detect(df)
+                    regime = self.regime_detector.detect(bars)
                     signal = self.strategy.generate_signal(symbol, bars, regime=regime)
                     if signal and signal.signal == existing_position.direction and signal.confidence >= self.config.min_signal_strength:
                         # Pyramid conditions met
@@ -86,9 +84,7 @@ class DecisionEngine:
             kronos_result = {}
 
         # 4. Strategy execution — detect regime and generate signal
-        import pandas as pd
-        df = pd.DataFrame(bars)
-        regime = self.regime_detector.detect(df)
+        regime = self.regime_detector.detect(bars)
         signal = self.strategy.generate_signal(symbol, bars, regime=regime)
         if not signal or signal.signal not in ["BUY", "SELL"] or signal.confidence < self.config.min_signal_strength:
             return None
@@ -190,6 +186,6 @@ class DecisionEngine:
             stop_loss=sl,
             take_profit=tp,
             confidence=signal.confidence,
-            reasoning=f"Regime: {self.regime_detector.detect(pd.DataFrame(bars)) if bars else 'N/A'}",
+            reasoning=f"Regime: {self.regime_detector.detect(bars).regime if bars else 'N/A'}",
             is_pyramid=is_pyramid
         )
