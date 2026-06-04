@@ -22,6 +22,11 @@ def enforce_risk_limits(
     """Enforces active trading safety guardrails.
     Raises RiskBreach if any boundaries (drawdown, daily loss, max open positions) are violated.
     """
+    import os
+    if os.getenv("DISABLE_RISK_GUARD", "false").lower() == "true":
+        logger.warning("Risk guard is disabled via DISABLE_RISK_GUARD environment variable.")
+        return
+
     # 1. Max open positions
     if len(open_trades) > cfg.max_open_positions:
         raise RiskBreach(f"Max open positions exceeded: {len(open_trades)} > {cfg.max_open_positions}")

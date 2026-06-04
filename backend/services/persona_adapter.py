@@ -20,6 +20,7 @@ from typing import Dict, List, Optional
 
 import httpx
 import yaml
+import time
 
 from backend.llm.router import pick_model, get_api_key
 
@@ -118,6 +119,10 @@ class PersonaRegistry:
 
 # Module-level singleton
 _registry = PersonaRegistry()
+
+# In-memory cache for persona opinions to reduce token costs (runs once per hour)
+# Key: (symbol, persona_id), Value: (timestamp, PersonaOpinion)
+_PERSONA_OPINION_CACHE: Dict[tuple[str, str], tuple[float, "PersonaOpinion"]] = {}
 
 
 @dataclass
@@ -281,6 +286,14 @@ async def run_persona(
     Returns:
         PersonaOpinion with signal, confidence, reasoning
     """
+    cache_key = (symbol, persona)
+    now = time.time()
+    if cache_key in _PERSONA_OPINION_CACHE:
+        cached_time, cached_op = _PERSONA_OPINION_CACHE[cache_key]
+        if now - cached_time < 3600:
+            logger.info(f"Using cached opinion for persona {persona} on {symbol} (age={int(now - cached_time)}s)")
+            return cached_op
+
     cfg = _registry.get(persona)
     if not cfg:
         return PersonaOpinion(
@@ -309,12 +322,14 @@ async def run_persona(
     if sig not in ("bullish", "bearish", "neutral"):
         sig = "neutral"
 
-    return PersonaOpinion(
+    opinion = PersonaOpinion(
         persona=persona,
         signal=sig,
         confidence=min(max(result.get("confidence", 0.0), 0.0), 1.0),
         reasoning=result.get("reasoning", ""),
     )
+    _PERSONA_OPINION_CACHE[cache_key] = (now, opinion)
+    return opinion
 
 
 async def run_all_personas(
