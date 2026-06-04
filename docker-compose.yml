@@ -94,7 +94,6 @@ services:
       - ./litellm-config.yaml:/tmp/litellm-config.yaml:ro
     networks:
       - trading-net
-      - n8n_default
   redis:
     image: redis:7-alpine
     container_name: ai-trading-redis
