@@ -15,7 +15,7 @@ from backend.services.trading_loop import trading_loop
 from backend.services.ai_analysis import ai_analysis_service
 
 class StartLoopRequest(BaseModel):
-    interval_minutes: int = 5
+    interval_minutes: int = 15
     symbols: Optional[List[str]] = None
     strategy: str = "combined"
 
