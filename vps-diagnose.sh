@@ -41,7 +41,10 @@ docker compose up -d --build backend
 echo ""
 echo "=== 5. WAIT FOR BACKEND ==="
 sleep 10
-curl -s http://localhost:8001/health | jq '. 2>/dev/null || echo "Backend check"
+curl -s http://localhost:8001/health | jq . 2>/dev/null || echo "Backend check failed"
+echo ""
+curl -s -o /dev/null -w "nginx /api/backend/trading/status: %{http_code}\n" \
+  http://localhost:8081/api/backend/trading/status 2>/dev/null || true
 
 echo ""
 echo "Done!"
