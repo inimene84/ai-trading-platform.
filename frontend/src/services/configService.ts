@@ -16,15 +16,6 @@ export const configService = {
       if (typeof process !== 'undefined' && process.env) {
         envValue = (process.env as any)[key];
       }
-      
-      // Fallback for Vite text replacement (specifically for GEMINI_API_KEY)
-      if (!envValue && key === 'GEMINI_API_KEY') {
-        // @ts-ignore
-        if (typeof process !== 'undefined' && process.env && process.env.GEMINI_API_KEY) {
-           // @ts-ignore
-           envValue = process.env.GEMINI_API_KEY;
-        }
-      }
     } catch (e) {
       // Ignored: process is not defined
     }
@@ -84,6 +75,7 @@ export const configService = {
   getKeys() {
     return [
       'GEMINI_API_KEY',
+      'BACKEND_API_TOKEN',
       'XAI_API_KEY',
       'OPENAI_API_KEY',
       'ANTHROPIC_API_KEY',

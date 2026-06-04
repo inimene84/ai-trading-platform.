@@ -219,6 +219,14 @@ export const SettingsView = () => {
           placeholder="http://localhost:8000"
           description="FastAPI backend URL. Leave blank to use the default proxy (/api/backend)."
         />
+        <SettingField
+          label="Backend Admin Token"
+          secretKey="BACKEND_API_TOKEN"
+          value={settings.BACKEND_API_TOKEN || ''}
+          error={errors.BACKEND_API_TOKEN}
+          onChange={(v) => updateSetting('BACKEND_API_TOKEN', v)}
+          description="Sent as a Bearer token for protected trading, storage, and API-key operations."
+        />
       </SettingsSection>
 
       <SettingsSection title="AI Brains (LLM Engines)" icon={Cpu}>
