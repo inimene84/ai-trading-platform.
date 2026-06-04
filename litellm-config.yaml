@@ -25,12 +25,20 @@ model_list:
       max_tokens: 256
       rpm: 20
 
-  # ── Kie.ai (Gemini 3 Flash proxy) ──
+  # ── Kie.ai (Claude Sonnet 4-6 via local kieai-proxy container) ──
   - model_name: gemini-3-flash
     litellm_params:
-      model: openai/gemini-3-flash
+      model: openai/claude-sonnet-4-6
       api_key: os.environ/KIE_API_KEY
-      api_base: https://api.kie.ai/openai/v1
+      api_base: http://kieai-proxy:11434/v1
+      temperature: 0.4
+      max_tokens: 1024
+
+  - model_name: claude-sonnet
+    litellm_params:
+      model: openai/claude-sonnet-4-6
+      api_key: os.environ/KIE_API_KEY
+      api_base: http://kieai-proxy:11434/v1
       temperature: 0.4
       max_tokens: 1024
 
@@ -97,6 +105,10 @@ router_settings:
         - openrouter/free
         - gpt-4o
     - gemini-3-flash:
+        - claude-sonnet
+        - gemini-2.5-flash
+        - openrouter/free
+    - claude-sonnet:
         - gemini-2.5-flash
         - openrouter/free
     - kimi-k2-instruct:
