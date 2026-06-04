@@ -15,6 +15,8 @@ model_list:
       api_key: os.environ/KIE_API_KEY
       api_base: https://api.kie.ai/claude
       custom_llm_provider: anthropic
+      headers:
+        Authorization: os.environ/KIE_BEARER_TOKEN
       temperature: 0.3
       max_tokens: 512
 
@@ -24,6 +26,8 @@ model_list:
       api_key: os.environ/KIE_API_KEY
       api_base: https://api.kie.ai/claude
       custom_llm_provider: anthropic
+      headers:
+        Authorization: os.environ/KIE_BEARER_TOKEN
       temperature: 0.3
       max_tokens: 512
 
