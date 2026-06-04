@@ -168,41 +168,59 @@ class QdrantNewsClient:
         limit: int = 10,
         query_embedding: Optional[List[float]] = None,
     ) -> List[Dict[str, Any]]:
-        """Semantic search for news articles. Supply query_embedding or leave to embed query."""
+        """Semantic search for news articles. Supply query_embedding for vector search,
+        or omit for a payload text scroll (non-semantic fallback)."""
         if not self._client:
             return []
 
         try:
-            # For now, use simple keyword search if no embedding provided
-            # In production, call embedding model here
-            results = await self._client.search(
-                collection_name=self.collection_name,
-                query_filter=Filter(
-                    must=[
-                        FieldCondition(
-                            key="content",
-                            match=MatchValue(value=query.lower()),
-                        )
-                    ]
-                ) if query_embedding is None else None,
-                query_vector=query_embedding,
-                limit=limit,
-            )
-
-            return [
-                {
-                    "id": r.id,
-                    "score": r.score,
-                    "title": r.payload.get("title", ""),
-                    "content": r.payload.get("content", ""),
-                    "source": r.payload.get("source", ""),
-                    "url": r.payload.get("url", ""),
-                    "published_at": r.payload.get("published_at", ""),
-                    "sentiment": r.payload.get("sentiment", 0),
-                    "symbols": r.payload.get("symbols", []),
-                }
-                for r in results
-            ]
+            if query_embedding is not None:
+                # True semantic vector search
+                results = await self._client.search(
+                    collection_name=self.collection_name,
+                    query_vector=query_embedding,
+                    limit=limit,
+                )
+                return [
+                    {
+                        "id": r.id,
+                        "score": r.score,
+                        "title": r.payload.get("title", ""),
+                        "content": r.payload.get("content", ""),
+                        "source": r.payload.get("source", ""),
+                        "url": r.payload.get("url", ""),
+                        "published_at": r.payload.get("published_at", ""),
+                        "sentiment": r.payload.get("sentiment", 0),
+                        "symbols": r.payload.get("symbols", []),
+                    }
+                    for r in results
+                ]
+            else:
+                # Fallback: scroll all and filter client-side by keyword
+                all_points, _ = await self._client.scroll(
+                    collection_name=self.collection_name,
+                    limit=200,
+                    with_vectors=False,
+                    with_payload=True,
+                )
+                q = query.lower()
+                matches = [
+                    {
+                        "id": pt.id,
+                        "score": 0.0,
+                        "title": pt.payload.get("title", ""),
+                        "content": pt.payload.get("content", ""),
+                        "source": pt.payload.get("source", ""),
+                        "url": pt.payload.get("url", ""),
+                        "published_at": pt.payload.get("published_at", ""),
+                        "sentiment": pt.payload.get("sentiment", 0),
+                        "symbols": pt.payload.get("symbols", []),
+                    }
+                    for pt in all_points
+                    if q in pt.payload.get("title", "").lower()
+                    or q in pt.payload.get("content", "").lower()
+                ]
+                return matches[:limit]
         except Exception as e:
             logger.error(f"Search failed: {e}")
             return []
