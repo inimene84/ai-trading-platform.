@@ -7,8 +7,9 @@ echo "============================================"
 
 # Get actual admin token
 echo "Getting admin token..."
+INFLUXDB_ADMIN_PASSWORD="${INFLUXDB_ADMIN_PASSWORD:?Set INFLUXDB_ADMIN_PASSWORD before running this script}"
 ADMIN_TOKEN=$(curl -s -X POST http://localhost:8086/api/v2/signin \
-  -d '{"username":"admin","password":"hedgefund123"}' | jq -r '.token')
+  -d "{\"username\":\"admin\",\"password\":\"$INFLUXDB_ADMIN_PASSWORD\"}" | jq -r '.token')
 
 echo "Admin token: ${ADMIN_TOKEN:0:20}..."
 

@@ -20,13 +20,26 @@ function getBackendUrl(): string {
   return '/api/backend';
 }
 
+function getBackendApiToken(): string | undefined {
+  try {
+    const stored = localStorage.getItem(LOCAL_STORAGE_KEY);
+    if (stored) {
+      const settings = JSON.parse(stored);
+      return settings.BACKEND_API_TOKEN || settings.ADMIN_API_KEY || settings.API_AUTH_TOKEN;
+    }
+  } catch { /* ignore */ }
+  return undefined;
+}
+
 async function request<T = any>(path: string, options?: RequestInit): Promise<T> {
   const base = getBackendUrl();
   const url = `${base}${path}`;
+  const token = getBackendApiToken();
   const res = await fetch(url, {
     ...options,
     headers: {
       'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...(options?.headers || {}),
     },
   });

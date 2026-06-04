@@ -16,28 +16,9 @@ export const configService = {
       if (typeof process !== 'undefined' && process.env) {
         envValue = (process.env as any)[key];
       }
-      
-      // Fallback for Vite text replacement (specifically for GEMINI_API_KEY)
-      if (!envValue && key === 'GEMINI_API_KEY') {
-        // @ts-ignore
-        if (typeof process !== 'undefined' && process.env && process.env.GEMINI_API_KEY) {
-           // @ts-ignore
-           envValue = process.env.GEMINI_API_KEY;
-        }
-      }
     } catch (e) {
       // Ignored: process is not defined
     }
-    
-    // Check Vite's import.meta.env if available
-    if (!envValue) {
-      try {
-        if (typeof import.meta !== 'undefined' && (import.meta as any).env) {
-          envValue = (import.meta as any).env[`VITE_${key}`] || (import.meta as any).env[key];
-        }
-      } catch (e) {}
-    }
-
     if (envValue && envValue !== `MY_${key}`) {
       return envValue;
     }
@@ -66,15 +47,6 @@ export const configService = {
         envValue = (process.env as any)[key];
       }
     } catch (e) {}
-
-    if (!envValue) {
-      try {
-        if (typeof import.meta !== 'undefined' && (import.meta as any).env) {
-          envValue = (import.meta as any).env[`VITE_${key}`] || (import.meta as any).env[key];
-        }
-      } catch (e) {}
-    }
-
     return !!(envValue && envValue !== `MY_${key}`);
   },
 
@@ -84,6 +56,7 @@ export const configService = {
   getKeys() {
     return [
       'GEMINI_API_KEY',
+      'BACKEND_API_TOKEN',
       'XAI_API_KEY',
       'OPENAI_API_KEY',
       'ANTHROPIC_API_KEY',

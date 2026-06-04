@@ -13,13 +13,14 @@ services:
       PYTHONUNBUFFERED: 1
       PYTHONPATH: /app
       OLLAMA_BASE_URL: http://litellm:4000
-      PAPER_TRADING: false
+      PAPER_TRADING: ${PAPER_TRADING:-true}
+      AUTO_START_TRADING_LOOP: ${AUTO_START_TRADING_LOOP:-false}
       ACTIVE_BROKER: binance_futures
       BINANCE_API_KEY: ${BINANCE_API_KEY}
       BINANCE_SECRET_KEY: ${BINANCE_SECRET_KEY}
-      BINANCE_TESTNET: false
-      BINANCE_DRY_RUN: false
-      DRY_RUN_ALL: false
+      BINANCE_TESTNET: ${BINANCE_TESTNET:-true}
+      BINANCE_DRY_RUN: ${BINANCE_DRY_RUN:-true}
+      DRY_RUN_ALL: ${DRY_RUN_ALL:-true}
       GEMINI_API_KEY: ${GOOGLE_API_KEY}
       XAI_API_KEY: ${XAI_API_KEY}
       OPENAI_API_KEY: ${OPENAI_API_KEY}
@@ -30,8 +31,10 @@ services:
       PERSONA_LLM_PROVIDER: litellm
       PERSONA_LLM_MODEL: gemini-3-flash
       PERSONA_LLM_BASE_URL: http://litellm:4000/v1
-      # Safety: disable risk guard during testing (re-enable for live trading by setting DISABLE_RISK_GUARD=false in .env)
-      DISABLE_RISK_GUARD: ${DISABLE_RISK_GUARD:-true}
+      ADMIN_API_KEY: ${ADMIN_API_KEY}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000,http://localhost:8081}
+      # Safety: keep risk guard enabled unless explicitly disabled for controlled testing.
+      DISABLE_RISK_GUARD: ${DISABLE_RISK_GUARD:-false}
     command:
       - uvicorn
       - backend.main:app
@@ -81,7 +84,7 @@ services:
       KIE_API_KEY: ${KIE_API_KEY}
       KIE_BEARER_TOKEN: "Bearer ${KIE_API_KEY}"
       LITELLM_MODEL_FALLBACK: true
-      LITELLM_MASTER_KEY: ${LITELLM_API_KEY}
+      LITELLM_MASTER_KEY: ${LITELLM_API_KEY:?set LITELLM_API_KEY}
     command: --config /tmp/litellm-config.yaml --port 4000
     logging:
       driver: json-file
@@ -120,7 +123,7 @@ services:
     environment:
       - DOCKER_INFLUXDB_INIT_MODE=setup
       - DOCKER_INFLUXDB_INIT_USERNAME=admin
-      - DOCKER_INFLUXDB_INIT_PASSWORD=hedgefund123
+      - DOCKER_INFLUXDB_INIT_PASSWORD=${INFLUXDB_ADMIN_PASSWORD:?set INFLUXDB_ADMIN_PASSWORD}
       - DOCKER_INFLUXDB_INIT_ORG=hedge-fund
       - DOCKER_INFLUXDB_INIT_BUCKET=news-sentiment
       - DOCKER_INFLUXDB_INIT_RETENTION=7d

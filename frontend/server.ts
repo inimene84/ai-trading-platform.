@@ -211,6 +211,10 @@ app.use('/api/backend', async (req, res) => {
   
   try {
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    const authHeader = req.header('authorization');
+    const apiKeyHeader = req.header('x-api-key');
+    if (authHeader) headers.Authorization = authHeader;
+    if (apiKeyHeader) headers['X-API-Key'] = apiKeyHeader;
     const fetchOpts: RequestInit = {
       method: req.method,
       headers,
