@@ -1,5 +1,6 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 import logging
 import asyncio
 import os
@@ -18,6 +19,7 @@ from backend.services.unified_trading import UnifiedTrading
 from backend.services.ctrader_service import ctrader_broker
 from backend.services.binance_futures_service import binance_futures_broker
 from backend.services.trading_loop import trading_loop
+from backend.security import is_sensitive_request, validate_admin_request
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -29,13 +31,31 @@ app = FastAPI(title="AI Hedge Fund API", description="Backend API for AI Hedge F
 Base.metadata.create_all(bind=engine)
 
 # Configure CORS
+allowed_origins = [
+    origin.strip()
+    for origin in os.getenv("CORS_ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:8081").split(",")
+    if origin.strip()
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow all origins for VPS access
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def require_admin_token_for_sensitive_requests(request: Request, call_next):
+    if is_sensitive_request(request):
+        try:
+            validate_admin_request(request)
+        except Exception as exc:
+            status_code = getattr(exc, "status_code", 500)
+            detail = getattr(exc, "detail", "Authentication failed")
+            headers = getattr(exc, "headers", None)
+            return JSONResponse(status_code=status_code, content={"detail": detail}, headers=headers)
+    return await call_next(request)
 
 # Include all routes
 app.include_router(api_router)
@@ -79,7 +99,7 @@ async def startup_event():
         ut.register_broker("binance_futures", binance_futures_broker)
         ut.register_broker("ctrader", ctrader_broker)
         # Auto-init paper session for immediate use
-        paper_trading = os.getenv("PAPER_TRADING", "false").lower() == "true"
+        paper_trading = os.getenv("PAPER_TRADING", "true").lower() == "true"
         mode = "paper" if paper_trading else "live"
         init_kwargs = {
             "broker": "binance_futures",
@@ -95,10 +115,13 @@ async def startup_event():
     
     # Auto-start trading loop
     try:
-        # Start trading loop automatically (Safe in both Paper and Live as per user request)
-        asyncio.create_task(trading_loop.start())
-        paper_trading = os.getenv("PAPER_TRADING", "false").lower() == "true"
-        mode_str = "PAPER" if paper_trading else "LIVE"
-        logger.info(f"✓ Trading loop auto-started ({mode_str} MODE)")
+        auto_start = os.getenv("AUTO_START_TRADING_LOOP", "false").lower() == "true"
+        paper_trading = os.getenv("PAPER_TRADING", "true").lower() == "true"
+        if auto_start:
+            asyncio.create_task(trading_loop.start())
+            mode_str = "PAPER" if paper_trading else "LIVE"
+            logger.info(f"✓ Trading loop auto-started ({mode_str} MODE)")
+        else:
+            logger.info("✓ Trading loop auto-start disabled (set AUTO_START_TRADING_LOOP=true to enable)")
     except Exception as e:
         logger.warning(f"⚠ Trading loop auto-start failed: {e}")

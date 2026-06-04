@@ -5,7 +5,7 @@ echo "=============================================="
 echo "SETUP COMPLETE INFLUXDB FOR TRADING PLATFORM"
 echo "=============================================="
 
-TOKEN="***REMOVED***"
+TOKEN="${INFLUXDB_TOKEN:?Set INFLUXDB_TOKEN before running this script}"
 ORG="hedge-fund"
 URL="http://localhost:8086"
 

@@ -1,13 +1,14 @@
 import os
 import httpx
+import re
 from dotenv import load_dotenv
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 import json
 import asyncio
 from datetime import datetime
 from typing import Optional, List, Dict, Any
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from backend.database.connection import SessionLocal
 from backend.database.models import TradingSignal, Trade, PortfolioSnapshot
@@ -35,6 +36,12 @@ class TradingConfigResponse(BaseModel):
     interval_minutes: int
     symbols: List[str]
     risk_limits: Dict[str, Any]
+
+
+class BacktestRequest(BaseModel):
+    symbol: str = "ETH-USD"
+    strategy: str = "breakout"
+    days: int = Field(90, ge=1, le=3650)
 
 load_dotenv()
 
@@ -88,45 +95,28 @@ async def list_strategies():
 
 
 @router.post("/run-backtest")
-async def run_backtest(request: dict):
+async def run_backtest(request: BacktestRequest):
     """Run a backtest with specified parameters. Returns results."""
-    symbol = request.get("symbol", "ETH-USD")
-    strategy = request.get("strategy", "breakout")
-    days = request.get("days", 90)
+    symbol = request.symbol.upper().strip()
+    strategy = request.strategy.lower().strip()
+    allowed_strategies = {"breakout", "mean_reversion", "trend_following", "scalping", "combined"}
 
-    import subprocess
+    if not re.fullmatch(r"[A-Z0-9][A-Z0-9_.:-]{1,20}", symbol):
+        raise HTTPException(status_code=400, detail="Invalid symbol format")
+    if strategy not in allowed_strategies:
+        raise HTTPException(status_code=400, detail=f"Invalid strategy. Expected one of: {sorted(allowed_strategies)}")
 
-    result = subprocess.run(
-        [
-            "python",
-            "-c",
-            f"""
-import sys
-sys.path.insert(0, '.')
-try:
-    from backend.backtesting_ctrader.engine import BacktestEngine
-    engine = BacktestEngine(initial_balance=10000)
-    result = engine.run(symbol='{symbol}', strategy='{strategy}', days={days})
-    import json
-    print(json.dumps(result))
-except Exception as e:
-    import json
-    print(json.dumps({{'error': str(e), 'symbol': '{symbol}', 'strategy': '{strategy}', 'pnl': 0, 'trades': 0, 'win_rate': 0, 'sharpe': 0}}))
-""",
-        ],
-        capture_output=True,
-        text=True,
-        cwd=".",
-    )
+    from dataclasses import asdict
 
+    from backend.backtesting_ctrader.engine import BacktestEngine, _download_bars
+
+    engine = BacktestEngine(strategy_name=strategy, initial_balance=10000)
     try:
-        return json.loads(result.stdout.strip())
-    except Exception:
-        return {
-            "error": result.stderr or "Unknown error",
-            "symbol": symbol,
-            "strategy": strategy,
-        }
+        bars = await asyncio.to_thread(_download_bars, symbol, request.days)
+        result = await asyncio.to_thread(engine.run, symbol=symbol, bars=bars)
+        return asdict(result)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Backtest failed: {exc}") from exc
 
 
 @router.get("/portfolio")

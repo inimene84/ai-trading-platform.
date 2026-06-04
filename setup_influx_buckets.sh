@@ -2,7 +2,7 @@
 # Create InfluxDB buckets for the trading platform
 
 INFLUX_URL="http://localhost:8086"
-TOKEN="***REMOVED***"
+TOKEN="${INFLUXDB_TOKEN:?Set INFLUXDB_TOKEN before running this script}"
 ORG="hedge-fund"
 
 # Buckets with their retention policies
