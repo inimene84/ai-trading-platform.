@@ -30,8 +30,8 @@ services:
       PERSONA_LLM_PROVIDER: litellm
       PERSONA_LLM_MODEL: gemini-3-flash
       PERSONA_LLM_BASE_URL: http://litellm:4000/v1
-      # Safety: disable risk guard during testing (re-enable for live trading)
-      DISABLE_RISK_GUARD: ${DISABLE_RISK_GUARD:-true}
+      # Risk guard ENABLED for live trading
+      DISABLE_RISK_GUARD: false
     command:
       - uvicorn
       - backend.main:app
