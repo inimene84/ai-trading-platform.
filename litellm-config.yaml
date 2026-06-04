@@ -25,20 +25,23 @@ model_list:
       max_tokens: 256
       rpm: 20
 
-  # ── Kie.ai (Claude Sonnet 4-6 via local kieai-proxy container) ──
+  # ── Kie.ai (Claude Sonnet 4-6 via Anthropic-compatible API) ──
+  # api.kie.ai uses the Anthropic messages protocol natively — no proxy needed
   - model_name: gemini-3-flash
     litellm_params:
-      model: openai/claude-sonnet-4-6
+      model: claude-sonnet-4-6
       api_key: os.environ/KIE_API_KEY
-      api_base: http://kieai-proxy:11434/v1
+      api_base: https://api.kie.ai
+      custom_llm_provider: anthropic
       temperature: 0.4
       max_tokens: 1024
 
   - model_name: claude-sonnet
     litellm_params:
-      model: openai/claude-sonnet-4-6
+      model: claude-sonnet-4-6
       api_key: os.environ/KIE_API_KEY
-      api_base: http://kieai-proxy:11434/v1
+      api_base: https://api.kie.ai
+      custom_llm_provider: anthropic
       temperature: 0.4
       max_tokens: 1024
 
