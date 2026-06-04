@@ -849,7 +849,7 @@ async def binance_status():
             "active":       active_broker == "binance_futures",
             "testnet":      os.getenv("BINANCE_TESTNET", "false") == "true",
             "leverage":     int(os.getenv("BINANCE_LEVERAGE", "10")),
-            "margin_type":  os.getenv("BINANCE_MARGIN_TYPE", "ISOLATED"),
+            "margin_type":  bf.margin_type,
             "wallet": {
                 "balance":         balance.get("balance", 0),
                 "available":       balance.get("available", 0),

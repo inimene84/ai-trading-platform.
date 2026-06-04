@@ -99,7 +99,8 @@ class BinanceFuturesService:
         self.api_secret = os.getenv('BINANCE_SECRET_KEY', '') or os.getenv('BINANCE_API_SECRET', '')
         self.testnet    = os.getenv('BINANCE_TESTNET', 'false').lower() == 'true'
         self.leverage   = int(os.getenv('BINANCE_LEVERAGE', '10'))
-        self.margin_type = os.getenv('BINANCE_MARGIN_TYPE', 'ISOLATED')
+        margin_env = os.getenv('BINANCE_MARGIN_TYPE', 'ISOLATED').upper()
+        self.margin_type = 'CROSSED' if margin_env in ('CROSS', 'CROSSED') else 'ISOLATED'
         self.dry_run    = os.getenv('BINANCE_DRY_RUN', 'false').lower() == 'true'
         self._client    = None
         self._leverage_set: set = set()
