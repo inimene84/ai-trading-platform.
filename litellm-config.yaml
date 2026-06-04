@@ -13,7 +13,7 @@ model_list:
     litellm_params:
       model: claude-sonnet-4-6
       api_key: os.environ/KIE_API_KEY
-      api_base: https://api.kie.ai
+      api_base: https://api.kie.ai/claude
       custom_llm_provider: anthropic
       temperature: 0.3
       max_tokens: 512
@@ -22,7 +22,7 @@ model_list:
     litellm_params:
       model: claude-sonnet-4-6
       api_key: os.environ/KIE_API_KEY
-      api_base: https://api.kie.ai
+      api_base: https://api.kie.ai/claude
       custom_llm_provider: anthropic
       temperature: 0.3
       max_tokens: 512
