@@ -25,7 +25,7 @@ async def save_json_file(request: SaveJsonRequest):
     """Save JSON data to the project's /outputs directory."""
     try:
         # Create outputs directory if it doesn't exist
-        project_root = Path(__file__).parent.parent.parent.parent  # Navigate to project root
+        project_root = Path(__file__).resolve().parents[2]  # Navigate to project root
         outputs_dir = project_root / "outputs"
         outputs_dir.mkdir(exist_ok=True)
         
@@ -48,5 +48,7 @@ async def save_json_file(request: SaveJsonRequest):
             "filename": filename
         }
         
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to save file: {str(e)}") 

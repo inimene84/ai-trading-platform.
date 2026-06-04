@@ -84,7 +84,7 @@ services:
       KIE_API_KEY: ${KIE_API_KEY}
       KIE_BEARER_TOKEN: "Bearer ${KIE_API_KEY}"
       LITELLM_MODEL_FALLBACK: true
-      LITELLM_MASTER_KEY: ${LITELLM_API_KEY}
+      LITELLM_MASTER_KEY: ${LITELLM_API_KEY:?set LITELLM_API_KEY}
     command: --config /tmp/litellm-config.yaml --port 4000
     logging:
       driver: json-file

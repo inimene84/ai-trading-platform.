@@ -106,6 +106,25 @@ export interface TradeResult {
   timestamp: number;
 }
 
+type WorkflowNodeData = {
+  type?: unknown;
+  label?: unknown;
+  config?: unknown;
+};
+
+type ConditionConfig = {
+  emaFast?: number;
+  emaSlow?: number;
+};
+
+function getWorkflowNodeData(node: Node): WorkflowNodeData {
+  return node.data as WorkflowNodeData;
+}
+
+function asString(value: unknown): string {
+  return typeof value === 'string' ? value : '';
+}
+
 class WorkflowEngine {
   private context: ExecutionContext;
   private trades: TradeResult[] = [];
@@ -221,7 +240,7 @@ class WorkflowEngine {
           break;
         default:
           // Try to match by label
-          const label = (node.data?.label || '').toLowerCase();
+          const label = asString(getWorkflowNodeData(node).label).toLowerCase();
           if (label.includes('rsi') || label.includes('ema') || label.includes('filter')) {
             result = await this.executeFilterNode(node);
           } else if (label.includes('buy') || label.includes('sell') || label.includes('execute')) {
@@ -254,8 +273,9 @@ class WorkflowEngine {
   }
 
   private getNodeType(node: Node): string {
-    const type = (node.data?.type || '').toLowerCase();
-    const label = (node.data?.label || '').toLowerCase();
+    const data = getWorkflowNodeData(node);
+    const type = asString(data.type).toLowerCase();
+    const label = asString(data.label).toLowerCase();
     
     if (type === 'trigger' || label.includes('trigger') || label.includes('volume') || label.includes('alert')) {
       return 'trigger';
@@ -319,7 +339,7 @@ class WorkflowEngine {
   }
 
   private async executeConditionNode(node: Node): Promise<boolean> {
-    const config = node.data?.config;
+    const config = getWorkflowNodeData(node).config as ConditionConfig | undefined;
     this.log(node.id, 'condition', 'Evaluating condition', 'info');
 
     // Simple trend check using EMA

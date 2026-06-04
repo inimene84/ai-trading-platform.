@@ -51,7 +51,7 @@ function SentimentDot({ sentiment }: { sentiment: NewsItem['sentiment'] }) {
   );
 }
 
-function Skeleton({ className }: { className?: string }) {
+function Skeleton({ className }: { key?: React.Key; className?: string }) {
   return <div className={cn('animate-pulse rounded bg-zinc-800', className)} />;
 }
 

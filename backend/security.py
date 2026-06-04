@@ -22,6 +22,10 @@ SENSITIVE_PREFIXES = (
     "/api/ollama",
 )
 TRADING_PREFIXES = ("/trading", "/api/trading")
+PUBLIC_TRADING_PATHS = {
+    "/trading/strategies",
+    "/api/trading/strategies",
+}
 
 
 def _tokens_from_env(env_names: Iterable[str] = AUTH_ENV_VARS) -> list[str]:
@@ -40,7 +44,7 @@ def is_sensitive_request(request: Request) -> bool:
         return True
 
     if path.startswith(TRADING_PREFIXES):
-        return method not in {"GET", "HEAD"}
+        return path not in PUBLIC_TRADING_PATHS
 
     return method not in {"GET", "HEAD"}
 
