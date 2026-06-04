@@ -36,15 +36,16 @@ class ModelConfig:
 # These can be overridden via environment variables per task type.
 
 _DEFAULT_REGISTRY: dict[str, ModelConfig] = {
-    # Fast, cheap — used for 12 persona agents running in parallel
+    # KieAI Gemini 3 Flash — cheap, fast, 1h cached personas running in parallel
+    # Routed via VPS LiteLLM proxy (docker: http://litellm:4000/v1)
     "persona_analysis": ModelConfig(
-        name=os.getenv("PERSONA_LLM_MODEL", "gemini/gemini-2.5-flash-lite"),
-        provider=os.getenv("PERSONA_LLM_PROVIDER", "groq"),
+        name=os.getenv("PERSONA_LLM_MODEL", "gemini-3-flash"),
+        provider=os.getenv("PERSONA_LLM_PROVIDER", "litellm"),
         tier="cheap",
-        base_url=os.getenv("PERSONA_LLM_BASE_URL", "https://api.groq.com/openai/v1"),
-        max_tokens=1024,
-        temperature=0.4,
-        api_key_env="LITELLM_API_KEY",
+        base_url=os.getenv("PERSONA_LLM_BASE_URL", "http://litellm:4000/v1"),
+        max_tokens=512,   # Personas only output short JSON — keep tokens low
+        temperature=0.3,  # Lower temp = more consistent JSON output
+        api_key_env="LITELLM_API_KEY",  # Set to LITELLM master key in docker-compose
     ),
 
     # Premium — used for deep single-symbol analysis (ai_analysis.py)
@@ -58,11 +59,12 @@ _DEFAULT_REGISTRY: dict[str, ModelConfig] = {
     ),
 
     # Balanced — used for general LLM tasks (news scoring, etc.)
+    # Also routes through KieAI/LiteLLM proxy for cost efficiency
     "general": ModelConfig(
-        name=os.getenv("GENERAL_LLM_MODEL", "gemini/gemini-2.5-flash-lite"),
-        provider=os.getenv("GENERAL_LLM_PROVIDER", "groq"),
+        name=os.getenv("GENERAL_LLM_MODEL", "gemini-3-flash"),
+        provider=os.getenv("GENERAL_LLM_PROVIDER", "litellm"),
         tier="balanced",
-        base_url=os.getenv("PERSONA_LLM_BASE_URL", "https://api.groq.com/openai/v1"),
+        base_url=os.getenv("PERSONA_LLM_BASE_URL", "http://litellm:4000/v1"),
         max_tokens=1024,
         temperature=0.4,
         api_key_env="LITELLM_API_KEY",
@@ -116,8 +118,10 @@ def get_api_key(config: ModelConfig) -> str:
         if key:
             return key
     # Cascade through common key env vars
+    # LITELLM_API_KEY is the LiteLLM master key (also used for KieAI proxy)
     return (
         os.getenv("LITELLM_API_KEY", "")
+        or os.getenv("KIE_API_KEY", "")   # KieAI proxy key also accepted by LiteLLM
         or os.getenv("PERSONA_LLM_API_KEY", "")
         or os.getenv("GROQ_API_KEY", "")
     )

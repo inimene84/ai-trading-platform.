@@ -7,6 +7,10 @@ from backend.database.models import Base, Trade, PortfolioSnapshot
 from backend.services.risk_config import RiskConfig
 from backend.services.risk_guard import enforce_risk_limits, RiskBreach
 
+@pytest.fixture(autouse=True)
+def disable_risk_guard_override(monkeypatch):
+    monkeypatch.setenv("DISABLE_RISK_GUARD", "false")
+
 @pytest.fixture
 def db_session():
     # Setup clean in-memory SQLite database for testing queries

@@ -25,6 +25,15 @@ model_list:
       max_tokens: 256
       rpm: 20
 
+  # ── Kie.ai (Gemini 3 Flash proxy) ──
+  - model_name: gemini-3-flash
+    litellm_params:
+      model: openai/gemini-3-flash
+      api_key: os.environ/KIE_API_KEY
+      api_base: https://api.kie.ai/openai/v1
+      temperature: 0.4
+      max_tokens: 1024
+
   # ── FREE MODELS via OpenRouter ──
   - model_name: gpt-4o
     litellm_params:
@@ -68,7 +77,7 @@ model_list:
       rpm: 20
 
 general_settings:
-  master_key: sk-1234
+  master_key: os.environ/LITELLM_API_KEY
   rate_limit_alerts: false
   log_level: INFO
 
@@ -87,6 +96,9 @@ router_settings:
     - gemini-2.5-flash:
         - openrouter/free
         - gpt-4o
+    - gemini-3-flash:
+        - gemini-2.5-flash
+        - openrouter/free
     - kimi-k2-instruct:
         - openrouter/free
         - gemini-2.5-flash

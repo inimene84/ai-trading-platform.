@@ -53,7 +53,7 @@ class TradingLoopService:
         self._running = False
         self._state = "stopped"  # stopped, running, error
         self._error: Optional[str] = None
-        self._interval_minutes = 5
+        self._interval_minutes = 15
         env_syms = os.getenv('TRADING_SYMBOLS', '')
         self._symbols = [s.strip() for s in env_syms.split(',') if s.strip()] if env_syms else [
             'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT',
@@ -96,7 +96,7 @@ class TradingLoopService:
 
     async def start(
         self,
-        interval_minutes: int = 5,
+        interval_minutes: int = 15,
         symbols: list[str] | None = None,
         strategy: str = "combined",
     ):
