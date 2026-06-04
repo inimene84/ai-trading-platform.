@@ -166,6 +166,7 @@ function SignalBadge({ signal, confidence }: { signal?: string; confidence?: num
 function AssetCard({
   asset, isSelected, isEditing, onSelect, onQuickTrade, onRemove,
 }: {
+  key?: React.Key;
   asset: AssetData;
   isSelected: boolean;
   isEditing: boolean;

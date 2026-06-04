@@ -1,11 +1,11 @@
 import React from 'react';
-import { Handle, Position, NodeProps } from '@xyflow/react';
+import { Handle, Position, Node, NodeProps } from '@xyflow/react';
 import { Activity, TrendingUp, Clock, BarChart3 } from 'lucide-react';
 import { motion } from 'motion/react';
 import { cn } from '../../lib/utils';
 import { FilterConfig } from '../../services/workflowEngine';
 
-interface FilterNodeData {
+interface FilterNodeData extends Record<string, unknown> {
   label: string;
   type: string;
   icon?: any;
@@ -23,7 +23,9 @@ const indicatorIcons: Record<string, any> = {
   volume: BarChart3
 };
 
-export const FilterNode: React.FC<NodeProps<FilterNodeData>> = ({ data, selected }) => {
+type FilterNodeType = Node<FilterNodeData>;
+
+export const FilterNode: React.FC<NodeProps<FilterNodeType>> = ({ data, selected }) => {
   const config = data.config;
   const indicator = config?.indicator || 'rsi';
   const Icon = indicatorIcons[indicator] || Activity;

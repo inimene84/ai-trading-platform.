@@ -112,7 +112,8 @@ async def run_backtest(request: BacktestRequest):
 
     engine = BacktestEngine(strategy_name=strategy, initial_balance=10000)
     try:
-        bars = await asyncio.to_thread(_download_bars, symbol, request.days)
+        download_symbol = _to_yfinance_symbol(symbol)
+        bars = await asyncio.to_thread(_download_bars, download_symbol, request.days)
         result = await asyncio.to_thread(engine.run, symbol=symbol, bars=bars)
         return asdict(result)
     except Exception as exc:
