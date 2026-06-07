@@ -528,6 +528,144 @@ class BinanceFuturesService:
                 raise e
 
 
+    def replace_stop_loss(
+        self,
+        symbol: str,
+        direction: str,
+        new_stop_price: float,
+        quantity: Optional[float] = None,
+    ) -> dict:
+        """Move the exchange-native reduce-only STOP_MARKET to a tighter level.
+
+        Used by the in-loop trailing stop so the *exchange* backstop tracks the
+        ratcheted DB stop. Without this, the native STOP_MARKET placed at entry
+        stays frozen at the original (worst) stop while the in-memory trail
+        advances — giving back all locked profit during the inter-cycle sleep or
+        if the container dies.
+
+        SAFETY CONTRACT (fail-safe, never leave a position naked):
+          * Resolve the existing reduce-only STOP_MARKET for this symbol+side.
+          * Only act if `new_stop_price` is strictly TIGHTER than the live
+            exchange stop (closer to price) — never loosen, never churn.
+          * Reject a stop that sits on the wrong side of current price (would
+            trigger instantly, Binance -2021) — skip safely.
+          * Place the NEW stop FIRST, then cancel the OLD one. There is never a
+            window with zero exchange-side protection. If the new placement
+            fails, the old stop stays in force untouched.
+          * Any exception → return without changing the exchange stop.
+
+        Returns a dict with 'status': 'replaced'|'skipped'|'simulated'|'error'.
+        """
+        futures_sym = self._to_futures_symbol(symbol)
+        if not futures_sym:
+            return {'status': 'skipped', 'reason': f'{symbol} unsupported'}
+        if self.dry_run:
+            logger.info(f"[Binance Futures DRY-RUN] would move SL {futures_sym} -> {new_stop_price}")
+            return {'status': 'simulated', 'symbol': futures_sym, 'new_stop': new_stop_price}
+        if not new_stop_price or new_stop_price <= 0:
+            return {'status': 'skipped', 'reason': 'invalid new_stop_price'}
+
+        try:
+            client = self._get_client()
+            position_side = 'LONG' if direction.upper() == 'BUY' else 'SHORT'
+            # Reduce-only stop side is opposite the position direction
+            sl_side = 'SELL' if direction.upper() == 'BUY' else 'BUY'
+            rounded_new = self._round_price(futures_sym, new_stop_price)
+
+            # Current mark/last price — validate trigger side (avoid -2021)
+            try:
+                ticker = client.futures_symbol_ticker(symbol=futures_sym)
+                current_price = float(ticker['price'])
+            except Exception:
+                current_price = 0.0
+            if current_price > 0:
+                # For a LONG the stop must sit BELOW price; for a SHORT, ABOVE.
+                if direction.upper() == 'BUY' and rounded_new >= current_price:
+                    return {'status': 'skipped',
+                            'reason': f'new stop {rounded_new} >= price {current_price} (would trigger now)'}
+                if direction.upper() == 'SELL' and rounded_new <= current_price:
+                    return {'status': 'skipped',
+                            'reason': f'new stop {rounded_new} <= price {current_price} (would trigger now)'}
+
+            # Find the existing reduce-only STOP_MARKET for this symbol+side
+            open_orders = client.futures_get_open_orders(symbol=futures_sym)
+            existing = [
+                o for o in open_orders
+                if o.get('type') == 'STOP_MARKET'
+                and o.get('side') == sl_side
+                and o.get('positionSide', position_side) == position_side
+            ]
+
+            # Only tighten: compare against the current exchange stop level
+            if existing:
+                cur_levels = [float(o.get('stopPrice', 0) or 0) for o in existing]
+                if direction.upper() == 'BUY':
+                    cur_stop = max(cur_levels)  # highest = least loose for a long
+                    if rounded_new <= cur_stop:
+                        return {'status': 'skipped',
+                                'reason': f'not tighter ({rounded_new} <= exchange {cur_stop})'}
+                else:
+                    cur_stop = min(cur_levels)  # lowest = least loose for a short
+                    if rounded_new >= cur_stop:
+                        return {'status': 'skipped',
+                                'reason': f'not tighter ({rounded_new} >= exchange {cur_stop})'}
+
+            # Resolve quantity to protect (position size). Fall back to existing
+            # order qty, then the model-supplied quantity.
+            qty = quantity
+            if not qty:
+                pos = next(
+                    (p for p in self.get_positions()
+                     if p['symbol'] == futures_sym
+                     and ((direction.upper() == 'BUY' and p['side'] == 'BUY')
+                          or (direction.upper() == 'SELL' and p['side'] == 'SELL'))),
+                    None,
+                )
+                qty = pos['quantity'] if pos else (
+                    float(existing[0].get('origQty', 0)) if existing else 0.0)
+            qty = self._round_qty(futures_sym, qty) if qty else 0.0
+            if qty <= 0:
+                return {'status': 'skipped', 'reason': 'no open position quantity to protect'}
+
+            # ── Place the NEW stop FIRST (never go naked) ──────────────────────
+            new_params = {
+                "symbol": futures_sym,
+                "side": sl_side,
+                "type": 'STOP_MARKET',
+                "stopPrice": rounded_new,
+                "quantity": qty,
+                "timeInForce": 'GTC',
+                "positionSide": position_side,
+            }
+            new_order = self._safe_create_order(client, new_params)
+            new_id = str(new_order.get('orderId', ''))
+
+            # ── Then cancel the OLD stop(s) ────────────────────────────────────
+            cancelled = []
+            for o in existing:
+                try:
+                    client.futures_cancel_order(symbol=futures_sym, orderId=o['orderId'])
+                    cancelled.append(str(o['orderId']))
+                except Exception as ce:
+                    # New stop is already live; a lingering looser stop is harmless
+                    # (reduce-only, same direction) — log and move on.
+                    logger.warning(f"  [TRAIL-SL] {futures_sym} could not cancel old stop {o.get('orderId')}: {ce}")
+
+            logger.info(
+                f"  [TRAIL-SL] {futures_sym} exchange stop -> {rounded_new} "
+                f"(new_id={new_id}, cancelled={cancelled or 'none'})"
+            )
+            return {'status': 'replaced', 'symbol': futures_sym,
+                    'new_stop': rounded_new, 'new_order_id': new_id,
+                    'cancelled': cancelled, 'quantity': qty}
+
+        except Exception as e:
+            logger.warning(
+                f"  [TRAIL-SL] {symbol} exchange-stop move FAILED (existing stop "
+                f"left in force): {e}"
+            )
+            return {'status': 'error', 'message': str(e)}
+
     def cancel_order(self, order_id: str, symbol: Optional[str] = None) -> dict:
         try:
             client = self._get_client()

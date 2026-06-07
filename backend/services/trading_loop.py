@@ -800,6 +800,7 @@ class TradingLoopService:
                             f"  [ {symbol} ] TRAIL ↑ stop {old_stop if old_stop != float('-inf') else 'None'} "
                             f"-> {candidate:.6f} (hw={hw:.6f}, atr={atr:.6f})"
                         )
+                        self._sync_exchange_stop(trade, candidate)
                 else:  # SHORT
                     lw = self._high_water.get(trade.id, min(trade.entry_price, current_price))
                     lw = min(lw, current_price)
@@ -816,8 +817,42 @@ class TradingLoopService:
                             f"  [ {symbol} ] TRAIL ↓ stop {old_stop if old_stop != float('inf') else 'None'} "
                             f"-> {candidate:.6f} (lw={lw:.6f}, atr={atr:.6f})"
                         )
+                        self._sync_exchange_stop(trade, candidate)
         except Exception as e:
             logger.warning(f"  [ {symbol} ] trailing-stop error (stop unchanged): {e}")
+
+    def _sync_exchange_stop(self, trade, new_stop: float):
+        """Push a ratcheted trail level to the exchange-native STOP_MARKET.
+
+        Keeps the Binance reduce-only STOP_MARKET (placed at entry) tracking the
+        trailed DB stop, so locked profit is protected during the inter-cycle
+        sleep and even if this process dies. No-op unless we are live on Binance
+        Futures. FAILS SAFE: never raises into the trail logic; on any error the
+        existing exchange stop is left in force (the broker method places the new
+        stop before cancelling the old, so the position is never left naked).
+        """
+        try:
+            if os.getenv("ACTIVE_BROKER", "ctrader") != "binance_futures":
+                return
+            from backend.services.trading_mode import get_trading_mode, TradingMode
+            if get_trading_mode() != TradingMode.LIVE:
+                return
+            res = binance_futures_broker.replace_stop_loss(
+                symbol=trade.symbol,
+                direction=trade.direction,
+                new_stop_price=new_stop,
+                quantity=trade.quantity,
+            )
+            status = res.get("status") if isinstance(res, dict) else None
+            if status not in ("replaced", "simulated", "skipped"):
+                logger.warning(
+                    f"  [ {trade.symbol} ] exchange-stop sync returned {res}"
+                )
+        except Exception as e:
+            logger.warning(
+                f"  [ {trade.symbol} ] exchange-stop sync error (DB stop set, "
+                f"exchange stop unchanged): {e}"
+            )
 
     def _check_sl_tp(self, db, symbol: str, bars: list[dict]):
         """Check stop-loss and take-profit for open positions."""
