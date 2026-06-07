@@ -47,3 +47,4 @@ hedge_fund.db
 
 # ── Qdrant runtime storage (binary / auto-generated) ─────────────────────────
 qdrant-storage/
+FETCH_HEAD
