@@ -497,12 +497,17 @@ class TradingLoopService:
         except Exception as e:
             logger.error(f"Position Manager init error: {e}")
 
+        # ── SYMBOL-QUALITY GATE: drop blacklisted + illiquid symbols ──
+        # Kills the realized-PnL loss tail caused by low-liquidity / new-listing
+        # symbols (SIREN, AIGENSYN, MAGMA, SPK ...) before any analysis runs.
+        tradeable = await self._filter_tradeable_symbols(self._symbols)
+
         # Run all symbols in parallel
         tasks = [
             self._process_symbol(
                 symbol, min_confidence, ai_threshold, max_positions
             )
-            for symbol in self._symbols
+            for symbol in tradeable
         ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -838,6 +843,67 @@ class TradingLoopService:
         if s.endswith('BUSD'):
             return s[:-4] + '-USD'
         return s  # already yfinance format or unknown
+
+    async def _filter_tradeable_symbols(self, symbols: list[str]) -> list[str]:
+        """Apply the symbol-quality gate: hard blacklist + 24h liquidity floor.
+
+        Low-liquidity / new-listing symbols produced the entire realized-PnL
+        loss tail (wide spreads, slippage, forced liquidations). One batch
+        ticker call per cycle (cached) decides what is tradeable.
+        Fails OPEN: if the volume snapshot is unavailable we keep all symbols
+        rather than halting trading.
+        """
+        blacklist = self.risk_config.symbol_blacklist
+        min_vol = float(self.risk_config.min_24h_quote_volume_usdt or 0)
+
+        # 1) Hard blacklist always applies (works even with no network)
+        candidates = [s for s in symbols if s.upper() not in blacklist]
+        blacklisted = [s for s in symbols if s.upper() in blacklist]
+        if blacklisted:
+            logger.warning(f"  [SYMBOL GATE] blacklisted (skipped): {blacklisted}")
+
+        if min_vol <= 0 or not candidates:
+            return candidates
+
+        # 2) 24h quote-volume liquidity floor (single batch call, cached)
+        try:
+            tickers = await binance_market_data.get_all_tickers_24h(candidates)
+            vol_by_sym = {
+                t.get("symbol", "").upper(): float(t.get("quoteVolume", 0) or 0)
+                for t in (tickers or [])
+            }
+        except Exception as e:
+            logger.warning(
+                f"  [SYMBOL GATE] volume snapshot failed ({e}); "
+                f"failing OPEN — keeping {len(candidates)} symbols"
+            )
+            return candidates
+
+        if not vol_by_sym:
+            logger.warning("  [SYMBOL GATE] empty volume snapshot; failing OPEN")
+            return candidates
+
+        passed, rejected = [], []
+        for s in candidates:
+            v = vol_by_sym.get(s.upper())
+            # Unknown symbol (delisted / not on futures) → reject as unsafe
+            if v is None:
+                rejected.append((s, "no-ticker"))
+                continue
+            if v >= min_vol:
+                passed.append(s)
+            else:
+                rejected.append((s, f"{v/1e6:.1f}M<{min_vol/1e6:.0f}M"))
+        if rejected:
+            logger.warning(
+                f"  [SYMBOL GATE] illiquid (skipped): "
+                f"{[f'{s}({why})' for s, why in rejected]}"
+            )
+        logger.info(
+            f"  [SYMBOL GATE] {len(passed)}/{len(symbols)} symbols pass "
+            f"(min 24h vol ${min_vol/1e6:.0f}M)"
+        )
+        return passed
 
     async def _fetch_bars(self, symbol: str) -> list[dict]:
         """Fetch OHLCV bars. Try Binance Futures API first, fallback to yfinance."""
