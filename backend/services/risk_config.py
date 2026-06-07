@@ -49,6 +49,31 @@ class RiskConfig(BaseSettings):
     sl_atr_mult: float = 1.0
     tp_atr_mult: float = 2.5
 
+    # ── Min-edge gate (fee-churn killer) ──
+    # 81-day history: 52% of trades were scratches (|PnL| <= $0.20) and
+    # commission drag was -$193.54 on a +$64 net. Round-trip taker fee on
+    # Binance Futures is ~2 * 0.04% = 0.08% of notional. We only take a
+    # trade if its gross expected move to TP clears `min_edge_fee_mult`x the
+    # round-trip cost (fees + slippage buffer). This kills tight-TP scratch
+    # entries that can never out-earn their own fees. Set 0 to disable.
+    taker_fee_rate: float = PydanticField(
+        default=0.0004,
+        validation_alias=AliasChoices("taker_fee_rate", "TAKER_FEE_RATE"),
+    )
+    slippage_rate: float = PydanticField(
+        default=0.0002,
+        validation_alias=AliasChoices("slippage_rate", "SLIPPAGE_RATE"),
+    )
+    min_edge_fee_mult: float = PydanticField(
+        default=2.5,
+        validation_alias=AliasChoices("min_edge_fee_mult", "MIN_EDGE_FEE_MULT"),
+    )
+
+    @property
+    def roundtrip_cost_rate(self) -> float:
+        """Round-trip cost as a fraction of notional: entry+exit fee + slippage both sides."""
+        return 2.0 * (self.taker_fee_rate + self.slippage_rate)
+
     # ── Symbol-quality gate (liquidity filter + blacklist) ──
     # Reject any symbol whose 24h quote volume (USDT) is below this floor.
     # Low-liquidity / new-listing meme symbols (SIREN, AIGENSYN, MAGMA, SPK ...)
