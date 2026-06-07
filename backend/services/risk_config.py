@@ -48,6 +48,31 @@ class RiskConfig(BaseSettings):
     # SL/TP
     sl_atr_mult: float = 1.0
     tp_atr_mult: float = 2.5
+
+    # ── Symbol-quality gate (liquidity filter + blacklist) ──
+    # Reject any symbol whose 24h quote volume (USDT) is below this floor.
+    # Low-liquidity / new-listing meme symbols (SIREN, AIGENSYN, MAGMA, SPK ...)
+    # produced the entire realized-PnL loss tail (~-$300) via wide spreads,
+    # slippage and forced liquidations. Set 0 to disable the volume gate.
+    min_24h_quote_volume_usdt: float = PydanticField(
+        default=50_000_000.0,
+        validation_alias=AliasChoices(
+            "min_24h_quote_volume_usdt", "MIN_24H_QUOTE_VOLUME_USDT"
+        ),
+    )
+    # Hard blacklist (comma-separated env). Always skipped regardless of volume.
+    symbol_blacklist_raw: str = PydanticField(
+        default="",
+        validation_alias=AliasChoices("symbol_blacklist", "SYMBOL_BLACKLIST"),
+    )
+
+    @property
+    def symbol_blacklist(self) -> set[str]:
+        return {
+            s.strip().upper()
+            for s in self.symbol_blacklist_raw.split(",")
+            if s.strip()
+        }
     
     model_config = {
         "env_file": ".env",
