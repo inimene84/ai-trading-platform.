@@ -18,20 +18,35 @@ const PORT = Number(process.env.FRONTEND_PORT || process.env.PORT || 5173);
 app.use(cors());
 app.use(express.json());
 
-// --- PostgreSQL Setup ---
+// --- PostgreSQL Setup (OPTIONAL) ---
+// The platform runs on SQLite in the backend by default; PostgreSQL here is an
+// OPTIONAL store for historical backtest candles. If no DB is configured we skip
+// it entirely and serve generated mock data — this is expected, not an error.
 const { Pool } = pg;
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL || `postgresql://${process.env.POSTGRES_USER || 'postgres'}:${process.env.POSTGRES_PASSWORD || ''}@${process.env.POSTGRES_HOST || 'localhost'}:${process.env.POSTGRES_PORT || '5432'}/${process.env.POSTGRES_DB || 'quantum_trade'}`,
-});
+const PG_CONFIGURED = Boolean(process.env.DATABASE_URL || process.env.POSTGRES_HOST);
+let pool: InstanceType<typeof Pool> | null = null;
 
-// Test DB connection
-pool.query('SELECT NOW()', (err, res) => {
-  if (err) {
-    console.warn('PostgreSQL connection failed. Using mock data for backtesting.', err.message);
-  } else {
-    console.log('PostgreSQL connected successfully.');
-  }
-});
+if (PG_CONFIGURED) {
+  pool = new Pool({
+    connectionString: process.env.DATABASE_URL || `postgresql://${process.env.POSTGRES_USER || 'postgres'}:${process.env.POSTGRES_PASSWORD || ''}@${process.env.POSTGRES_HOST || 'localhost'}:${process.env.POSTGRES_PORT || '5432'}/${process.env.POSTGRES_DB || 'quantum_trade'}`,
+  });
+
+  // Guard: an idle-client error must NOT crash the process.
+  pool.on('error', (err) => {
+    console.warn('PostgreSQL pool error (backtest store unavailable, using mock data):', err.message);
+  });
+
+  // Test DB connection
+  pool.query('SELECT NOW()', (err) => {
+    if (err) {
+      console.warn('PostgreSQL configured but unreachable. Using mock data for backtesting.', err.message);
+    } else {
+      console.log('PostgreSQL connected successfully.');
+    }
+  });
+} else {
+  console.log('PostgreSQL not configured (no DATABASE_URL/POSTGRES_HOST). Serving mock backtest data — this is expected.');
+}
 
 // --- API Routes ---
 
@@ -40,14 +55,16 @@ app.get('/api/historical', async (req, res) => {
   const { symbol, interval, limit = 1000 } = req.query;
   
   try {
-    // Try to fetch from DB
-    const result = await pool.query(
-      'SELECT * FROM historical_data WHERE symbol = $1 AND interval = $2 ORDER BY time DESC LIMIT $3',
-      [symbol, interval, limit]
-    );
-    
-    if (result.rows.length > 0) {
-      return res.json(result.rows.reverse());
+    // Try to fetch from DB only if a pool was configured.
+    if (pool) {
+      const result = await pool.query(
+        'SELECT * FROM historical_data WHERE symbol = $1 AND interval = $2 ORDER BY time DESC LIMIT $3',
+        [symbol, interval, limit]
+      );
+
+      if (result.rows.length > 0) {
+        return res.json(result.rows.reverse());
+      }
     }
   } catch (err) {
     console.error('DB fetch error, falling back to mock:', err);
