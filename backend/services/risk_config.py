@@ -74,6 +74,30 @@ class RiskConfig(BaseSettings):
         """Round-trip cost as a fraction of notional: entry+exit fee + slippage both sides."""
         return 2.0 * (self.taker_fee_rate + self.slippage_rate)
 
+    # ── Trailing stop (ratchet-only, ATR-based) ──
+    # Solves the "trade just oscillates between SL and TP" problem: once a
+    # position has moved `trail_activation_atr` x ATR into profit, the stop
+    # starts following price by `trail_atr_mult` x ATR and only ever tightens
+    # (never loosens). Chop that reverses gets stopped at a locked-in profit /
+    # breakeven instead of round-tripping back to the original SL. The trailed
+    # level is written into the Trade.stop_loss column, so the existing
+    # _check_sl_tp close path enforces it — no separate order needed.
+    # Set trailing_stop_enabled=false to disable entirely.
+    trailing_stop_enabled: bool = PydanticField(
+        default=True,
+        validation_alias=AliasChoices("trailing_stop_enabled", "TRAILING_STOP_ENABLED"),
+    )
+    # How far into profit (in ATR units) before the trail activates.
+    trail_activation_atr: float = PydanticField(
+        default=1.0,
+        validation_alias=AliasChoices("trail_activation_atr", "TRAIL_ACTIVATION_ATR"),
+    )
+    # Trailing distance behind the high-water mark, in ATR units.
+    trail_atr_mult: float = PydanticField(
+        default=1.5,
+        validation_alias=AliasChoices("trail_atr_mult", "TRAIL_ATR_MULT"),
+    )
+
     # ── Symbol-quality gate (liquidity filter + blacklist) ──
     # Reject any symbol whose 24h quote volume (USDT) is below this floor.
     # Low-liquidity / new-listing meme symbols (SIREN, AIGENSYN, MAGMA, SPK ...)
