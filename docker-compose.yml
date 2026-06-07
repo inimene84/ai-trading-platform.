@@ -45,6 +45,10 @@ services:
       TP_ATR_MULT: ${TP_ATR_MULT:-2.5}
       TRAIL_ACTIVATION_ATR: ${TRAIL_ACTIVATION_ATR:-1.0}
       TRAIL_ATR_MULT: ${TRAIL_ATR_MULT:-0.8}
+      # Fee-churn fix: post-only (GTX) maker entries with MARKET fallback.
+      # OFF by default (fail-safe). Set true to cut entry fees 0.05%->0.02%.
+      MAKER_ENTRY_ENABLED: ${MAKER_ENTRY_ENABLED:-false}
+      MAKER_WAIT_SEC: ${MAKER_WAIT_SEC:-8}
     command:
       - uvicorn
       - backend.main:app

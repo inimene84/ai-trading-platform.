@@ -403,17 +403,39 @@ class BinanceFuturesService:
             )
 
             # ── Main order ────────────────────────────────────────────────────
-            order_params = {
-                "symbol": futures_sym,
-                "side": side,
-                "type": 'MARKET',
-                "quantity": quantity,
-                "positionSide": position_side,
-            }
-            # Note: In Hedge Mode, we DO NOT send reduceOnly as positionSide handles it.
-            # Sending it causes APIError -1106.
-                
-            result = client.futures_create_order(**order_params)
+            # FEE-CHURN FIX: 100% of historical fills were TAKER (0.05%), draining
+            # ~38%/mo of the account in commission alone. For ENTRIES (not closes),
+            # try a POST-ONLY (GTX) maker LIMIT at the near touch first; if it does
+            # not fill within MAKER_WAIT_SEC, cancel and FALL BACK to MARKET.
+            # Fail-OPEN: any error or timeout reverts to exactly today's MARKET path.
+            # Closes / SL / TP / emergency stay MARKET — they must always execute.
+            result = None
+            order_id = ''
+            filled_price = 0.0
+            maker_enabled = os.getenv("MAKER_ENTRY_ENABLED", "false").lower() in ("1", "true", "yes")
+
+            if maker_enabled and not reduce_only:
+                try:
+                    result = self._try_maker_entry(
+                        client, futures_sym, side, quantity, position_side,
+                    )
+                except Exception as mk_e:
+                    logger.warning(f"  [MAKER] post-only entry path errored ({mk_e}) — falling back to MARKET")
+                    result = None
+
+            if result is None:
+                # Default / fallback: original MARKET (taker) order.
+                order_params = {
+                    "symbol": futures_sym,
+                    "side": side,
+                    "type": 'MARKET',
+                    "quantity": quantity,
+                    "positionSide": position_side,
+                }
+                # Note: In Hedge Mode, we DO NOT send reduceOnly as positionSide handles it.
+                # Sending it causes APIError -1106.
+                result = client.futures_create_order(**order_params)
+
             order_id = str(result.get('orderId', ''))
             filled_price = float(result.get('avgPrice') or result.get('price') or price or 0.0)
             logger.info(f"  ✓ Order {order_id} filled @ {filled_price}")
@@ -527,6 +549,87 @@ class BinanceFuturesService:
                         'message': '-2022 position already closed on exchange'}
             logger.error(f"[Binance Futures] place_order error: {e}")
             return {'status': 'error', 'broker': 'binance_futures', 'message': str(e), 'error': str(e)}
+
+    def _try_maker_entry(self, client, futures_sym, side, quantity, position_side):
+        """POST-ONLY (GTX) maker entry with MARKET fallback.
+
+        Places a post-only LIMIT at the near touch (BUY→best bid, SELL→best ask)
+        so the order rests as a maker (0.02% / rebate) instead of crossing the
+        spread as a taker (0.05%). Polls up to MAKER_WAIT_SEC for a fill.
+
+        Returns the Binance order dict if FULLY filled as maker, else returns
+        None so the caller falls back to a MARKET order. FAIL-OPEN: any error
+        returns None (→ MARKET), so worst case == today's behavior.
+        """
+        import time as _t
+        wait_sec = float(os.getenv("MAKER_WAIT_SEC", "8"))
+        poll = 0.75
+
+        # Best bid/ask from the book
+        book = client.futures_orderbook_ticker(symbol=futures_sym)
+        best_bid = float(book["bidPrice"])
+        best_ask = float(book["askPrice"])
+        limit_px = best_bid if side == "BUY" else best_ask
+        limit_px = self._round_price(futures_sym, limit_px)
+
+        params = {
+            "symbol": futures_sym,
+            "side": side,
+            "type": "LIMIT",
+            "timeInForce": "GTX",      # GTX = post-only: rejected/expired if it would take
+            "price": limit_px,
+            "quantity": quantity,
+            "positionSide": position_side,
+        }
+        try:
+            order = client.futures_create_order(**params)
+        except Exception as e:
+            # -2021/-5022: would immediately match (not a maker) → bail to MARKET
+            logger.info(f"  [MAKER] post-only rejected for {futures_sym} ({e}) — MARKET fallback")
+            return None
+
+        oid = order.get("orderId")
+        deadline = _t.time() + wait_sec
+        while _t.time() < deadline:
+            _t.sleep(poll)
+            try:
+                st = client.futures_get_order(symbol=futures_sym, orderId=oid)
+            except Exception:
+                continue
+            status = st.get("status")
+            if status == "FILLED":
+                logger.info(f"  [MAKER] ✓ post-only FILLED {futures_sym} @ {st.get('avgPrice')} (saved taker fee)")
+                return st
+            if status in ("CANCELED", "EXPIRED", "REJECTED"):
+                logger.info(f"  [MAKER] post-only {status} for {futures_sym} — MARKET fallback")
+                return None
+
+        # Timed out unfilled (or partial) → cancel remainder and fall back to MARKET.
+        try:
+            client.futures_cancel_order(symbol=futures_sym, orderId=oid)
+        except Exception:
+            pass
+        try:
+            final = client.futures_get_order(symbol=futures_sym, orderId=oid)
+            if final.get("status") == "FILLED":
+                # Filled in the race between timeout and cancel.
+                return final
+            executed = float(final.get("executedQty", 0) or 0)
+            if executed > 0:
+                # Partial maker fill: top up the remainder at MARKET so we reach
+                # target size. Return None lets caller MARKET the FULL qty, which
+                # would double-fill — so handle the partial here explicitly.
+                remaining = self._round_qty(futures_sym, quantity - executed)
+                if remaining > 0:
+                    client.futures_create_order(
+                        symbol=futures_sym, side=side, type="MARKET",
+                        quantity=remaining, positionSide=position_side,
+                    )
+                logger.info(f"  [MAKER] partial maker {executed}, topped up {remaining} at MARKET")
+                return final
+        except Exception as e:
+            logger.warning(f"  [MAKER] reconcile error for {futures_sym} ({e}) — MARKET fallback for full qty")
+        return None
 
     def _safe_create_order(self, client, order_params):
         """Try placing an order and dynamically reduce precision if Binance complains about it."""
