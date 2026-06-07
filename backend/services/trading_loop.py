@@ -73,6 +73,10 @@ class TradingLoopService:
         # Cooldown tracker: symbol → datetime when SL/emergency exit fired
         # Prevents immediate re-entry after a losing close (30 min cooldown)
         self._sl_cooldown: dict = {}
+        # Trailing-stop high/low-water marks, keyed by trade id → extreme price
+        # reached since entry (max for longs, min for shorts). In-memory only;
+        # reconstructed lazily from entry/current price on first sight.
+        self._high_water: dict = {}
 
     @property
     def status(self) -> dict:
@@ -737,10 +741,91 @@ class TradingLoopService:
             logger.warning(f"Failed to save portfolio snapshot: {e}")
             db.rollback()
 
+    def _apply_trailing_stop(self, db, symbol: str, bars: list[dict]):
+        """Ratchet-only ATR trailing stop.
+
+        Once a position has moved `trail_activation_atr` x ATR into profit, the
+        stop trails the high-water mark by `trail_atr_mult` x ATR and only ever
+        tightens (never loosens). Writes the new level into Trade.stop_loss so
+        the existing _check_sl_tp close path enforces it. FAILS SAFE: any error
+        leaves the existing stop untouched (never widens or removes a stop).
+        """
+        cfg = self.risk_config
+        if not getattr(cfg, "trailing_stop_enabled", False):
+            return
+        if not bars or len(bars) < 16:
+            return
+        try:
+            current_price = bars[-1]["close"]
+
+            # ATR over the same window the decision engine uses
+            highs = [b["high"] for b in bars[-15:]]
+            lows = [b["low"] for b in bars[-15:]]
+            closes = [b["close"] for b in bars[-16:-1]]
+            trs = []
+            for h, l, c in zip(highs, lows, closes):
+                trs.append(max(h - l, abs(h - c), abs(l - c)))
+            atr = sum(trs) / len(trs) if trs else 0.0
+            if atr <= 0:
+                atr = current_price * 0.02
+
+            activation_dist = cfg.trail_activation_atr * atr
+            trail_dist = cfg.trail_atr_mult * atr
+
+            trades = (
+                db.query(Trade)
+                .filter(Trade.symbol == symbol, Trade.status.in_(["open", "filled"]))
+                .all()
+            )
+            for trade in trades:
+                if not trade.entry_price:
+                    continue
+
+                if trade.direction == "BUY":
+                    # Track the highest price seen since entry
+                    hw = self._high_water.get(trade.id, max(trade.entry_price, current_price))
+                    hw = max(hw, current_price)
+                    self._high_water[trade.id] = hw
+
+                    # Only trail once price has advanced enough into profit
+                    if hw - trade.entry_price < activation_dist:
+                        continue
+                    candidate = hw - trail_dist
+                    # Never above current price; never loosen an existing stop
+                    candidate = min(candidate, current_price)
+                    old_stop = trade.stop_loss if trade.stop_loss is not None else float("-inf")
+                    if candidate > old_stop:
+                        trade.stop_loss = candidate
+                        logger.info(
+                            f"  [ {symbol} ] TRAIL ↑ stop {old_stop if old_stop != float('-inf') else 'None'} "
+                            f"-> {candidate:.6f} (hw={hw:.6f}, atr={atr:.6f})"
+                        )
+                else:  # SHORT
+                    lw = self._high_water.get(trade.id, min(trade.entry_price, current_price))
+                    lw = min(lw, current_price)
+                    self._high_water[trade.id] = lw
+
+                    if trade.entry_price - lw < activation_dist:
+                        continue
+                    candidate = lw + trail_dist
+                    candidate = max(candidate, current_price)
+                    old_stop = trade.stop_loss if trade.stop_loss is not None else float("inf")
+                    if candidate < old_stop:
+                        trade.stop_loss = candidate
+                        logger.info(
+                            f"  [ {symbol} ] TRAIL ↓ stop {old_stop if old_stop != float('inf') else 'None'} "
+                            f"-> {candidate:.6f} (lw={lw:.6f}, atr={atr:.6f})"
+                        )
+        except Exception as e:
+            logger.warning(f"  [ {symbol} ] trailing-stop error (stop unchanged): {e}")
+
     def _check_sl_tp(self, db, symbol: str, bars: list[dict]):
         """Check stop-loss and take-profit for open positions."""
         if not bars:
             return
+        # Ratchet the trailing stop up/down BEFORE evaluating the crossing,
+        # so a profit-locked stop can fire in the same cycle.
+        self._apply_trailing_stop(db, symbol, bars)
         current_price = bars[-1]["close"]
         trades = (
             db.query(Trade)
@@ -787,6 +872,7 @@ class TradingLoopService:
                     trade.status = "closed"
                     trade.closed_at = datetime.now(timezone.utc)
                     trade.notes = (trade.notes or "") + f" | Closed via SL/TP ({res.mode})"
+                    self._high_water.pop(trade.id, None)
                     if self._pyramid_mode and trade.symbol in self._pyramid_layers:
                         del self._pyramid_layers[trade.symbol]
                         logger.info(f"  [ {trade.symbol} ] Pyramid layers cleared (SL/TP hit)")
