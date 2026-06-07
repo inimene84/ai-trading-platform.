@@ -263,16 +263,26 @@ class TradingLoopService:
         # ── C8: ACCOUNT-LEVEL KILL SWITCH ──────────────────────────────────
         try:
             _acct = binance_futures_broker._get_client().futures_account()
-            _equity = float(_acct.get('totalMarginBalance', 0))
             _kill_floor = self.risk_config.kill_floor_usdt
-            if _equity > 0 and _equity < _kill_floor:
-                logger.critical(
-                    f"[KILL SWITCH] Equity ${_equity:.2f} < floor ${_kill_floor:.2f} — STOPPING LOOP"
+            # Only act on a VALID reading. A missing field means malformed/partial
+            # response — treat as "unknown" and skip rather than reading 0 and
+            # either false-triggering or (worse) silently bypassing.
+            if _acct is None or 'totalMarginBalance' not in _acct:
+                logger.warning(
+                    "[KILL SWITCH] Skipped: futures_account() returned no totalMarginBalance field"
                 )
-                self._state = "stopped"
-                self._running = False
-                self._error = "KILL_SWITCH_TRIGGERED"
-                return {"signals": 0, "trades": 0, "kill_switch": True}
+            else:
+                _equity = float(_acct.get('totalMarginBalance') or 0.0)
+                # Trigger on ANY valid equity at/below floor — including $0.00.
+                # A drained/empty account ($0) is exactly when the loop MUST stop.
+                if _equity <= _kill_floor:
+                    logger.critical(
+                        f"[KILL SWITCH] Equity ${_equity:.2f} <= floor ${_kill_floor:.2f} — STOPPING LOOP"
+                    )
+                    self._state = "stopped"
+                    self._running = False
+                    self._error = "KILL_SWITCH_TRIGGERED"
+                    return {"signals": 0, "trades": 0, "kill_switch": True}
         except Exception as _ks_e:
             logger.warning(f"[KILL SWITCH] Check skipped: {_ks_e}")
         # ─────────────────────────────────────────────────────────────────────

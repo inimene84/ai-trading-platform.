@@ -26,8 +26,8 @@ services:
       GROQ_API_KEY: sk-1234 # LiteLLM master key
       PERSONA_LLM_BASE_URL: http://litellm:4000/v1
       REDIS_URL: redis://redis:6379/0
-      # Safety: disable risk guard during testing (re-enable for live trading by setting DISABLE_RISK_GUARD=false in .env)
-      DISABLE_RISK_GUARD: ${DISABLE_RISK_GUARD:-true}
+      # Safety: risk guard ENABLED by default. Only disable for explicit testing by setting DISABLE_RISK_GUARD=true in .env
+      DISABLE_RISK_GUARD: ${DISABLE_RISK_GUARD:-false}
     command: ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000"]
     healthcheck:
       test:

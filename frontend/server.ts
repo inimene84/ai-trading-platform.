@@ -13,7 +13,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-const PORT = 5173;
+const PORT = Number(process.env.FRONTEND_PORT || process.env.PORT || 5173);
 
 app.use(cors());
 app.use(express.json());
@@ -252,6 +252,16 @@ async function startServer() {
     });
   }
 
+
+  httpServer.on('error', (err: NodeJS.ErrnoException) => {
+    if (err.code === 'EADDRINUSE') {
+      console.error(`Port ${PORT} is already in use. Another frontend instance is likely running.`);
+      console.error(`Set FRONTEND_PORT to a free port, or stop the existing process. Exiting cleanly.`);
+      process.exit(1);
+    }
+    console.error('HTTP server error:', err);
+    process.exit(1);
+  });
 
   httpServer.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on http://localhost:${PORT}`);
