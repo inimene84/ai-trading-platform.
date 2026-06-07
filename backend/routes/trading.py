@@ -42,9 +42,9 @@ router = APIRouter(prefix="/trading", tags=["trading"])
 
 
 def _to_yfinance_symbol(symbol: str) -> str:
-    """Convert Binance-native BTCUSDT → yfinance BTC-USD format."""
+    """Convert Binance-native BTCUSDT/BTCUSDC → yfinance BTC-USD format."""
     s = symbol.upper().strip()
-    if s.endswith('USDT'):
+    if s.endswith('USDT') or s.endswith('USDC'):
         return s[:-4] + '-USD'
     if s.endswith('BUSD'):
         return s[:-4] + '-USD'

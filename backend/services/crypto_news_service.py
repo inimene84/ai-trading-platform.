@@ -158,7 +158,13 @@ class CryptoNewsService:
                     text_lower = f"{title} {body}".lower()
                     matched = False
                     for sym in symbols:
-                        keywords = SYMBOL_KEYWORDS.get(sym, [sym.lower().replace('usdt', '')])
+                        # Normalize quote asset (USDC↔USDT) so the USDT-keyed
+                        # keyword map also serves USDC perpetuals (EEA/MiCA).
+                        lookup = sym.upper()
+                        if lookup.endswith('USDC'):
+                            lookup = lookup[:-4] + 'USDT'
+                        base = lookup.lower().replace('usdt', '')
+                        keywords = SYMBOL_KEYWORDS.get(lookup, [base])
                         if any(kw in text_lower for kw in keywords):
                             matched = True
                             article['related_symbol'] = sym
