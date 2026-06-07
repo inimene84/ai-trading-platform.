@@ -45,9 +45,15 @@ class RiskConfig(BaseSettings):
     opinion_override_margin: float = 0.15
     opinion_entry_min: float = 0.25
     
-    # SL/TP
-    sl_atr_mult: float = 1.0
-    tp_atr_mult: float = 2.5
+    # SL/TP (env-tunable so the payoff geometry can be tuned without a rebuild)
+    sl_atr_mult: float = PydanticField(
+        default=1.0,
+        validation_alias=AliasChoices("sl_atr_mult", "SL_ATR_MULT"),
+    )
+    tp_atr_mult: float = PydanticField(
+        default=2.5,
+        validation_alias=AliasChoices("tp_atr_mult", "TP_ATR_MULT"),
+    )
 
     # ── Min-edge gate (fee-churn killer) ──
     # 81-day history: 52% of trades were scratches (|PnL| <= $0.20) and
@@ -93,8 +99,14 @@ class RiskConfig(BaseSettings):
         validation_alias=AliasChoices("trail_activation_atr", "TRAIL_ACTIVATION_ATR"),
     )
     # Trailing distance behind the high-water mark, in ATR units.
+    # MUST be < trail_activation_atr, otherwise the trail locks a LOSS at
+    # activation and can only lock +1R once price reaches the TP itself — which
+    # caps every realized winner below the 2.5R the min-edge gate sized for and
+    # bleeds refunded margin (leak #4). At 0.8 with activation 1.0 the trail
+    # locks ~+0.2 ATR profit the moment it arms, and banks ~+1.2R on a 2-ATR
+    # push that reverses, so winners >= losers.
     trail_atr_mult: float = PydanticField(
-        default=1.5,
+        default=0.8,
         validation_alias=AliasChoices("trail_atr_mult", "TRAIL_ATR_MULT"),
     )
 

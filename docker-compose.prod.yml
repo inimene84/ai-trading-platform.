@@ -34,6 +34,13 @@ services:
       # Liquidity floor. 3M keeps all 9 USDC majors (USDC books are thinner than
       # USDT twins; 50M would silently drop ADA/AVAX/LINK/UNI). Override in .env.
       MIN_24H_QUOTE_VOLUME_USDT: ${MIN_24H_QUOTE_VOLUME_USDT:-3000000}
+      # Payoff geometry (leak #4). TRAIL_ATR_MULT MUST be < TRAIL_ACTIVATION_ATR
+      # or the trail locks a loss at activation and caps winners below the 2.5R
+      # TP -> refunded margin bleeds out. 0.8 banks ~+1.2R on a 2-ATR reversal.
+      SL_ATR_MULT: ${SL_ATR_MULT:-1.0}
+      TP_ATR_MULT: ${TP_ATR_MULT:-2.5}
+      TRAIL_ACTIVATION_ATR: ${TRAIL_ACTIVATION_ATR:-1.0}
+      TRAIL_ATR_MULT: ${TRAIL_ATR_MULT:-0.8}
     command: ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000"]
     healthcheck:
       test:
