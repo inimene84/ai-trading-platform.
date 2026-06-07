@@ -120,3 +120,65 @@ def test_risk_guard_blocks_excessive_daily_loss(db_session):
     
     with pytest.raises(RiskBreach, match="daily loss exceeded"):
         enforce_risk_limits(db_session, cfg, [], snap_now)
+
+
+def test_risk_guard_blocks_excessive_directional_exposure(db_session):
+    # Exposure cap of $500; two open trades totalling $600 notional must trip.
+    cfg = RiskConfig(max_directional_exposure_usdt=500.0, max_positions=10, max_open_positions=10)
+    trades = [
+        Trade(symbol="BTCUSDT", direction="BUY", quantity=0.005, entry_price=60000.0, status="open"),  # $300
+        Trade(symbol="ETHUSDT", direction="BUY", quantity=0.1, entry_price=3000.0, status="open"),      # $300
+    ]
+    with pytest.raises(RiskBreach, match="directional exposure exceeded"):
+        enforce_risk_limits(db_session, cfg, trades, None)
+
+
+def test_risk_guard_allows_exposure_within_cap(db_session):
+    cfg = RiskConfig(max_directional_exposure_usdt=500.0, max_positions=10, max_open_positions=10)
+    trades = [
+        Trade(symbol="BTCUSDT", direction="BUY", quantity=0.001, entry_price=60000.0, status="open"),  # $60
+    ]
+    enforce_risk_limits(db_session, cfg, trades, None)  # no raise
+
+
+def test_disable_risk_guard_ignored_in_live_mode(db_session, monkeypatch):
+    # DISABLE_RISK_GUARD must NOT bypass guards when trading live.
+    monkeypatch.setenv("DISABLE_RISK_GUARD", "true")
+    monkeypatch.setenv("PAPER_TRADING", "false")
+    monkeypatch.setenv("DRY_RUN_ALL", "false")
+    cfg = RiskConfig(max_positions=1, max_open_positions=1)
+    trades = [
+        Trade(symbol="BTCUSDT", direction="BUY", quantity=0.1, entry_price=1.0, status="open"),
+        Trade(symbol="ETHUSDT", direction="BUY", quantity=0.1, entry_price=1.0, status="open"),
+    ]
+    with pytest.raises(RiskBreach, match="Max open positions exceeded"):
+        enforce_risk_limits(db_session, cfg, trades, None)
+
+
+def test_disable_risk_guard_honored_in_paper_mode(db_session, monkeypatch):
+    monkeypatch.setenv("DISABLE_RISK_GUARD", "true")
+    monkeypatch.setenv("DRY_RUN_ALL", "true")  # -> paper mode
+    cfg = RiskConfig(max_positions=1, max_open_positions=1)
+    trades = [Trade(symbol="BTCUSDT", direction="BUY", quantity=0.1, entry_price=1.0, status="open")] * 3
+    # Disabled in paper mode -> returns without raising even though over cap.
+    enforce_risk_limits(db_session, cfg, trades, None)
+
+
+def test_daily_loss_uses_prior_day_baseline_when_no_snapshot_today(db_session):
+    # Cold start of a new day: no snapshot row persisted for today yet, but the
+    # caller passes a live latest_snapshot reflecting current equity. The check
+    # must fall back to yesterday's close as baseline instead of skipping
+    # entirely (the old fail-open behaviour). latest_snapshot is intentionally
+    # NOT added to the DB, mirroring a live snapshot not yet committed.
+    cfg = RiskConfig(max_daily_loss_pct=5.0, max_portfolio_drawdown_pct=99.0,
+                     max_positions=10, max_open_positions=10)
+    start_today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    # Yesterday's close persisted at 10000 (the fallback baseline)
+    db_session.add(PortfolioSnapshot(total_value=10000.0, cash=10000.0,
+                                     timestamp=start_today - timedelta(hours=2)))
+    db_session.commit()
+    # Live equity now 9400 (-6%), passed in but not persisted -> no today row.
+    live = PortfolioSnapshot(total_value=9400.0, cash=9400.0,
+                             timestamp=datetime.now(timezone.utc))
+    with pytest.raises(RiskBreach, match="daily loss exceeded"):
+        enforce_risk_limits(db_session, cfg, [], live)
