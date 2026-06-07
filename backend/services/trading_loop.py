@@ -935,7 +935,7 @@ class TradingLoopService:
         from datetime import datetime, timezone
         # Crypto is always open - detect USDT pairs and common crypto
         s = symbol.upper()
-        if s.endswith('USDT') or s.endswith('BUSD') or s.endswith('BTC'):
+        if s.endswith('USDT') or s.endswith('USDC') or s.endswith('BUSD') or s.endswith('BTC'):
             return True
         crypto = ['BTC-USD', 'ETH-USD', 'SOL-USD', 'BNB-USD', 'XRP-USD']
         if symbol in crypto or (symbol.endswith('-USD') and '=' not in symbol):
@@ -957,9 +957,9 @@ class TradingLoopService:
 
     @staticmethod
     def _to_yfinance_symbol(symbol: str) -> str:
-        """Convert Binance-native BTCUSDT → yfinance BTC-USD format."""
+        """Convert Binance-native BTCUSDT/BTCUSDC → yfinance BTC-USD format."""
         s = symbol.upper().strip()
-        if s.endswith('USDT'):
+        if s.endswith('USDT') or s.endswith('USDC'):
             return s[:-4] + '-USD'
         if s.endswith('BUSD'):
             return s[:-4] + '-USD'

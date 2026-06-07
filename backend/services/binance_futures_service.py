@@ -48,6 +48,11 @@ SYMBOL_MAP = {
     'UNIUSDT': 'UNIUSDT', 'ATOMUSDT': 'ATOMUSDT', 'NEARUSDT': 'NEARUSDT',
     'OPUSDT': 'OPUSDT', 'ARBUSDT': 'ARBUSDT', 'APTUSDT': 'APTUSDT',
     'INJUSDT': 'INJUSDT', 'SUIUSDT': 'SUIUSDT',
+    # USDC-margined perpetuals (MiCA / EEA — USDT is restricted for EU users).
+    # Native passthrough + yfinance-style alias so either form resolves to USDC.
+    'BTCUSDC': 'BTCUSDC', 'ETHUSDC': 'ETHUSDC', 'SOLUSDC': 'SOLUSDC',
+    'BNBUSDC': 'BNBUSDC', 'XRPUSDC': 'XRPUSDC', 'ADAUSDC': 'ADAUSDC',
+    'AVAXUSDC': 'AVAXUSDC', 'LINKUSDC': 'LINKUSDC', 'UNIUSDC': 'UNIUSDC',
 }
 
 # Forex / stock symbols not tradeable on Binance Futures — skip gracefully
@@ -62,6 +67,10 @@ MIN_QTY = {
     'UNIUSDT': 0.1,   'ATOMUSDT': 0.01, 'NEARUSDT': 0.1,
     'OPUSDT': 0.1,    'ARBUSDT': 1.0,   'APTUSDT': 0.1,
     'INJUSDT': 0.1,   'SUIUSDT': 1.0,
+    # USDC perpetuals (real LOT_SIZE.minQty from /fapi/v1/exchangeInfo)
+    'BTCUSDC': 0.001, 'ETHUSDC': 0.001, 'SOLUSDC': 0.01,
+    'BNBUSDC': 0.01,  'XRPUSDC': 0.1,   'ADAUSDC': 0.1,
+    'AVAXUSDC': 0.01, 'LINKUSDC': 0.01, 'UNIUSDC': 1.0,
 }
 
 # Precision (decimal places) for quantity
@@ -73,6 +82,10 @@ QTY_PRECISION = {
     'UNIUSDT': 1, 'ATOMUSDT': 2, 'NEARUSDT': 1,
     'OPUSDT': 1, 'ARBUSDT': 0, 'APTUSDT': 1,
     'INJUSDT': 1,   'SUIUSDT': 0,
+    # USDC perpetuals (real quantityPrecision from /fapi/v1/exchangeInfo)
+    'BTCUSDC': 3, 'ETHUSDC': 3, 'SOLUSDC': 2,
+    'BNBUSDC': 2, 'XRPUSDC': 1, 'ADAUSDC': 1,
+    'AVAXUSDC': 2, 'LINKUSDC': 2, 'UNIUSDC': 0,
 }
 
 # Price precision per symbol (loaded from futures_exchange_info at runtime)
@@ -88,6 +101,10 @@ TICK_SIZES = {
     'UNIUSDT':  0.001,     'ATOMUSDT': 0.001,    'NEARUSDT': 0.0001,
     'OPUSDT':   0.0001,    'ARBUSDT':  0.0001,   'APTUSDT':  0.001,
     'INJUSDT':  0.001,     'SUIUSDT':  0.00001,
+    # USDC perpetuals (real PRICE_FILTER.tickSize from /fapi/v1/exchangeInfo)
+    'BTCUSDC':  0.1,       'ETHUSDC':  0.01,     'SOLUSDC':  0.01,
+    'BNBUSDC':  0.01,      'XRPUSDC':  0.0001,   'ADAUSDC':  0.0001,
+    'AVAXUSDC': 0.001,     'LINKUSDC': 0.001,    'UNIUSDC':  0.001,
 }
 
 
@@ -139,9 +156,14 @@ class BinanceFuturesService:
             return None
         if symbol in SYMBOL_MAP:
             return SYMBOL_MAP[symbol]
-        # Generic: ETH-USD → ETHUSDT, BTC/USDT → BTCUSDT
-        cleaned = symbol.replace('-USD', 'USDT').replace('=X', '').replace('/', '').upper()
-        if not cleaned.endswith('USDT'):
+        # Generic: ETH-USD → ETHUSDT, BTC/USDT → BTCUSDT, BTC/USDC → BTCUSDC
+        cleaned = symbol.replace('=X', '').replace('/', '').upper()
+        # Preserve an explicit USDC/USDT quote; only the legacy yfinance '-USD'
+        # form (no explicit stablecoin) defaults to USDT.
+        if cleaned.endswith('USDC') or cleaned.endswith('USDT'):
+            return cleaned
+        cleaned = cleaned.replace('-USD', 'USDT')
+        if not (cleaned.endswith('USDT') or cleaned.endswith('USDC')):
             cleaned += 'USDT'
         return cleaned
 
@@ -202,6 +224,7 @@ class BinanceFuturesService:
         # Per-symbol min notional (Binance varies: BTC=50, ETH/LTC/LINK=20, others=5)
         min_notional_map = {
             'BTCUSDT': 50.0, 'ETHUSDT': 20.0, 'LTCUSDT': 20.0, 'LINKUSDT': 20.0,
+            'BTCUSDC': 50.0, 'ETHUSDC': 20.0,
         }
         min_notional = min_notional_map.get(sym, 5.0)
         if price > 0:

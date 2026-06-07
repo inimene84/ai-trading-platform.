@@ -32,6 +32,9 @@ services:
       PERSONA_LLM_BASE_URL: http://litellm:4000/v1
       # Safety: risk guard ENABLED by default. Only disable for explicit testing by setting DISABLE_RISK_GUARD=true in .env
       DISABLE_RISK_GUARD: ${DISABLE_RISK_GUARD:-false}
+      # MiCA/EEA: trade USDC-margined perpetuals (USDT restricted for EU users).
+      # 9 USDC pairs (DOT has no USDC perp). Override via TRADING_SYMBOLS in .env.
+      TRADING_SYMBOLS: ${TRADING_SYMBOLS:-BTCUSDC,ETHUSDC,SOLUSDC,BNBUSDC,XRPUSDC,ADAUSDC,AVAXUSDC,LINKUSDC,UNIUSDC}
     command:
       - uvicorn
       - backend.main:app
