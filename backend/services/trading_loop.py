@@ -258,8 +258,15 @@ class TradingLoopService:
             self._error = f"RISK_BREACH: {rb.reason}"
             return {"signals": 0, "trades": 0, "risk_breach": True}
         except Exception as e:
-            logger.error(f"[RISK GUARD] Failed to check limits: {e}")
+            # FAIL CLOSED: a transient DB error / bad snapshot in the guard must
+            # NOT let an unguarded trading cycle proceed. Previously this branch
+            # only logged and fell through to order placement — meaning any
+            # hiccup in the risk check silently disabled all risk enforcement
+            # for that cycle. Skip the entire cycle instead.
+            logger.error(f"[RISK GUARD] Failed to check limits — skipping cycle (fail-closed): {e}")
             db_risk.rollback()
+            self._state = "idle"
+            return {"signals": 0, "trades": 0, "risk_guard_error": True}
         finally:
             db_risk.close()
         # ─────────────────────────────────────────────────────────────────────
