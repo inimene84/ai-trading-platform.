@@ -35,6 +35,9 @@ services:
       # MiCA/EEA: trade USDC-margined perpetuals (USDT restricted for EU users).
       # 9 USDC pairs (DOT has no USDC perp). Override via TRADING_SYMBOLS in .env.
       TRADING_SYMBOLS: ${TRADING_SYMBOLS:-BTCUSDC,ETHUSDC,SOLUSDC,BNBUSDC,XRPUSDC,ADAUSDC,AVAXUSDC,LINKUSDC,UNIUSDC}
+      # Liquidity floor. 3M keeps all 9 USDC majors (USDC books are thinner than
+      # USDT twins; 50M would silently drop ADA/AVAX/LINK/UNI). Override in .env.
+      MIN_24H_QUOTE_VOLUME_USDT: ${MIN_24H_QUOTE_VOLUME_USDT:-3000000}
     command:
       - uvicorn
       - backend.main:app
