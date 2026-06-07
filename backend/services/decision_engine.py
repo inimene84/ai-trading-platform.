@@ -159,7 +159,7 @@ class DecisionEngine:
         # 7. Create Decision
         return self._create_entry_decision(symbol, bars, signal, signal.signal, is_pyramid=False)
 
-    def _create_entry_decision(self, symbol: str, bars: List[Dict[str, Any]], signal: Any, direction: str, is_pyramid: bool) -> Decision:
+    def _create_entry_decision(self, symbol: str, bars: List[Dict[str, Any]], signal: Any, direction: str, is_pyramid: bool) -> Optional[Decision]:
         current_price = bars[-1]["close"]
         entry_price = signal.entry_price or current_price
         
@@ -188,6 +188,10 @@ class DecisionEngine:
             sl = max(sl, entry_price + (atr * self.config.sl_atr_mult))
             tp = min(tp, entry_price - (atr * self.config.tp_atr_mult))
 
+        # Min-edge / fee-churn gate: reject trades whose TP can't clear cost.
+        if not self._passes_min_edge(symbol, entry_price, tp, quantity):
+            return None
+
         return Decision(
             action=direction,
             symbol=symbol,
@@ -199,3 +203,35 @@ class DecisionEngine:
             reasoning=f"Regime: {self.regime_detector.detect(bars).regime if bars else 'N/A'}",
             is_pyramid=is_pyramid
         )
+
+    def _passes_min_edge(self, symbol: str, entry_price: float, tp: float, quantity: float) -> bool:
+        """Min-edge / fee-churn gate.
+
+        A trade is only worth taking if its gross expected move to TP clears a
+        multiple of the round-trip cost (fees + slippage). Tight-TP scratch
+        entries that can never out-earn their own fees are rejected here.
+        FAILS OPEN: any bad input / disabled config -> allow the trade.
+        """
+        try:
+            mult = getattr(self.config, "min_edge_fee_mult", 0.0) or 0.0
+            if mult <= 0:
+                return True  # gate disabled
+            if not entry_price or not quantity or tp is None:
+                return True  # missing data -> don't block
+            notional = entry_price * quantity
+            if notional <= 0:
+                return True
+            gross_tp_profit = abs(tp - entry_price) * quantity
+            roundtrip_cost = self.config.roundtrip_cost_rate * notional
+            required = mult * roundtrip_cost
+            if gross_tp_profit < required:
+                logger.info(
+                    f"  [ {symbol} ] SKIP (min-edge): TP profit ${gross_tp_profit:.4f} "
+                    f"< {mult:.1f}x round-trip cost ${roundtrip_cost:.4f} "
+                    f"(need >= ${required:.4f})"
+                )
+                return False
+            return True
+        except Exception as e:
+            logger.warning(f"  [ {symbol} ] min-edge gate error (allowing trade): {e}")
+            return True
