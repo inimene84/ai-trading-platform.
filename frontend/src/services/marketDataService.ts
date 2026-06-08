@@ -1,3 +1,5 @@
+import { fetchBinance } from './binanceProxy';
+
 type KlineCallback = (candle: any) => void;
 type DepthCallback = (depth: any) => void;
 
@@ -175,7 +177,7 @@ class MarketDataService {
     if (this.provider === 'binance') {
       try {
         if (this.cachedSymbols.length === 0) {
-          const response = await fetch('https://api.binance.com/api/3/exchangeInfo');
+          const response = await fetchBinance('https://api.binance.com/api/v3/exchangeInfo');
           const data = await response.json();
           this.cachedSymbols = data.symbols.map((s: any) => ({
             symbol: s.symbol,

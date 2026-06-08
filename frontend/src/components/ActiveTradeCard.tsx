@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { X, Edit3, TrendingUp, TrendingDown, Clock, ChevronUp, ChevronDown } from 'lucide-react';
+import { fetchBinance } from '../services/binanceProxy';
 
 export interface ActiveTrade {
   id: number | string;
@@ -100,7 +101,7 @@ export function ActiveTradeCard({ trade, onClose, onModify }: ActiveTradeCardPro
           p = data.price ?? data.current_price ?? data.last ?? null;
         }
       } else {
-        const res = await fetch(
+        const res = await fetchBinance(
           `https://api.binance.com/api/v3/ticker/price?symbol=${binanceSym}`
         );
         if (res.ok) {
