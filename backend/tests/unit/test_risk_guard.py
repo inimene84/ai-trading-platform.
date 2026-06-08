@@ -62,6 +62,45 @@ def test_risk_guard_blocks_excessive_positions(db_session):
     with pytest.raises(RiskBreach, match="Max open positions exceeded"):
         enforce_risk_limits(db_session, cfg, trades, None)
 
+
+def test_risk_guard_counts_distinct_symbols_not_dca_layers(db_session):
+    """Regression: pyramid-DCA layers of the SAME symbol are ONE position.
+
+    Each DCA entry is its own Trade row. Counting raw rows (len(open_trades))
+    over-counts and false-triggers the cap. The guard must count distinct
+    symbols, matching the trading loop's func.count(func.distinct(Trade.symbol)).
+
+    Real incident: 6 live positions held 11 DB rows (AVAX had 4 layers); the
+    old len()-based check raised 11 > 10 and killed the live loop on a flat book.
+    """
+    cfg = RiskConfig(
+        max_position_risk_pct=1.0,
+        max_portfolio_drawdown_pct=20.0,
+        max_daily_loss_pct=5.0,
+        max_positions=10,
+        max_open_positions=10,
+        sl_cooldown_minutes=30,
+    )
+
+    # 11 rows across only 6 distinct symbols (AVAX = 4 DCA layers) → 6 <= 10, OK.
+    trades = [
+        Trade(symbol="AVAXUSDT", direction="SELL", quantity=3.0, entry_price=6.78, status="filled"),
+        Trade(symbol="AVAXUSDT", direction="SELL", quantity=3.0, entry_price=6.80, status="filled"),
+        Trade(symbol="AVAXUSDT", direction="SELL", quantity=3.0, entry_price=6.77, status="filled"),
+        Trade(symbol="AVAXUSDT", direction="SELL", quantity=3.0, entry_price=6.73, status="filled"),
+        Trade(symbol="LINKUSDT", direction="BUY", quantity=3.18, entry_price=7.88, status="filled"),
+        Trade(symbol="LINKUSDT", direction="BUY", quantity=3.16, entry_price=7.91, status="filled"),
+        Trade(symbol="ETHUSDT", direction="BUY", quantity=0.015, entry_price=1674.5, status="filled"),
+        Trade(symbol="ETHUSDT", direction="BUY", quantity=0.015, entry_price=1682.9, status="filled"),
+        Trade(symbol="BNBUSDT", direction="BUY", quantity=0.04, entry_price=606.5, status="filled"),
+        Trade(symbol="BTCUSDT", direction="BUY", quantity=0.001, entry_price=63196.9, status="filled"),
+        Trade(symbol="SOLUSDT", direction="BUY", quantity=0.4, entry_price=66.22, status="filled"),
+    ]
+
+    # Must NOT raise: 6 distinct symbols within the cap of 10.
+    enforce_risk_limits(db_session, cfg, trades, None)
+
+
 def test_risk_guard_blocks_excessive_drawdown(db_session):
     cfg = RiskConfig(
         max_position_risk_pct=1.0,
