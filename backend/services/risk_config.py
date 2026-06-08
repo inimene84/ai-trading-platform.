@@ -130,6 +130,26 @@ class RiskConfig(BaseSettings):
         default=True,
         validation_alias=AliasChoices("trailing_stop_enabled", "TRAILING_STOP_ENABLED"),
     )
+    # ── Exchange-native trailing stop (Binance TRAILING_STOP_MARKET) ──
+    # Placed at entry so the stop trails the market continuously on the exchange
+    # (tick-by-tick) and keeps protecting profit even if the bot is offline —
+    # unlike the software ratchet which only updates once per 15-min cycle.
+    # When enabled, the per-cycle software ratchet is skipped to avoid two
+    # competing trail mechanisms; the hard STOP_MARKET stays as a catastrophe floor.
+    native_trailing_enabled: bool = PydanticField(
+        default=True,
+        validation_alias=AliasChoices("native_trailing_enabled", "NATIVE_TRAILING_ENABLED"),
+    )
+    # Binance callbackRate: trail distance as a percent of price (0.1–5.0).
+    trailing_callback_rate: float = PydanticField(
+        default=1.0,
+        validation_alias=AliasChoices("trailing_callback_rate", "TRAILING_CALLBACK_RATE"),
+    )
+    # Activate the trail only after price moves this fraction in favor (0 = immediate).
+    trailing_activation_pct: float = PydanticField(
+        default=0.005,
+        validation_alias=AliasChoices("trailing_activation_pct", "TRAILING_ACTIVATION_PCT"),
+    )
     # How far into profit (in ATR units) before the trail activates.
     trail_activation_atr: float = PydanticField(
         default=1.0,
