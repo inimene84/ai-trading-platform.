@@ -228,7 +228,13 @@ async def get_status():
     if os.getenv('XAI_API_KEY') and os.getenv('XAI_API_KEY') != 'your_xai_api_key_here':
         llm_providers.append({'name': 'xAI (Grok)', 'model': os.getenv('XAI_MODEL', 'grok-beta'), 'status': 'configured', 'type': 'cloud'})
     if os.getenv('KIE_API_KEY') and os.getenv('KIE_API_KEY') != 'your_kie_api_key_here':
-        llm_providers.append({'name': 'Kie.ai', 'model': os.getenv('KIE_MODEL', 'opus-4.6'), 'status': 'configured', 'type': 'cloud'})
+        llm_providers.append({
+            'name': 'Kie.ai',
+            'model': os.getenv('KIE_MODEL', 'claude-sonnet-4-6'),
+            'status': 'configured',
+            'type': 'cloud',
+            'role': 'primary via LiteLLM',
+        })
     if os.getenv('ANTHROPIC_API_KEY') and os.getenv('ANTHROPIC_API_KEY') != 'your_anthropic_api_key_here':
         llm_providers.append({'name': 'Anthropic', 'model': 'claude', 'status': 'configured', 'type': 'cloud'})
     if os.getenv('OPENAI_API_KEY') and os.getenv('OPENAI_API_KEY') != 'your_openai_api_key_here':

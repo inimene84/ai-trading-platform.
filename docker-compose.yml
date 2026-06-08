@@ -26,10 +26,11 @@ services:
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
       KIE_API_KEY: ${KIE_API_KEY}
       LITELLM_API_KEY: ${LITELLM_API_KEY}
-      # Personas: KieAI Gemini 3 Flash via VPS LiteLLM proxy (cheap, 1h cache)
+      # PRIMARY LLM: Kie.ai Claude Sonnet 4.6 via LiteLLM proxy
       PERSONA_LLM_PROVIDER: litellm
-      PERSONA_LLM_MODEL: gemini-3-flash
+      PERSONA_LLM_MODEL: claude-sonnet
       PERSONA_LLM_BASE_URL: http://litellm:4000/v1
+      KIE_MODEL: claude-sonnet-4-6
       # Safety: risk guard ENABLED by default. Only disable for explicit testing by setting DISABLE_RISK_GUARD=true in .env
       DISABLE_RISK_GUARD: ${DISABLE_RISK_GUARD:-false}
       # MiCA/EEA: trade USDC-margined perpetuals (USDT restricted for EU users).
