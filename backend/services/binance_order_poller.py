@@ -73,6 +73,7 @@ async def _cancel_orphaned_orders(svc):
     for o in orders:
         sym = o.get("symbol")
         if sym in pos_syms:
+            logger.debug(f"Orphan reconcile: keeping protective orders for {sym} — position still open")
             continue  # live position — keep its protective orders
         if o.get("type") not in _PROTECTIVE_ORDER_TYPES:
             continue

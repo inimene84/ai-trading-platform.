@@ -256,6 +256,9 @@ class DecisionEngine:
                 # Cap per-trade notional at a multiple of equity (post-leverage)
                 max_notional = self.account_equity * self.config.max_trade_notional_equity_mult
                 notional = max(trade_usdt, min(notional, max_notional))
+        # Floor at Binance MIN_NOTIONAL ($20 for most symbols, $100 for BTC)
+        _bn_min = 100.0 if 'BTC' in symbol else 20.0
+        notional = max(notional, _bn_min)
         quantity = notional / entry_price if entry_price > 0 else 0
 
         # Min-edge / fee-churn gate: reject trades whose TP can't clear cost.

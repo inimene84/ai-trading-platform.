@@ -376,6 +376,9 @@ async def get_status():
         }
     }
 
+    from backend.services.trading_mode import get_trading_mode
+    _trading_mode = get_trading_mode()
+
     # Monitoring flags
     telegram = bool(os.getenv('TELEGRAM_BOT_TOKEN') and os.getenv('TELEGRAM_CHAT_ID'))
     influxdb = bool(os.getenv('INFLUXDB_TOKEN'))
@@ -384,8 +387,9 @@ async def get_status():
     return {
         'backend': 'online',
         'strategies_loaded': 5,
-        'dry_run': os.getenv('DRY_RUN_ALL', 'true') == 'true',
-        'mode': 'paper' if os.getenv('DRY_RUN_ALL', 'true') == 'true' else 'live',
+        'dry_run': _trading_mode.value != 'live',
+        'mode': _trading_mode.value,
+        'active_broker': os.getenv('ACTIVE_BROKER', 'binance_futures'),
         'llm_providers': llm_providers,
         'brokers': brokers,
         'data_providers': data_providers,
