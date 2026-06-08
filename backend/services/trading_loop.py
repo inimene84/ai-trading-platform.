@@ -682,6 +682,27 @@ class TradingLoopService:
                 cooldown_active=cooldown_active
             )
 
+            # Persist the evaluation for EVERY scanned symbol so the dashboard
+            # shows all pairs being analysed each cycle (not just executed ones).
+            try:
+                ev = getattr(decision_engine, "last_evaluation", None) or {}
+                if ev:
+                    db.add(TradingSignal(
+                        symbol=symbol,
+                        strategy=self._strategy_name,
+                        direction=ev.get("direction", "HOLD"),
+                        confidence=float(ev.get("confidence", 0.0)),
+                        entry_price=ev.get("entry_price"),
+                        stop_loss=ev.get("stop_loss"),
+                        take_profit=ev.get("take_profit"),
+                        status="executed" if ev.get("executed") else "evaluated",
+                        reasoning=ev.get("reason", ""),
+                    ))
+                    db.commit()
+            except Exception as _se:
+                logger.warning(f"  [ {symbol} ] signal persist failed: {_se}")
+                db.rollback()
+
             if decision:
                 _signals = 1
                 # Write signal to InfluxDB for Grafana dashboards
