@@ -308,7 +308,7 @@ _COIN_NAMES = {
     "BTC": "bitcoin", "ETH": "ethereum", "SOL": "solana", "BNB": "bnb",
     "XRP": "xrp", "ADA": "cardano", "DOGE": "dogecoin", "AVAX": "avalanche",
     "DOT": "polkadot", "LINK": "chainlink", "LTC": "litecoin", "UNI": "uniswap",
-    "MATIC": "polygon", "ATOM": "cosmos", "NEAR": "near",
+    "POL": "polygon", "ATOM": "cosmos", "NEAR": "near",
 }
 _BULL_WORDS = (
     "bullish", "rally", "surge", "breakout", "accumulat", "inflow", "upgrade",
