@@ -818,10 +818,10 @@ class TradingLoopService:
                 #    and overshoot the cap (race on shared self._open_count).
                 async with self._execution_lock:
                     # Re-check the position cap inside the lock with the freshest count
-                    if not existing and self._open_count >= self.config.max_positions:
+                    if not existing and self._open_count >= self.risk_config.max_positions:
                         logger.warning(
                             f"  [ {symbol} ] entry skipped: max positions "
-                            f"({self.config.max_positions}) reached at execution time"
+                            f"({self.risk_config.max_positions}) reached at execution time"
                         )
                         self._check_sl_tp(db, symbol, bars)
                         db.commit()
