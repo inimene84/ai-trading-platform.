@@ -8,7 +8,7 @@ import json
 import logging
 import os
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 import pandas as pd
@@ -121,6 +121,7 @@ class TradingLoopService:
         
         # Reconstruct pyramid layers from DB
         self._reconstruct_pyramid_layers()
+        self._reconstruct_cooldowns()
 
         self._task = asyncio.create_task(self._loop())
         logger.info(
@@ -128,6 +129,34 @@ class TradingLoopService:
             f"symbols={self._symbols}, strategy={strategy}"
         )
         return {"message": "Trading loop started", "status": self.status}
+
+    def _reconstruct_cooldowns(self):
+        """Repopulate SL cooldowns from recently-closed trades so a restart
+        doesn't immediately re-enter a symbol that just stopped out."""
+        db = SessionLocal()
+        try:
+            window_min = max(
+                getattr(self.risk_config, "sl_cooldown_minutes", 30),
+                getattr(self.risk_config, "opinion_close_cooldown_min", 30),
+            )
+            cutoff = datetime.now(timezone.utc) - timedelta(minutes=window_min)
+            recent = db.query(Trade).filter(
+                Trade.status == "closed", Trade.closed_at.isnot(None)
+            ).order_by(Trade.closed_at.desc()).limit(50).all()
+            restored = 0
+            for t in recent:
+                closed = t.closed_at
+                if closed and closed.tzinfo is None:
+                    closed = closed.replace(tzinfo=timezone.utc)
+                if closed and closed >= cutoff and t.symbol not in self._sl_cooldown:
+                    self._sl_cooldown[t.symbol] = closed
+                    restored += 1
+            if restored:
+                logger.info(f"Restored {restored} SL cooldown(s) from recent closed trades")
+        except Exception as e:
+            logger.warning(f"Failed to reconstruct cooldowns: {e}")
+        finally:
+            db.close()
 
     def _reconstruct_pyramid_layers(self):
         """Populate self._pyramid_layers from open trades in DB."""
@@ -735,21 +764,34 @@ class TradingLoopService:
                         decision = None
 
             if decision:
-                # 5. Execute Order
-                ut = UnifiedTrading()
-                order_side = OrderSide.BUY if decision.action == "BUY" else OrderSide.SELL
-                
-                logger.info(f"  [ {symbol} ] Attempting {decision.action} order: qty={decision.quantity:.6f} @ {decision.entry_price} | SL={decision.stop_loss} TP={decision.take_profit}")
-                
-                order = UnifiedOrder(
-                    symbol=symbol, side=order_side, quantity=decision.quantity, price=decision.entry_price,
-                    stop_loss=decision.stop_loss, take_profit=decision.take_profit
-                )
-                
-                res = await asyncio.get_event_loop().run_in_executor(None, lambda: ut.place_order(order))
-                if res.success:
-                    if not existing:
+                # 5. Execute Order — serialized across the parallel symbol tasks
+                #    so concurrent BUYs can't both pass the max-positions check
+                #    and overshoot the cap (race on shared self._open_count).
+                async with self._execution_lock:
+                    # Re-check the position cap inside the lock with the freshest count
+                    if not existing and self._open_count >= self.config.max_positions:
+                        logger.warning(
+                            f"  [ {symbol} ] entry skipped: max positions "
+                            f"({self.config.max_positions}) reached at execution time"
+                        )
+                        self._check_sl_tp(db, symbol, bars)
+                        db.commit()
+                        return {"signals": _signals, "trades": 0}
+
+                    ut = UnifiedTrading()
+                    order_side = OrderSide.BUY if decision.action == "BUY" else OrderSide.SELL
+
+                    logger.info(f"  [ {symbol} ] Attempting {decision.action} order: qty={decision.quantity:.6f} @ {decision.entry_price} | SL={decision.stop_loss} TP={decision.take_profit}")
+
+                    order = UnifiedOrder(
+                        symbol=symbol, side=order_side, quantity=decision.quantity, price=decision.entry_price,
+                        stop_loss=decision.stop_loss, take_profit=decision.take_profit
+                    )
+
+                    res = await asyncio.get_event_loop().run_in_executor(None, lambda: ut.place_order(order))
+                    if res.success and not existing:
                         self._open_count += 1
+                if res.success:
                     _trades = 1
                     filled_px = float(res.filled_price or decision.entry_price)
                     filled_qty = float(res.filled_qty or decision.quantity)

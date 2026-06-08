@@ -123,21 +123,11 @@ class DecisionEngine:
         # 2. Cooldown check
         if cooldown_active:
             return None
-            
-        # 3. Kronos Gate — pre-filter using foundation model prediction
-        if self.enable_kronos:
-            try:
-                import pandas as pd
-                df = pd.DataFrame(bars)
-                kronos_result = await kronos_service.predict(df, symbol)
-                # We'll use the gate result to potentially modify signal later
-            except Exception as e:
-                logger.warning(f"Kronos prediction failed for {symbol}: {e}")
-                kronos_result = {}
-        else:
-            kronos_result = {}
 
-        # 4. Strategy execution — detect regime and generate signal
+        # 3. Strategy execution — detect regime and generate signal.
+        #    Runs FIRST so the expensive Kronos/opinion calls below are only
+        #    paid when there's an actual directional setup (most pairs are
+        #    NEUTRAL and short-circuit here).
         regime_result = self.regime_detector.detect(bars)
         signal = self.strategy.generate_signal(
             symbol,
@@ -153,6 +143,17 @@ class DecisionEngine:
                 f"strategy below threshold ({self.config.min_signal_strength})",
             )
             return None
+
+        # 4. Kronos foundation-model prediction (only for directional signals)
+        kronos_result = {}
+        if self.enable_kronos:
+            try:
+                import pandas as pd
+                df = pd.DataFrame(bars)
+                kronos_result = await kronos_service.predict(df, symbol)
+            except Exception as e:
+                logger.warning(f"Kronos prediction failed for {symbol}: {e}")
+                kronos_result = {}
 
         # 4b. Apply Kronos Gate to the strategy signal
         if kronos_result:
