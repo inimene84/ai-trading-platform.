@@ -218,9 +218,8 @@ class TradingLoopService:
                     # on the exchange after a native stop fired, once per symbol.
                     if t.symbol not in cancelled_orphans:
                         try:
-                            fsym = _bfs_sync._to_futures_symbol(t.symbol)
-                            if fsym:
-                                _bfs_sync._get_client().futures_cancel_all_open_orders(symbol=fsym)
+                            # Cancels regular AND conditional/algo SL/TP/trailing orders
+                            _bfs_sync.cancel_all_orders(t.symbol)
                             cancelled_orphans.add(t.symbol)
                         except Exception as _ce:
                             logger.warning(f"  [ {t.symbol} ] orphan order cleanup failed: {_ce}")
