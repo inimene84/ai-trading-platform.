@@ -25,6 +25,7 @@ import numpy as np
 
 from backend.services import kronos_service
 from backend.services.influxdb_sentiment_reader import sentiment_reader
+from backend.services.qdrant_client import qdrant
 from backend.services.persona_adapter import run_all_personas, get_persona_weights, set_persona_weight
 
 logger = logging.getLogger(__name__)
@@ -265,6 +266,109 @@ def _run_alert_opinion(symbol: str) -> AgentOpinion:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# Macro Sentiment Opinion (global Fear & Greed from InfluxDB)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _run_macro_sentiment_opinion() -> AgentOpinion:
+    """Global market sentiment (Fear & Greed) from InfluxDB / n8n.
+
+    get_global_sentiment() already applies contrarian logic (extreme greed ->
+    SELL, extreme fear -> BUY) and returns a 0-100 index.
+    """
+    try:
+        g = sentiment_reader.get_global_sentiment(lookback_minutes=240)
+        if not g:
+            return AgentOpinion(
+                agent="macro_sentiment", signal="neutral", confidence=0.0,
+                reasoning="No global sentiment data",
+            )
+        signal_map = {"BUY": "bullish", "SELL": "bearish", "NEUTRAL": "neutral"}
+        signal = signal_map.get(g.get("direction", "NEUTRAL"), "neutral")
+        idx = g.get("index", 50.0)
+        return AgentOpinion(
+            agent="macro_sentiment",
+            signal=signal,
+            confidence=float(g.get("confidence", 0.0) or 0.0),
+            reasoning=f"Fear&Greed index {idx:.0f} → {g.get('direction', 'NEUTRAL')} (contrarian)",
+            metadata=g,
+        )
+    except Exception as e:
+        logger.warning(f"Macro sentiment opinion error: {e}")
+        return AgentOpinion(
+            agent="macro_sentiment", signal="neutral", confidence=0.0,
+            reasoning=f"Error: {e}",
+        )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# News Archive Opinion (Qdrant vector store written by n8n)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_COIN_NAMES = {
+    "BTC": "bitcoin", "ETH": "ethereum", "SOL": "solana", "BNB": "bnb",
+    "XRP": "xrp", "ADA": "cardano", "DOGE": "dogecoin", "AVAX": "avalanche",
+    "DOT": "polkadot", "LINK": "chainlink", "LTC": "litecoin", "UNI": "uniswap",
+    "MATIC": "polygon", "ATOM": "cosmos", "NEAR": "near",
+}
+_BULL_WORDS = (
+    "bullish", "rally", "surge", "breakout", "accumulat", "inflow", "upgrade",
+    "rebound", "optimism", "approval", "support holds", "uptrend", "buy ",
+    "all-time high", "catalyst", "adoption",
+)
+_BEAR_WORDS = (
+    "bearish", "crash", "dump", "breakdown", "sell-off", "selloff", "outflow",
+    "downgrade", "resistance", "decline", "fear", "liquidation", "weakness",
+    "lows", "correction", "downtrend", "plunge", "capitulation",
+)
+
+
+async def _run_news_archive_opinion(symbol: str) -> AgentOpinion:
+    """Directional signal from the Qdrant crypto-news archive (n8n analyses)."""
+    try:
+        base = symbol.replace("USDT", "").replace("USDC", "").replace("PERP", "").upper()
+        keywords = [base.lower()]
+        if base in _COIN_NAMES:
+            keywords.append(_COIN_NAMES[base])
+        docs = await qdrant.search_content(keywords, limit=5)
+        if not docs:
+            return AgentOpinion(
+                agent="news_archive", signal="neutral", confidence=0.0,
+                reasoning="No matching news in archive",
+            )
+        text = " ".join(d.get("content", "") for d in docs).lower()
+        bull = sum(text.count(w) for w in _BULL_WORDS)
+        bear = sum(text.count(w) for w in _BEAR_WORDS)
+        total = bull + bear
+        if total == 0:
+            return AgentOpinion(
+                agent="news_archive", signal="neutral", confidence=0.0,
+                reasoning=f"{len(docs)} articles, no directional language",
+            )
+        score = (bull - bear) / total
+        if score > 0.15:
+            signal = "bullish"
+        elif score < -0.15:
+            signal = "bearish"
+        else:
+            signal = "neutral"
+        coverage = min(len(docs), 5) / 5.0
+        confidence = round(min(abs(score) * (0.5 + 0.5 * coverage), 1.0), 3)
+        return AgentOpinion(
+            agent="news_archive",
+            signal=signal,
+            confidence=confidence,
+            reasoning=f"{len(docs)} news analyses: {bull} bullish / {bear} bearish terms (score={score:+.2f})",
+            metadata={"articles": len(docs), "bull": bull, "bear": bear},
+        )
+    except Exception as e:
+        logger.warning(f"News archive opinion error for {symbol}: {e}")
+        return AgentOpinion(
+            agent="news_archive", signal="neutral", confidence=0.0,
+            reasoning=f"Error: {e}",
+        )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # Opinion Aggregator (Portfolio Manager logic, simplified)
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -287,6 +391,8 @@ _AGENT_WEIGHTS = _LOADED_CONFIG.get("base_agents", {
     "kronos_foundation": 0.20,
     "social_sentiment": 0.20,
     "market_alerts": 0.05,
+    "macro_sentiment": 0.10,
+    "news_archive": 0.12,
 })
 _AGG_CFG = _LOADED_CONFIG.get("aggregation", {})
 _BUY_THRESHOLD = float(_AGG_CFG.get("buy_threshold", 0.15))
@@ -400,6 +506,8 @@ async def analyze_symbol(
     include_social: bool = True,
     include_alerts: bool = True,
     include_personas: bool = True,
+    include_macro: bool = True,
+    include_news: bool = True,
     metrics: Optional[dict] = None,
 ) -> TradingOpinion:
     """
@@ -490,6 +598,22 @@ async def analyze_symbol(
             alerts = alert_op.metadata.get("alerts", [])
         except Exception as e:
             logger.warning(f"Market alerts failed for {symbol}: {e}")
+
+    # Global macro sentiment — Fear & Greed (InfluxDB, written by n8n)
+    if include_macro:
+        try:
+            macro_op = await asyncio.to_thread(_run_macro_sentiment_opinion)
+            opinions.append(macro_op)
+        except Exception as e:
+            logger.warning(f"Macro sentiment failed for {symbol}: {e}")
+
+    # News archive — semantic/keyword recall from Qdrant (written by n8n)
+    if include_news:
+        try:
+            news_op = await _run_news_archive_opinion(symbol)
+            opinions.append(news_op)
+        except Exception as e:
+            logger.warning(f"News archive failed for {symbol}: {e}")
 
     # Persona agents (async LLM calls, concurrent)
     # Trade memory injection

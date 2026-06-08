@@ -225,6 +225,36 @@ class QdrantNewsClient:
             logger.error(f"Search failed: {e}")
             return []
 
+    async def search_content(self, keywords: List[str], limit: int = 5, scan: int = 200) -> List[Dict[str, Any]]:
+        """Return archived documents whose `content` mentions any keyword.
+
+        Handles the LangChain-style `{content, metadata}` payload that the n8n
+        news workflow actually writes (the structured title/sentiment schema is
+        not populated). Used by the trading opinion layer as a news signal.
+        """
+        if not self._client:
+            return []
+        try:
+            all_points, _ = await self._client.scroll(
+                collection_name=self.collection_name,
+                limit=scan,
+                with_vectors=False,
+                with_payload=True,
+            )
+            kws = [k.lower() for k in keywords if k]
+            out: List[Dict[str, Any]] = []
+            for pt in all_points:
+                pl = pt.payload or {}
+                content = pl.get("content") or pl.get("text") or pl.get("page_content") or ""
+                if not content:
+                    continue
+                if not kws or any(k in content.lower() for k in kws):
+                    out.append({"content": content, "metadata": pl.get("metadata", {})})
+            return out[:limit]
+        except Exception as e:
+            logger.error(f"search_content failed: {e}")
+            return []
+
     async def get_news_history(self, page: int = 1, limit: int = 20) -> List[Dict[str, Any]]:
         """Get paginated news history (non-semantic)."""
         if not self._client:
