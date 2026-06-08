@@ -60,12 +60,12 @@ async def _write_wallet_and_positions(svc, influx):
             # Get the default session's paper portfolio
             portfolio_id = trading_router._default_pf_id()
             if not portfolio_id:
-                logger.warning("Wallet poller: No paper portfolio found")
+                logger.info("Wallet poller: No paper portfolio found")
                 return
             
             pf = trading_router.get_paper_portfolio()
             if not pf:
-                logger.warning("Wallet poller: Paper portfolio not found")
+                logger.info("Wallet poller: Paper portfolio not found")
                 return
             
             # Extract balance info from paper portfolio

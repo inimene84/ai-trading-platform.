@@ -222,12 +222,17 @@ class BinanceFuturesService:
         """Return tradeable quantity based on TRADE_USDT_AMOUNT env var (default 10 USDT)."""
         min_qty = MIN_QTY.get(sym, 0.001)
         trade_usdt = float(os.getenv("TRADE_USDT_AMOUNT", "10.0"))
-        # Per-symbol min notional (Binance varies: BTC=50, ETH/LTC/LINK=20, others=5)
+        # Per-symbol min notional from Binance /fapi/v1/exchangeInfo MIN_NOTIONAL filter
         min_notional_map = {
-            'BTCUSDT': 50.0, 'ETHUSDT': 20.0, 'LTCUSDT': 20.0, 'LINKUSDT': 20.0,
-            'BTCUSDC': 50.0, 'ETHUSDC': 20.0,
+            'BTCUSDT': 100.0, 'ETHUSDT': 20.0, 'SOLUSDT': 20.0,
+            'BNBUSDT': 20.0,  'XRPUSDT': 20.0, 'ADAUSDT': 20.0,
+            'DOGEUSDT': 20.0, 'AVAXUSDT': 20.0, 'DOTUSDT': 20.0,
+            'LINKUSDT': 20.0, 'LTCUSDT': 20.0,
+            'BTCUSDC': 100.0, 'ETHUSDC': 20.0, 'SOLUSDC': 20.0,
+            'BNBUSDC': 20.0,  'XRPUSDC': 20.0, 'ADAUSDC': 20.0,
+            'AVAXUSDC': 20.0, 'LINKUSDC': 20.0,
         }
-        min_notional = min_notional_map.get(sym, 5.0)
+        min_notional = min_notional_map.get(sym, 20.0)  # safe default: $20
         if price > 0:
             notional_qty = trade_usdt / price
             min_notional_qty = min_notional / price
@@ -434,6 +439,28 @@ class BinanceFuturesService:
                 quantity = self._min_quantity(futures_sym, price)
             else:
                 quantity = self._round_qty(futures_sym, quantity)
+
+            # ── Notional floor enforcement ──────────────────────────────────────
+            # Even when quantity is supplied externally (e.g. by DecisionEngine),
+            # ensure the order meets Binance's MIN_NOTIONAL filter to avoid -4164.
+            if price > 0 and action != 'close':
+                _min_notional_map = {
+                    'BTCUSDT': 100.0, 'ETHUSDT': 20.0, 'SOLUSDT': 20.0,
+                    'BNBUSDT': 20.0,  'XRPUSDT': 20.0, 'ADAUSDT': 20.0,
+                    'DOGEUSDT': 20.0, 'AVAXUSDT': 20.0, 'DOTUSDT': 20.0,
+                    'LINKUSDT': 20.0, 'LTCUSDT': 20.0,
+                    'BTCUSDC': 100.0, 'ETHUSDC': 20.0,
+                }
+                _min_not = _min_notional_map.get(futures_sym, 20.0)
+                _actual_notional = quantity * price
+                if _actual_notional < _min_not:
+                    _old_qty = quantity
+                    import math
+                    quantity = self._round_qty(futures_sym, math.ceil(_min_not / price * 10000) / 10000)
+                    logger.info(
+                        f"[Binance] Notional floor: {futures_sym} bumped qty {_old_qty:.6f} -> {quantity:.6f} "
+                        f"(${_actual_notional:.2f} < min ${_min_not:.0f})"
+                    )
 
             passed_reduce_only = kwargs.get('reduce_only', False)
 
@@ -832,6 +859,13 @@ class BinanceFuturesService:
                 # Duplicate clientOrderId (-4015/-2010 "Duplicate") → idempotent no-op
                 if "duplicate" in err_str.lower() or "-4015" in err_str:
                     logger.warning(f"  [idempotency] duplicate order suppressed: {err_str[:120]}")
+                    raise e
+                # MIN_NOTIONAL violation — order is too small, no point retrying
+                if "-4164" in err_str or "MIN_NOTIONAL" in err_str:
+                    logger.error(
+                        f"  [MIN_NOTIONAL] Order rejected: notional too small. "
+                        f"Params: {params.get('symbol')} qty={params.get('quantity')} — {err_str[:200]}"
+                    )
                     raise e
                 # Transient errors: retry with backoff
                 is_transient = any(t in err_str for t in ("429", "418", "-1003", "500", "502", "503", "504", "Timeout", "timed out", "Connection"))

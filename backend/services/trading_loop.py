@@ -117,7 +117,7 @@ class TradingLoopService:
         
         from backend.services.trading_mode import get_trading_mode
         mode = get_trading_mode()
-        logger.warning(f"TradingLoopService starting in mode={mode.value.upper()}")
+        logger.info(f"TradingLoopService starting in mode={mode.value.upper()}")
         
         # Reconstruct pyramid layers from DB
         self._reconstruct_pyramid_layers()
@@ -305,7 +305,10 @@ class TradingLoopService:
             )
             enforce_risk_limits(db_risk, self.risk_config, open_trades, latest_snapshot)
         except RiskBreach as rb:
-            logger.error(f"[RISK BREACH] {rb.reason}. Activating kill-switch and stopping loop.")
+            logger.critical(
+                f"[RISK BREACH] {rb.reason}. LOOP STOPPED. "
+                f"\u26a0\ufe0f Manual restart required after resolving the breach."
+            )
             self._state = "error"
             self._running = False
             self._error = f"RISK_BREACH: {rb.reason}"
@@ -341,8 +344,19 @@ class TradingLoopService:
                 # A drained/empty account ($0) is exactly when the loop MUST stop.
                 if _equity <= _kill_floor:
                     logger.critical(
-                        f"[KILL SWITCH] Equity ${_equity:.2f} <= floor ${_kill_floor:.2f} — STOPPING LOOP"
+                        f"[KILL SWITCH] Equity ${_equity:.2f} <= floor ${_kill_floor:.2f} — LOOP STOPPED. "
+                        f"\u26a0\ufe0f Manual restart required after depositing funds above ${_kill_floor:.0f}."
                     )
+                    # Write kill event to InfluxDB for Grafana alerting
+                    try:
+                        from backend.services.influxdb_writer import influx
+                        await influx._write(
+                            influx.BUCKET_SYSTEM, 'system_event',
+                            {'event': 'kill_switch', 'reason': 'equity_below_floor'},
+                            {'equity': float(_equity), 'kill_floor': float(_kill_floor)}
+                        )
+                    except Exception:
+                        pass  # best-effort
                     self._state = "stopped"
                     self._running = False
                     self._error = "KILL_SWITCH_TRIGGERED"
@@ -362,7 +376,7 @@ class TradingLoopService:
                 from sqlalchemy import func as _func
                 pre_open = db_pre.query(Trade).filter(Trade.status.in_(["open", "filled"])).all()
                 if pre_open:
-                    logger.warning(f"  [POSITION MGR] Pre-sync review: {len(pre_open)} open positions")
+                    logger.info(f"  [POSITION MGR] Pre-sync review: {len(pre_open)} open positions")
                     # Use BinanceFuturesService directly — UnifiedTrading returns 0 positions
                     from backend.services.binance_futures_service import BinanceFuturesService as _BFS
                     live_prices = {}
@@ -488,7 +502,7 @@ class TradingLoopService:
             db_check = SessionLocal()
             try:
                 open_trades = db_check.query(Trade).filter(Trade.status.in_(["open", "filled"])).all()
-                logger.warning(f"  [POSITION MGR] Reviewing {len(open_trades)} open positions for exits...")
+                logger.info(f"  [POSITION MGR] Reviewing {len(open_trades)} open positions for exits...")
                 for trade in open_trades:
                     try:
                         trade_bars = await self._fetch_bars(trade.symbol)
