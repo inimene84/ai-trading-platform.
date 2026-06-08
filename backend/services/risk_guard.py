@@ -77,10 +77,21 @@ def enforce_risk_limits(
     # 1. Max open positions. Use max_positions (the single source of truth for
     #    the concurrent-position cap); max_open_positions is kept only as a
     #    looser legacy ceiling, so enforce the stricter of the two.
+    #
+    #    Count DISTINCT SYMBOLS, not raw trade rows. With pyramid DCA each entry
+    #    layer is its own Trade row (e.g. 4 AVAX layers = 1 position), so
+    #    len(open_trades) over-counts and would false-trigger this breach. This
+    #    matches how the trading loop itself defines an open position:
+    #    func.count(func.distinct(Trade.symbol)).
+    open_symbols = {
+        s for t in open_trades if (s := getattr(t, "symbol", None))
+    }
+    position_count = len(open_symbols)
     position_cap = min(cfg.max_positions, cfg.max_open_positions)
-    if len(open_trades) > position_cap:
+    if position_count > position_cap:
         raise RiskBreach(
-            f"Max open positions exceeded: {len(open_trades)} > {position_cap}"
+            f"Max open positions exceeded: {position_count} > {position_cap} "
+            f"(symbols: {sorted(open_symbols)})"
         )
 
     # 2. Max directional exposure (notional). Previously defined in config but
