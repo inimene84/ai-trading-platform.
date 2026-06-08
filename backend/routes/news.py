@@ -303,7 +303,7 @@ async def get_market_sentiment():
         return cached
 
     SYMBOLS = ["BTC-USD", "ETH-USD", "SOL-USD", "BNB-USD", "XRP-USD",
-               "DOGE-USD", "ADA-USD", "AVAX-USD", "MATIC-USD", "LINK-USD"]
+               "DOGE-USD", "ADA-USD", "AVAX-USD", "LINK-USD"]
     top_movers = []
     positive_count = 0
     negative_count = 0
