@@ -481,9 +481,15 @@ class BinanceFuturesService:
                     "quantity": quantity,
                     "positionSide": position_side,
                 }
+                # Idempotency: a deterministic client order id bucketed to the
+                # current minute makes Binance reject an accidental duplicate
+                # (e.g. order filled but DB commit failed → restart re-enters).
+                if not reduce_only:
+                    bucket = int(time.time() // 60)
+                    order_params["newClientOrderId"] = f"x{futures_sym[:8]}{side[0]}{bucket}"[:36]
                 # Note: In Hedge Mode, we DO NOT send reduceOnly as positionSide handles it.
                 # Sending it causes APIError -1106.
-                result = client.futures_create_order(**order_params)
+                result = self._safe_create_order(client, order_params)
 
             order_id = str(result.get('orderId', ''))
             filled_price = float(result.get('avgPrice') or result.get('price') or price or 0.0)
@@ -689,25 +695,39 @@ class BinanceFuturesService:
         return None
 
     def _safe_create_order(self, client, order_params):
-        """Try placing an order and dynamically reduce precision if Binance complains about it."""
+        """Place an order, auto-reducing precision on -1111 and retrying
+        transient network / rate-limit (429) / server (5xx) errors."""
         import copy
-        import math
+        import time as _t
         params = copy.deepcopy(order_params)
-        
+
+        transient_retries = 3
+        backoff = 0.5
         while True:
             try:
                 return client.futures_create_order(**params)
             except Exception as e:
                 err_str = str(e)
+                # Precision error: reduce stopPrice decimals and retry immediately
                 if "-1111" in err_str and "stopPrice" in params:
-                    # Too much precision. Let's find the current decimals and reduce by 1
                     sp_str = str(params["stopPrice"])
                     if "." in sp_str:
                         decimals = len(sp_str.split(".")[1])
                         if decimals > 0:
-                            new_decimals = decimals - 1
-                            params["stopPrice"] = float(f"{params['stopPrice']:.{new_decimals}f}")
+                            params["stopPrice"] = float(f"{params['stopPrice']:.{decimals - 1}f}")
                             continue
+                # Duplicate clientOrderId (-4015/-2010 "Duplicate") → idempotent no-op
+                if "duplicate" in err_str.lower() or "-4015" in err_str:
+                    logger.warning(f"  [idempotency] duplicate order suppressed: {err_str[:120]}")
+                    raise e
+                # Transient errors: retry with backoff
+                is_transient = any(t in err_str for t in ("429", "418", "-1003", "500", "502", "503", "504", "Timeout", "timed out", "Connection"))
+                if is_transient and transient_retries > 0:
+                    transient_retries -= 1
+                    logger.warning(f"  [retry] transient order error, retrying in {backoff}s: {err_str[:120]}")
+                    _t.sleep(backoff)
+                    backoff *= 2
+                    continue
                 raise e
 
 
