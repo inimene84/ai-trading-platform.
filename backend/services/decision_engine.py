@@ -69,6 +69,9 @@ class DecisionEngine:
         # Snapshot of the most recent evaluation so the loop can persist a
         # signal row for EVERY symbol it scans (not just executed trades).
         self.last_evaluation: Dict[str, Any] = {}
+        # Live account equity (set by the loop each cycle) for risk-based sizing.
+        # 0 → fall back to fixed trade_usdt_amount notional.
+        self.account_equity: float = 0.0
 
     def _record_eval(self, symbol, direction, confidence, reason, entry=None, sl=None, tp=None, executed=False):
         self.last_evaluation = {
@@ -230,15 +233,30 @@ class DecisionEngine:
     def _create_entry_decision(self, symbol: str, bars: List[Dict[str, Any]], signal: Any, direction: str, is_pyramid: bool) -> Optional[Decision]:
         current_price = bars[-1]["close"]
         entry_price = signal.entry_price or current_price
-        
-        # Quantity calculation
-        trade_usdt = self.config.pyramid_usdt_per_layer if is_pyramid else self.config.trade_usdt_amount
-        quantity = trade_usdt / entry_price if entry_price > 0 else 0
-        
+
+        # SL/TP first — needed for risk-based position sizing.
         sl, tp = compute_sl_tp_levels(
             bars, direction, entry_price, self.config,
             signal_sl=signal.stop_loss, signal_tp=signal.take_profit,
         )
+
+        # ── Position sizing ──
+        # Risk-based: size so a SL hit costs ~risk_per_trade_pct of equity.
+        # Falls back to the fixed trade_usdt_amount notional when equity or the
+        # SL distance aren't usable. Pyramid layers keep their fixed notional.
+        trade_usdt = self.config.pyramid_usdt_per_layer if is_pyramid else self.config.trade_usdt_amount
+        notional = trade_usdt
+        if (not is_pyramid and getattr(self.config, "equity_sizing_enabled", False)
+                and self.account_equity > 0 and sl and entry_price > 0):
+            per_unit_risk = abs(entry_price - sl)
+            if per_unit_risk > 0:
+                risk_amount = self.account_equity * self.config.risk_per_trade_pct
+                qty_by_risk = risk_amount / per_unit_risk
+                notional = qty_by_risk * entry_price
+                # Cap per-trade notional at a multiple of equity (post-leverage)
+                max_notional = self.account_equity * self.config.max_trade_notional_equity_mult
+                notional = max(trade_usdt, min(notional, max_notional))
+        quantity = notional / entry_price if entry_price > 0 else 0
 
         # Min-edge / fee-churn gate: reject trades whose TP can't clear cost.
         if not self._passes_min_edge(symbol, entry_price, tp, quantity):
