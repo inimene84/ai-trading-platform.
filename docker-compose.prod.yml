@@ -26,7 +26,6 @@ services:
       GROQ_API_KEY: sk-1234 # LiteLLM master key
       PERSONA_LLM_BASE_URL: http://litellm:4000/v1
       KIE_MODEL: claude-sonnet-4-6
-      REDIS_URL: redis://redis:6379/0
       # Safety: risk guard ENABLED by default. Only disable for explicit testing by setting DISABLE_RISK_GUARD=true in .env
       DISABLE_RISK_GUARD: ${DISABLE_RISK_GUARD:-false}
       # MiCA/EEA: trade USDC-margined perpetuals (USDT restricted for EU users).
@@ -111,23 +110,6 @@ services:
         reservations:
           cpus: '0.25'
           memory: 256M
-  redis:
-    image: redis:7-alpine
-    container_name: ai-trading-redis
-    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
-    restart: unless-stopped
-    volumes:
-      - redis-data:/data
-    networks:
-      - trading-net
-    deploy:
-      resources:
-        limits:
-          cpus: '0.5'
-          memory: 512M
-        reservations:
-          cpus: '0.05'
-          memory: 64M
   nginx:
     image: nginx:alpine
     container_name: ai-trading-nginx
@@ -154,5 +136,4 @@ networks:
     external: true
 volumes:
   app-data: 
-  app-logs: 
-  redis-data:
+  app-logs:

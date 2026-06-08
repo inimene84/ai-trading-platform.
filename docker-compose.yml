@@ -113,15 +113,6 @@ services:
       - ./litellm-config.yaml:/tmp/litellm-config.yaml:ro
     networks:
       - trading-net
-  redis:
-    image: redis:7-alpine
-    container_name: ai-trading-redis
-    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
-    restart: unless-stopped
-    volumes:
-      - redis-data:/data
-    networks:
-      - trading-net
   qdrant:
     image: qdrant/qdrant:v1.14.1
     container_name: vps-qdrant
@@ -172,5 +163,4 @@ networks:
 volumes:
   app-data: 
   app-logs: 
-  redis-data: 
   influxdb-storage:
