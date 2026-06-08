@@ -52,10 +52,13 @@ class RiskConfig(BaseSettings):
     )
     max_open_positions: int = 10
     
-    # Signal thresholds
-    min_signal_strength: float = 0.60
+    # Signal thresholds (env-tunable so trade aggressiveness can change without a rebuild)
+    min_signal_strength: float = PydanticField(
+        default=0.45,
+        validation_alias=AliasChoices("min_signal_strength", "MIN_SIGNAL_STRENGTH"),
+    )
     ai_analysis_threshold: float = PydanticField(
-        default=0.60,
+        default=0.30,
         validation_alias=AliasChoices("ai_analysis_threshold", "AI_ANALYSIS_THRESHOLD"),
     )
     opinion_override_margin: float = 0.15
