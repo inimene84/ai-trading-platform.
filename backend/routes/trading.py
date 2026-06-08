@@ -453,37 +453,6 @@ async def get_stocks():
     return {"data": data}
 
 
-@router.get("/markets/forex")
-async def get_forex():
-    """Fetch live data for top forex pairs using yfinance."""
-    import yfinance as yf
-    # mapping yfinance symbols to standard names
-    pairs = {"EURUSD=X": "EUR/USD", "GBPUSD=X": "GBP/USD", "JPY=X": "USD/JPY", "AUDUSD=X": "AUD/USD", "USDCAD=X": "USD/CAD"}
-    data = []
-    for yf_sym, name in pairs.items():
-        try:
-            ticker = yf.Ticker(yf_sym)
-            hist = ticker.history(period="2d")
-            if len(hist) >= 2:
-                prev_close = hist["Close"].iloc[-2]
-                current = hist["Close"].iloc[-1]
-                change_pct = ((current - prev_close) / prev_close) * 100
-            elif len(hist) == 1:
-                current = hist["Close"].iloc[-1]
-                change_pct = 0.0
-            else:
-                continue
-                
-            data.append({
-                "symbol": name,
-                "price": float(current),
-                "change24h": round(float(change_pct), 3), # closer precision for forex
-                "volume24h": 0.0, # yfinance often doesn't have reliable forex volume
-                "up": bool(change_pct >= 0)
-            })
-        except Exception:
-            pass
-    return {"data": data}
 
 
 # Binance public spot endpoints the frontend is allowed to proxy through us.

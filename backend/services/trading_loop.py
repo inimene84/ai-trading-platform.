@@ -742,6 +742,15 @@ class TradingLoopService:
                 else:
                     del self._sl_cooldown[symbol]
 
+            # Fetch funding rate before evaluation to allow gating
+            try:
+                from backend.services.binance_market_data import get_binance_market_data
+                bmd = get_binance_market_data()
+                fr_data = await bmd.get_funding_rate(symbol)
+                current_funding_rate = float(fr_data.get('fundingRate', 0)) if fr_data else 0.0
+            except Exception:
+                current_funding_rate = 0.0
+
             # 4. Evaluate using Decision Engine
             decision_engine = DecisionEngine(self.risk_config)
             decision_engine.account_equity = getattr(self, "_cycle_equity", 0.0)
@@ -751,7 +760,8 @@ class TradingLoopService:
                 existing_position=existing,
                 open_count=self._open_count,
                 pyramid_layers=self._pyramid_layers.get(symbol, []),
-                cooldown_active=cooldown_active
+                cooldown_active=cooldown_active,
+                current_funding_rate=current_funding_rate
             )
 
             # Persist the evaluation for EVERY scanned symbol so the dashboard
@@ -812,6 +822,9 @@ class TradingLoopService:
                     
                     if decision.action == "BUY" and (_long_notional + _new_notional > self.risk_config.max_directional_exposure_usdt):
                         logger.warning(f"  [ {symbol} ] BUY blocked: LONG exposure cap reached")
+                        decision = None
+                    elif decision.action == "BUY" and getattr(self, "_cycle_equity", 0.0) > 0 and (_long_notional + _new_notional > self._cycle_equity * 0.8):
+                        logger.warning(f"  [ {symbol} ] BUY blocked: 80% Portfolio LONG Correlation limit reached")
                         decision = None
                     elif decision.action == "SELL" and (_short_notional + _new_notional > self.risk_config.max_directional_exposure_usdt):
                         logger.warning(f"  [ {symbol} ] SELL blocked: SHORT exposure cap reached")
@@ -1027,9 +1040,17 @@ class TradingLoopService:
                     hw = max(hw, current_price)
                     self._high_water[trade.id] = hw
 
-                    # Only trail once price has advanced enough into profit
+                    # Step-Trailing: Move to breakeven at 0.5x activation distance
                     if hw - trade.entry_price < activation_dist:
+                        if hw - trade.entry_price >= (activation_dist * 0.5):
+                            candidate = trade.entry_price  # Breakeven
+                            old_stop = trade.stop_loss if trade.stop_loss is not None else float("-inf")
+                            if candidate > old_stop:
+                                trade.stop_loss = candidate
+                                logger.info(f"  [ {symbol} ] STEP-TRAIL ↑ stop to breakeven (hw={hw:.6f} >= 0.5 activation)")
+                                self._sync_exchange_stop(trade, candidate)
                         continue
+                    
                     candidate = hw - trail_dist
                     # Never above current price; never loosen an existing stop
                     candidate = min(candidate, current_price)
@@ -1046,7 +1067,15 @@ class TradingLoopService:
                     lw = min(lw, current_price)
                     self._high_water[trade.id] = lw
 
+                    # Step-Trailing: Move to breakeven at 0.5x activation distance
                     if trade.entry_price - lw < activation_dist:
+                        if trade.entry_price - lw >= (activation_dist * 0.5):
+                            candidate = trade.entry_price  # Breakeven
+                            old_stop = trade.stop_loss if trade.stop_loss is not None else float("inf")
+                            if candidate < old_stop:
+                                trade.stop_loss = candidate
+                                logger.info(f"  [ {symbol} ] STEP-TRAIL ↓ stop to breakeven (lw={lw:.6f} <= 0.5 activation)")
+                                self._sync_exchange_stop(trade, candidate)
                         continue
                     candidate = lw + trail_dist
                     candidate = max(candidate, current_price)

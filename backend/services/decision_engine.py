@@ -92,7 +92,8 @@ class DecisionEngine:
         existing_position: Optional[Any],  # DB Trade object or dict
         open_count: int,
         pyramid_layers: List[float],
-        cooldown_active: bool
+        cooldown_active: bool,
+        current_funding_rate: float = 0.0
     ) -> Optional[Decision]:
         """
         Evaluate market data and return a trading Decision.
@@ -127,6 +128,7 @@ class DecisionEngine:
         if cooldown_active:
             return None
 
+
         # 3. Strategy execution — detect regime and generate signal.
         #    Runs FIRST so the expensive Kronos/opinion calls below are only
         #    paid when there's an actual directional setup (most pairs are
@@ -145,6 +147,13 @@ class DecisionEngine:
                 signal.confidence if signal else 0.0,
                 f"strategy below threshold ({self.config.min_signal_strength})",
             )
+            return None
+
+        # Block BUYs if funding rate is over cap
+        fr_cap = getattr(self.config, "funding_rate_cap", 0.0)
+        if signal.signal == "BUY" and fr_cap > 0 and current_funding_rate > fr_cap:
+            logger.info(f"[{symbol}] BUY signal blocked by Funding Rate Gate ({current_funding_rate*100:.3f}% > {fr_cap*100:.3f}%)")
+            self._record_eval(symbol, "HOLD", signal.confidence, "blocked by funding rate")
             return None
 
         # 4. Kronos foundation-model prediction (only for directional signals)

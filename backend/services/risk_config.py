@@ -28,6 +28,7 @@ class RiskConfig(BaseSettings):
     max_positions: int = 4
     max_directional_exposure_usdt: float = 500.0
     trade_usdt_amount: float = 10.0
+    funding_rate_cap: float = 0.0005  # 0.05%
     # ── Position sizing ──
     # When enabled, size each entry so a stop-loss hit loses ~risk_per_trade_pct
     # of account equity (proper risk-based sizing) instead of a flat $ notional.
