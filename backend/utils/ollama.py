@@ -30,6 +30,20 @@ def _get_ollama_endpoint(path: str) -> str:
     return f"{base}{path}"
 
 
+def is_real_ollama_url(url: str = None) -> bool:
+    """Return True only when the configured URL points at a genuine Ollama server.
+
+    The deployment routes OLLAMA_BASE_URL at the LiteLLM proxy (an
+    OpenAI-compatible endpoint) which has no `/api/tags` route, so probing it
+    only produces noisy 404s. Treat such URLs as "no Ollama available".
+    """
+    if url is None:
+        url = _get_ollama_base_url()
+    if not url:
+        return False
+    return "litellm" not in url.lower()
+
+
 OLLAMA_DOWNLOAD_URL = {"darwin": "https://ollama.com/download/darwin", "windows": "https://ollama.com/download/windows", "linux": "https://ollama.com/download/linux"}  # macOS  # Windows  # Linux
 INSTALLATION_INSTRUCTIONS = {"darwin": "curl -fsSL https://ollama.com/install.sh | sh", "windows": "# Download from https://ollama.com/download/windows and run the installer", "linux": "curl -fsSL https://ollama.com/install.sh | sh"}
 
@@ -56,6 +70,8 @@ def is_ollama_installed() -> bool:
 
 def is_ollama_server_running() -> bool:
     """Check if the Ollama server is running."""
+    if not is_real_ollama_url():
+        return False
     endpoint = _get_ollama_endpoint("/api/tags")
     try:
         response = requests.get(endpoint, timeout=2)
