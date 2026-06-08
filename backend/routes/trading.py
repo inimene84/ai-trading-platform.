@@ -1054,15 +1054,38 @@ async def paper_place_order(request: dict):
 @router.post("/order")
 async def place_live_order(request: dict):
     """Place a live order through the active broker session."""
+    from backend.services.risk_config import get_risk_config
+    from backend.services.decision_engine import compute_sl_tp_levels
+    from backend.services.trading_loop import trading_loop
+
+    symbol = request.get("symbol", "").upper()
+    side = request.get("side", "buy").lower()
+    direction = "BUY" if side == "buy" else "SELL"
+
+    raw_sl = request.get("stop_loss")
+    raw_tp = request.get("take_profit")
+    stop_loss = float(raw_sl) if raw_sl not in (None, "", 0) else None
+    take_profit = float(raw_tp) if raw_tp not in (None, "", 0) else None
+
+    # Manual/workflow orders historically sent no SL/TP → naked hedge legs on Binance.
+    if stop_loss is None or take_profit is None:
+        bars = await trading_loop._fetch_bars(symbol)
+        if bars and len(bars) >= 15:
+            entry = float(request.get("price") or 0) or float(bars[-1]["close"])
+            stop_loss, take_profit = compute_sl_tp_levels(
+                bars, direction, entry, get_risk_config(),
+                signal_sl=stop_loss, signal_tp=take_profit,
+            )
+
     ut = UnifiedTrading()
     order = UnifiedOrder(
-        symbol=request.get("symbol", "").upper(),
-        side=OrderSide(request.get("side", "buy").lower()),
+        symbol=symbol,
+        side=OrderSide(side),
         order_type=OrderType(request.get("order_type", "market").lower()),
         quantity=float(request.get("quantity", 0)),
         price=float(request.get("price", 0) or 0),
-        stop_loss=float(request.get("stop_loss", 0) or 0),
-        take_profit=float(request.get("take_profit", 0) or 0),
+        stop_loss=stop_loss,
+        take_profit=take_profit,
     )
     resp = ut.place_order(order)
     return {

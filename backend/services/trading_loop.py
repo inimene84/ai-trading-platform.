@@ -599,11 +599,47 @@ class TradingLoopService:
         _trades = 0
 
         try:
-            # 1. Fetch existing position
+            # 1. Fetch existing position (DB + live exchange — hedge mode can drift)
             existing = db.query(Trade).filter(
                 Trade.symbol == symbol,
                 Trade.status.in_(["open", "filled"])
             ).first()
+
+            exchange_legs = []
+            try:
+                from backend.services.binance_futures_service import BinanceFuturesService
+                exchange_legs = [
+                    p for p in BinanceFuturesService().get_positions()
+                    if p.get("symbol") == symbol and float(p.get("quantity") or 0) > 0
+                ]
+            except Exception as ex_e:
+                logger.warning(f"  [ {symbol} ] Exchange position check failed: {ex_e}")
+
+            if exchange_legs and not existing:
+                sides = [p.get("side") for p in exchange_legs]
+                logger.warning(
+                    f"  [ {symbol} ] Exchange has open leg(s) {sides} but no DB trade — "
+                    "blocking new entry until reconciled"
+                )
+                bars = await self._fetch_bars(symbol)
+                if bars:
+                    self._check_sl_tp(db, symbol, bars)
+                    db.commit()
+                return {"signals": 0, "trades": 0}
+
+            # Block opposite-leg hedges: exchange already has a position on this symbol.
+            if exchange_legs and existing and len(exchange_legs) >= 1:
+                live_sides = {p.get("side") for p in exchange_legs}
+                if len(live_sides) > 1:
+                    logger.warning(
+                        f"  [ {symbol} ] Hedge legs detected on exchange {sorted(live_sides)} — "
+                        "skipping new entries"
+                    )
+                    bars = await self._fetch_bars(symbol)
+                    if bars:
+                        self._check_sl_tp(db, symbol, bars)
+                        db.commit()
+                    return {"signals": 0, "trades": 0}
 
             # 2. Fetch bars
             bars = await self._fetch_bars(symbol)

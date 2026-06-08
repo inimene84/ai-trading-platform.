@@ -648,13 +648,15 @@ class UnifiedTrading:
         try:
             # Map UnifiedOrder to existing broker signature
             broker_dir = "BUY" if order.side == OrderSide.BUY else "SELL"
+            sl = order.stop_loss if order.stop_loss and order.stop_loss > 0 else None
+            tp = order.take_profit if order.take_profit and order.take_profit > 0 else None
             result = broker.place_order(
                 symbol=order.symbol,
                 direction=broker_dir,
                 quantity=order.quantity,
                 price=order.price,
-                stop_loss=order.stop_loss,
-                take_profit=order.take_profit,
+                stop_loss=sl,
+                take_profit=tp,
                 reduce_only=order.reduce_only
             )
             ok = result.get("status") in ("simulated", "sent", "filled")
