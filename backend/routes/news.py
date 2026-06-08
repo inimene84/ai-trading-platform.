@@ -347,18 +347,31 @@ async def get_market_sentiment():
                 neutral_count += 1
 
     except Exception as e:
-        logger.warning(f"Market sentiment fetch failed: {e}")
-        # Fallback mock data
-        top_movers = [
-            {"symbol": "BTC", "price": 67234.5, "change_pct": 2.3, "direction": "up"},
-            {"symbol": "ETH", "price": 3521.8, "change_pct": 1.7, "direction": "up"},
-            {"symbol": "SOL", "price": 142.3, "change_pct": -0.8, "direction": "down"},
-            {"symbol": "BNB", "price": 589.4, "change_pct": 0.5, "direction": "up"},
-            {"symbol": "XRP", "price": 0.527, "change_pct": -1.2, "direction": "down"},
-        ]
-        positive_count = 3
-        negative_count = 2
-        neutral_count = 0
+        logger.warning(f"Market sentiment (yfinance) failed: {e}, falling back to Binance")
+        try:
+            from backend.services.binance_market_data import binance_market_data
+            tickers = await binance_market_data.get_all_tickers_24h(
+                ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT']
+            )
+            top_movers = []
+            for t in tickers:
+                pct = t.get("priceChangePercent", 0.0)
+                sym = t.get("symbol", "").replace("USDT", "").replace("USDC", "")
+                top_movers.append({
+                    "symbol": sym,
+                    "price": round(t.get("lastPrice", 0), 4),
+                    "change_pct": round(pct, 2),
+                    "direction": "up" if pct >= 0 else "down",
+                })
+                if pct > 0:
+                    positive_count += 1
+                elif pct < 0:
+                    negative_count += 1
+                else:
+                    neutral_count += 1
+        except Exception as e2:
+            logger.warning(f"Binance fallback also failed: {e2}")
+            top_movers = []
 
     total = max(positive_count + negative_count + neutral_count, 1)
     response = {
@@ -446,6 +459,46 @@ async def archive_news(payload: NewsArchivePayload):
         if "connection" in err_msg or "timeout" in err_msg or "refused" in err_msg or "unreachable" in err_msg:
             raise HTTPException(status_code=503, detail="Qdrant vector database is unreachable")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ─── GET /api/news/status ────────────────────────────────────────────────────
+@router.get("/status")
+async def news_status():
+    """News service status and Qdrant collection info."""
+    from backend.services.qdrant_client import qdrant
+    try:
+        info = await qdrant.get_collection_info()
+    except Exception:
+        info = {}
+    return {"status": "ok", "qdrant": info}
+
+
+# ─── GET /api/news/archive/history - browse Qdrant n8n docs ─────────────────
+@router.get("/archive/history")
+async def archive_history(page: int = 1, limit: int = 20):
+    """Return paginated list of n8n-archived news analyses from Qdrant."""
+    from backend.services.qdrant_client import qdrant
+    try:
+        offset = (page - 1) * limit
+        pts, _ = await qdrant._client.scroll(
+            collection_name=qdrant.collection_name,
+            limit=limit,
+            offset=offset,
+            with_vectors=False,
+            with_payload=True,
+        ) if qdrant._client else ([], None)
+        items = []
+        for p in pts:
+            pl = p.payload or {}
+            content = pl.get("content") or pl.get("text") or ""
+            items.append({
+                "id": p.id,
+                "content_preview": content[:200],
+                "metadata": pl.get("metadata", {}),
+            })
+        return {"page": page, "limit": limit, "items": items, "count": len(items)}
+    except Exception as e:
+        return {"page": page, "limit": limit, "items": [], "count": 0, "error": str(e)}
 
 
 # ─── GET /api/news/search - semantic search via Qdrant ───────────────────────
