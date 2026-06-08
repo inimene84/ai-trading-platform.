@@ -188,6 +188,41 @@ async def get_portfolio():
         db.close()
 
 
+@router.get("/performance")
+async def get_performance():
+    """Rolling performance: win rate, realized PnL, drawdown, trade counts."""
+    db = SessionLocal()
+    try:
+        closed = db.query(Trade).filter(Trade.status == "closed").all()
+        wins = sum(1 for t in closed if (t.pnl or 0) > 0)
+        losses = sum(1 for t in closed if (t.pnl or 0) < 0)
+        decided = wins + losses
+        realized = round(sum((t.pnl or 0.0) for t in closed), 4)
+        equity = 0.0
+        try:
+            from backend.services.binance_futures_service import binance_futures_broker
+            bal = await asyncio.to_thread(binance_futures_broker.get_balance)
+            equity = bal.get("equity", bal.get("balance", 0.0))
+        except Exception:
+            pass
+        peak = db.query(PortfolioSnapshot.total_value).order_by(
+            PortfolioSnapshot.total_value.desc()
+        ).first()
+        peak_val = (peak[0] if peak else 0.0) or equity
+        drawdown_pct = round(((equity - peak_val) / peak_val * 100.0), 3) if peak_val > 0 else 0.0
+        return {
+            "win_rate": round((wins / decided * 100.0), 2) if decided else 0.0,
+            "wins": wins,
+            "losses": losses,
+            "total_trades": len(closed),
+            "realized_pnl": realized,
+            "equity": round(equity, 4),
+            "drawdown_pct": drawdown_pct,
+        }
+    finally:
+        db.close()
+
+
 @router.get("/signals")
 async def get_recent_signals():
     """Get recent trading signals."""

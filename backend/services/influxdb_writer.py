@@ -175,6 +175,33 @@ class InfluxDBWriter:
         }
         await self._write(self.BUCKET_SYSTEM, "system_health", tags, fields)
 
+    async def write_performance(
+        self,
+        equity: float,
+        realized_pnl: float,
+        win_rate: float,
+        wins: int,
+        losses: int,
+        total_trades: int,
+        drawdown_pct: float,
+        open_positions: int,
+        cycle: int = 0,
+    ) -> None:
+        """Write rolling performance metrics (win rate, drawdown, equity) to
+        trading-system bucket so Grafana can chart bot performance over time."""
+        fields: dict[str, Any] = {
+            "equity": float(equity),
+            "realized_pnl": float(realized_pnl),
+            "win_rate": float(win_rate),
+            "wins": int(wins),
+            "losses": int(losses),
+            "total_trades": int(total_trades),
+            "drawdown_pct": float(drawdown_pct),
+            "open_positions": int(open_positions),
+            "cycle": int(cycle),
+        }
+        await self._write(self.BUCKET_SYSTEM, "performance", {}, fields)
+
     async def write_agent_state(
         self,
         agent: str,
