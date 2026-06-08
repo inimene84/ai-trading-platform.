@@ -191,6 +191,7 @@ class TradingLoopService:
             
             updated = 0
             exit_price_cache: dict = {}
+            cancelled_orphans: set = set()
             for t in db_trades:
                 if t.symbol not in broker_symbols:
                     # Position was closed externally (e.g. SL/TP hit on Binance)
@@ -212,6 +213,17 @@ class TradingLoopService:
                         else:
                             t.pnl = round((t.entry_price - exit_px) * t.quantity, 4)
                     t.notes = (t.notes or "") + " | Closed externally (sync)"
+
+                    # Cancel any orphaned reduce-only orders (SL/TP/trailing) left
+                    # on the exchange after a native stop fired, once per symbol.
+                    if t.symbol not in cancelled_orphans:
+                        try:
+                            fsym = _bfs_sync._to_futures_symbol(t.symbol)
+                            if fsym:
+                                _bfs_sync._get_client().futures_cancel_all_open_orders(symbol=fsym)
+                            cancelled_orphans.add(t.symbol)
+                        except Exception as _ce:
+                            logger.warning(f"  [ {t.symbol} ] orphan order cleanup failed: {_ce}")
                     
                     # Also cleanup pyramid layers
                     if t.symbol in self._pyramid_layers:
@@ -742,6 +754,17 @@ class TradingLoopService:
                         reasoning=ev.get("reason", ""),
                     ))
                     db.commit()
+                    # Mirror the evaluation into InfluxDB agent_state for Grafana
+                    try:
+                        await influx.write_agent_state(
+                            agent="decision_engine",
+                            symbol=symbol,
+                            direction=ev.get("direction", "HOLD"),
+                            confidence=float(ev.get("confidence", 0.0)),
+                            reasoning=ev.get("reason", ""),
+                        )
+                    except Exception:
+                        pass
             except Exception as _se:
                 logger.warning(f"  [ {symbol} ] signal persist failed: {_se}")
                 db.rollback()
@@ -947,6 +970,11 @@ class TradingLoopService:
         """
         cfg = self.risk_config
         if not getattr(cfg, "trailing_stop_enabled", False):
+            return
+        # When the exchange-native trailing stop is active it trails the market
+        # continuously; skip the per-cycle software ratchet to avoid two
+        # competing trail mechanisms moving the same stop.
+        if getattr(cfg, "native_trailing_enabled", False):
             return
         if not bars or len(bars) < 16:
             return

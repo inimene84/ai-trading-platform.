@@ -590,6 +590,18 @@ class BinanceFuturesService:
                     except Exception as tp_e:
                         logger.warning(f"  [TP] Failed: {tp_e}")
 
+            # ── Native trailing stop (TRAILING_STOP_MARKET, reduceOnly) ───────
+            # Trails the market continuously on the exchange. The hard STOP_MARKET
+            # above remains as a catastrophe floor; this captures profit as price
+            # moves favorably. Best-effort: never fails the trade.
+            if not reduce_only and self._native_trailing_enabled():
+                try:
+                    self._place_native_trailing_stop(
+                        client, futures_sym, side, quantity, price, position_side
+                    )
+                except Exception as tr_e:
+                    logger.warning(f"  [TRAIL] native trailing stop skipped: {tr_e}")
+
             return {
                 'status':       'sent',
                 'message':      f'Order {order_id} filled @ {filled_price}',
@@ -693,6 +705,53 @@ class BinanceFuturesService:
         except Exception as e:
             logger.warning(f"  [MAKER] reconcile error for {futures_sym} ({e}) — MARKET fallback for full qty")
         return None
+
+    def _native_trailing_enabled(self) -> bool:
+        try:
+            from backend.services.risk_config import get_risk_config
+            return bool(get_risk_config().native_trailing_enabled)
+        except Exception:
+            return False
+
+    def _place_native_trailing_stop(self, client, futures_sym, side, quantity, entry_price, position_side):
+        """Place a Binance TRAILING_STOP_MARKET to trail profit continuously."""
+        from backend.services.risk_config import get_risk_config
+        cfg = get_risk_config()
+        # Clamp callbackRate to Binance's allowed 0.1–5.0 range
+        callback = max(0.1, min(5.0, float(cfg.trailing_callback_rate)))
+        close_side = 'SELL' if side == 'BUY' else 'BUY'
+        params = {
+            "symbol": futures_sym,
+            "side": close_side,
+            "type": 'TRAILING_STOP_MARKET',
+            "quantity": quantity,
+            "callbackRate": callback,
+            "positionSide": position_side,
+        }
+        # Activate only after price moves in favor by trailing_activation_pct.
+        act_pct = float(getattr(cfg, "trailing_activation_pct", 0.0) or 0.0)
+        if act_pct > 0 and entry_price > 0:
+            if side == 'BUY':
+                activation = entry_price * (1.0 + act_pct)
+            else:
+                activation = entry_price * (1.0 - act_pct)
+            params["activationPrice"] = self._round_price(futures_sym, activation)
+        try:
+            order = self._safe_create_order(client, params)
+            logger.info(
+                f"  [TRAIL] native trailing stop placed for {futures_sym} "
+                f"callbackRate={callback}% activation={params.get('activationPrice', 'now')} "
+                f"(id={order.get('orderId')})"
+            )
+        except Exception as e:
+            # If the activation price is rejected (already past market), retry
+            # with immediate activation (no activationPrice).
+            if "activationPrice" in params and ("-2021" in str(e) or "-1102" in str(e) or "would immediately" in str(e).lower()):
+                params.pop("activationPrice", None)
+                order = self._safe_create_order(client, params)
+                logger.info(f"  [TRAIL] native trailing stop placed (immediate) for {futures_sym} (id={order.get('orderId')})")
+            else:
+                raise
 
     def _safe_create_order(self, client, order_params):
         """Place an order, auto-reducing precision on -1111 and retrying
