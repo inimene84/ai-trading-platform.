@@ -13,6 +13,7 @@ from backend.routes.news import router as news_router
 from backend.routes.market_data import router as market_data_router
 from backend.routes.historical import router as historical_router
 from backend.routes.telemetry import router as telemetry_router
+from backend.routes.backtest import router as backtest_router
 
 # Main API router
 api_router = APIRouter()
@@ -31,3 +32,4 @@ api_router.include_router(news_router, tags=["news"])
 api_router.include_router(market_data_router, tags=["market-data"])
 api_router.include_router(historical_router)
 api_router.include_router(telemetry_router)
+api_router.include_router(backtest_router, prefix="/api/backtest", tags=["backtest"])
