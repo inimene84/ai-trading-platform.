@@ -4,7 +4,8 @@
 
 GRAFANA_URL=${1:-"http://localhost:3000"}
 AUTH=${2:-"admin:admin"}
-DASHBOARD_FILE="../grafana/dashboards/ai_trading_dashboard.json"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DASHBOARD_FILE="${SCRIPT_DIR}/../grafana/dashboards/ai_trading_dashboard.json"
 
 if [ ! -f "$DASHBOARD_FILE" ]; then
   echo "Error: $DASHBOARD_FILE not found."
