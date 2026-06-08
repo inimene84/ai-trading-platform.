@@ -363,6 +363,29 @@ class BinanceFuturesService:
             else:
                 quantity = self._round_qty(futures_sym, quantity)
 
+            passed_reduce_only = kwargs.get('reduce_only', False)
+
+            # ── Hedge-mode guard: never stack a new leg on an open symbol ─────
+            # Binance hedge mode allows simultaneous LONG+SHORT on the same pair.
+            # That doubles margin use and leaves naked legs without coordinated SL/TP.
+            if action != 'close' and not passed_reduce_only:
+                live_on_symbol = [
+                    p for p in self.get_positions()
+                    if p.get('symbol') == futures_sym and float(p.get('quantity') or 0) > 0
+                ]
+                if live_on_symbol:
+                    sides = [p.get('side') for p in live_on_symbol]
+                    logger.warning(
+                        f"[Binance Futures] SKIP {futures_sym}: open position(s) already on exchange "
+                        f"({sides}) — refusing duplicate {direction.upper()} entry"
+                    )
+                    return {
+                        'status': 'skipped',
+                        'broker': 'binance_futures',
+                        'reason': f'position_already_open:{sides}',
+                        'symbol': futures_sym,
+                    }
+
             # ── Pre-trade margin check ──────────────────────────────────────────
             acct = client.futures_account()
             available = float(acct.get('availableBalance', 0))
@@ -385,7 +408,6 @@ class BinanceFuturesService:
                 }
 
             # Determine side and reduceOnly flag
-            passed_reduce_only = kwargs.get('reduce_only', False)
             if passed_reduce_only or action == 'close':
                 # Closing a position: flip side vs original direction
                 side        = 'SELL' if direction.upper() == 'BUY' else 'BUY'
@@ -438,7 +460,15 @@ class BinanceFuturesService:
 
             order_id = str(result.get('orderId', ''))
             filled_price = float(result.get('avgPrice') or result.get('price') or price or 0.0)
+            if filled_price > 0:
+                price = filled_price
             logger.info(f"  ✓ Order {order_id} filled @ {filled_price}")
+
+            # Treat 0 / negative as missing — manual API calls often send stop_loss=0
+            if stop_loss is not None and stop_loss <= 0:
+                stop_loss = None
+            if take_profit is not None and take_profit <= 0:
+                take_profit = None
 
             logger.info(f"  [DEBUG] SL/TP Check -> reduce_only={reduce_only}, stop_loss={stop_loss}, take_profit={take_profit}")
 

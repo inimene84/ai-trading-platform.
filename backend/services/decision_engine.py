@@ -15,6 +15,38 @@ from backend.services import kronos_service
 
 logger = logging.getLogger(__name__)
 
+
+def compute_sl_tp_levels(
+    bars: List[Dict[str, Any]],
+    direction: str,
+    entry_price: float,
+    config: RiskConfig,
+    signal_sl: Optional[float] = None,
+    signal_tp: Optional[float] = None,
+) -> tuple[float, float]:
+    """ATR-based stop-loss and take-profit for an entry (shared by loop + manual orders)."""
+    try:
+        highs = np.array([b["high"] for b in bars[-15:]])
+        lows = np.array([b["low"] for b in bars[-15:]])
+        closes = np.array([b["close"] for b in bars[-16:-1]])
+        tr = np.maximum(np.maximum(highs - lows, np.abs(highs - closes)), np.abs(lows - closes))
+        atr = float(np.mean(tr))
+    except Exception:
+        atr = entry_price * 0.02
+
+    if direction == "BUY":
+        sl = signal_sl if signal_sl else (entry_price - (atr * config.sl_atr_mult))
+        tp = signal_tp if signal_tp else (entry_price + (atr * config.tp_atr_mult))
+        sl = min(sl, entry_price - (atr * config.sl_atr_mult))
+        tp = max(tp, entry_price + (atr * config.tp_atr_mult))
+    else:
+        sl = signal_sl if signal_sl else (entry_price + (atr * config.sl_atr_mult))
+        tp = signal_tp if signal_tp else (entry_price - (atr * config.tp_atr_mult))
+        sl = max(sl, entry_price + (atr * config.sl_atr_mult))
+        tp = min(tp, entry_price - (atr * config.tp_atr_mult))
+    return sl, tp
+
+
 @dataclass
 class Decision:
     action: str  # "BUY", "SELL", "HOLD", "CLOSE_LONG", "CLOSE_SHORT"
@@ -167,26 +199,10 @@ class DecisionEngine:
         trade_usdt = self.config.pyramid_usdt_per_layer if is_pyramid else self.config.trade_usdt_amount
         quantity = trade_usdt / entry_price if entry_price > 0 else 0
         
-        # Dynamic ATR SL/TP
-        try:
-            highs = np.array([b["high"] for b in bars[-15:]])
-            lows = np.array([b["low"] for b in bars[-15:]])
-            closes = np.array([b["close"] for b in bars[-16:-1]])
-            tr = np.maximum(np.maximum(highs - lows, np.abs(highs - closes)), np.abs(lows - closes))
-            atr = np.mean(tr)
-        except Exception:
-            atr = entry_price * 0.02
-
-        if direction == "BUY":
-            sl = signal.stop_loss if signal.stop_loss else (entry_price - (atr * self.config.sl_atr_mult))
-            tp = signal.take_profit if signal.take_profit else (entry_price + (atr * self.config.tp_atr_mult))
-            sl = min(sl, entry_price - (atr * self.config.sl_atr_mult))
-            tp = max(tp, entry_price + (atr * self.config.tp_atr_mult))
-        else:
-            sl = signal.stop_loss if signal.stop_loss else (entry_price + (atr * self.config.sl_atr_mult))
-            tp = signal.take_profit if signal.take_profit else (entry_price - (atr * self.config.tp_atr_mult))
-            sl = max(sl, entry_price + (atr * self.config.sl_atr_mult))
-            tp = min(tp, entry_price - (atr * self.config.tp_atr_mult))
+        sl, tp = compute_sl_tp_levels(
+            bars, direction, entry_price, self.config,
+            signal_sl=signal.stop_loss, signal_tp=signal.take_profit,
+        )
 
         # Min-edge / fee-churn gate: reject trades whose TP can't clear cost.
         if not self._passes_min_edge(symbol, entry_price, tp, quantity):
