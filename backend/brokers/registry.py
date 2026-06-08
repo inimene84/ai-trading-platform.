@@ -606,9 +606,6 @@ def get_broker(broker_name: str, force_dry_run: bool = False) -> BrokerBase:
         broker = CCXTBroker(exchange_id=exchange_id, sandbox=sandbox)
     elif broker_name == "alpaca":
         broker = AlpacaBroker(paper=os.getenv("ALPACA_PAPER", "true").lower() == "true")
-    elif broker_name == "ctrader":
-        logger.warning("cTrader Live/Demo execution requires Protobuf WebSocket implementation. Falling back to PaperBroker for now.")
-        broker = PaperBroker()
     elif broker_name == "oanda":
         broker = OANDABroker(practice=os.getenv("OANDA_PRACTICE", "true").lower() == "true")
     else:
