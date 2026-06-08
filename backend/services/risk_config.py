@@ -28,6 +28,24 @@ class RiskConfig(BaseSettings):
     max_positions: int = 4
     max_directional_exposure_usdt: float = 500.0
     trade_usdt_amount: float = 10.0
+    # ── Position sizing ──
+    # When enabled, size each entry so a stop-loss hit loses ~risk_per_trade_pct
+    # of account equity (proper risk-based sizing) instead of a flat $ notional.
+    # Falls back to trade_usdt_amount when equity/SL are unavailable.
+    equity_sizing_enabled: bool = PydanticField(
+        default=True,
+        validation_alias=AliasChoices("equity_sizing_enabled", "EQUITY_SIZING_ENABLED"),
+    )
+    risk_per_trade_pct: float = PydanticField(
+        default=0.01,  # risk 1% of equity per trade
+        validation_alias=AliasChoices("risk_per_trade_pct", "RISK_PER_TRADE_PCT"),
+    )
+    # Hard cap on a single trade's notional as a multiple of equity (after
+    # leverage). Keeps risk-based sizing from over-allocating on a tight stop.
+    max_trade_notional_equity_mult: float = PydanticField(
+        default=2.0,
+        validation_alias=AliasChoices("max_trade_notional_equity_mult", "MAX_TRADE_NOTIONAL_EQUITY_MULT"),
+    )
     kill_floor_usdt: float = PydanticField(
         default=65.0,
         validation_alias=AliasChoices("kill_floor_usdt", "TRADING_KILL_FLOOR_USDT"),

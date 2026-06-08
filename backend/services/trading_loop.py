@@ -437,6 +437,13 @@ class TradingLoopService:
         min_confidence = self.risk_config.min_signal_strength
         ai_threshold = self.risk_config.ai_analysis_threshold
         max_positions = self.risk_config.max_positions
+        # Snapshot account equity once per cycle for risk-based position sizing.
+        try:
+            _bal = get_active_broker().get_balance()
+            self._cycle_equity = float(_bal.get("equity", _bal.get("balance", 0.0)) or 0.0)
+        except Exception as _be:
+            logger.warning(f"Could not fetch equity for sizing: {_be}")
+            self._cycle_equity = 0.0
         # Pyramid DCA config
         self._pyramid_mode = self.risk_config.pyramid_mode
         self._pyramid_max_layers = self.risk_config.pyramid_max_layers
@@ -702,6 +709,7 @@ class TradingLoopService:
 
             # 4. Evaluate using Decision Engine
             decision_engine = DecisionEngine(self.risk_config)
+            decision_engine.account_equity = getattr(self, "_cycle_equity", 0.0)
             decision = await decision_engine.evaluate_symbol(
                 symbol=symbol,
                 bars=bars,
@@ -836,9 +844,6 @@ class TradingLoopService:
         finally:
             db.close()
             
-    async def _run_cycle_OLD(self):
-        """Execute one trading cycle across all symbols."""
-
     def _save_portfolio_snapshot(self, db):
         """Save portfolio snapshot with real broker balance."""
         try:

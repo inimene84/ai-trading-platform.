@@ -319,13 +319,20 @@ async def get_status():
                            ('NewsAPI', 'NEWSAPI_KEY'), ('LunarCrush', 'LUNARCRUSH_API_KEY')]:
         data_providers.append({'name': name, 'status': 'configured' if os.getenv(env_key) else 'not_configured'})
 
-    # Risk settings
+    # Risk settings — read from the SAME RiskConfig the trading loop uses so the
+    # UI can never disagree with the live engine.
+    from backend.services.risk_config import get_risk_config
+    _rc = get_risk_config()
     risk_config = {
-        'risk_per_trade': float(os.getenv('RISK_PER_TRADE', '0.01')),
-        'max_positions': int(os.getenv('MAX_POSITIONS', '5')),
-        'min_signal_strength': float(os.getenv('MIN_SIGNAL_STRENGTH', '0.55')),
+        'risk_per_trade': _rc.risk_per_trade_pct,
+        'max_positions': _rc.max_positions,
+        'min_signal_strength': _rc.min_signal_strength,
+        'ai_analysis_threshold': _rc.ai_analysis_threshold,
         'min_risk_reward': float(os.getenv('MIN_RISK_REWARD', '1.5')),
-        'use_kelly': os.getenv('USE_KELLY', 'true') == 'true',
+        'equity_sizing': _rc.equity_sizing_enabled,
+        # Back-compat: the UI "risk-based sizing" indicator. Now reflects the
+        # real equity/risk sizing rather than the previously-fake Kelly flag.
+        'use_kelly': _rc.equity_sizing_enabled,
         'vix_threshold': float(os.getenv('VIX_THRESHOLD', '25.0')),
         'weights': {
             'technical': float(os.getenv('WEIGHT_TECHNICAL', '0.50')),
