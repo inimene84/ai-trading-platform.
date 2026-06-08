@@ -4,6 +4,7 @@ import { Search, TrendingUp, Star, RefreshCw } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { useToast } from './Toast';
 import { apiService } from '../services/apiService';
+import { fetchBinance } from '../services/binanceProxy';
 interface CoinData {
   symbol: string;
   baseAsset: string;
@@ -26,8 +27,8 @@ export const MarketsView = () => {
     setLoading(true);
     try {
       if (activeTab === 'crypto') {
-        // Fetch top trading pairs from Binance
-        const resp = await fetch('https://api.binance.com/api/v3/ticker/24hr');
+        // Fetch top trading pairs from Binance (backend proxy fallback)
+        const resp = await fetchBinance('https://api.binance.com/api/v3/ticker/24hr');
         const data = await resp.json();
 
         // Filter USDT pairs and sort by volume

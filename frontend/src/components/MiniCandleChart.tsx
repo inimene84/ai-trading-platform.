@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
+import { fetchBinance } from '../services/binanceProxy';
 
 interface Candle {
   time: number;
@@ -86,10 +87,10 @@ export function MiniCandleChart({
       } else {
         // Fetch crypto candles from Binance
         const [klinesRes, tickerRes] = await Promise.all([
-          fetch(
+          fetchBinance(
             `https://api.binance.com/api/v3/klines?symbol=${binanceSymbol}&interval=1m&limit=${CANDLE_COUNT}`
           ),
-          fetch(
+          fetchBinance(
             `https://api.binance.com/api/v3/ticker/24hr?symbol=${binanceSymbol}`
           ),
         ]);

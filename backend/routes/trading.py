@@ -1,8 +1,8 @@
 import os
 import httpx
 from dotenv import load_dotenv
-from fastapi import APIRouter, Query
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Query, Request
+from fastapi.responses import StreamingResponse, JSONResponse
 import json
 import asyncio
 from datetime import datetime
@@ -244,9 +244,10 @@ async def get_status():
     if os.getenv('GOOGLE_API_KEY') and os.getenv('GOOGLE_API_KEY') != 'your_google_api_key_here':
         llm_providers.append({'name': 'Google', 'model': 'gemini', 'status': 'configured', 'type': 'cloud'})
 
-    # Ollama (local models)
+    # Ollama (local models) — skip when pointed at the LiteLLM proxy, which is
+    # an OpenAI-compatible endpoint and has no Ollama /api/tags route.
     ollama_url = os.getenv('OLLAMA_BASE_URL', '')
-    if ollama_url:
+    if ollama_url and 'litellm' not in ollama_url.lower():
         try:
             resp = httpx.get(f"{ollama_url}/api/tags", timeout=5)
             if resp.status_code == 200:
@@ -400,9 +401,9 @@ async def get_stocks():
             data.append({
                 "symbol": sym,
                 "price": float(current),
-                "change24h": round(change_pct, 2),
+                "change24h": round(float(change_pct), 2),
                 "volume24h": float(vol),
-                "up": change_pct >= 0
+                "up": bool(change_pct >= 0)
             })
         except Exception:
             pass
@@ -433,13 +434,43 @@ async def get_forex():
             data.append({
                 "symbol": name,
                 "price": float(current),
-                "change24h": round(change_pct, 3), # closer precision for forex
+                "change24h": round(float(change_pct), 3), # closer precision for forex
                 "volume24h": 0.0, # yfinance often doesn't have reliable forex volume
-                "up": change_pct >= 0
+                "up": bool(change_pct >= 0)
             })
         except Exception:
             pass
     return {"data": data}
+
+
+# Binance public spot endpoints the frontend is allowed to proxy through us.
+_BINANCE_PROXY_ALLOWED = {
+    "ticker/24hr", "ticker/price", "ticker/bookTicker",
+    "klines", "depth", "exchangeInfo", "avgPrice",
+}
+
+
+@router.get("/binance/{endpoint:path}")
+async def binance_proxy(endpoint: str, request: Request):
+    """Server-side proxy for Binance public spot market data.
+
+    The dashboard queries api.binance.com directly from the browser, which
+    fails where Binance is geo-blocked (e.g. US/EEA IPs return HTTP 451) or via
+    CORS. The backend reaches Binance reliably, so the frontend falls back to
+    this passthrough. Only read-only public market-data endpoints are allowed.
+    """
+    endpoint = endpoint.strip("/")
+    if endpoint not in _BINANCE_PROXY_ALLOWED:
+        return JSONResponse({"error": f"endpoint not allowed: {endpoint}"}, status_code=400)
+
+    url = f"https://api.binance.com/api/v3/{endpoint}"
+    params = dict(request.query_params)
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(url, params=params)
+        return JSONResponse(content=resp.json(), status_code=resp.status_code)
+    except Exception as exc:
+        return JSONResponse({"error": f"binance proxy failed: {exc}"}, status_code=502)
 
 
 # ── Trading Loop Control ──────────────────────────────────────────────────────
@@ -1275,10 +1306,12 @@ async def event_stream(topics: str = ""):
     async def generator():
         try:
             while True:
-                msg = await asyncio.wait_for(queue.get(), timeout=30.0)
-                yield f"data: {json.dumps(msg)}\n\n"
-        except asyncio.TimeoutError:
-            yield f"data: {json.dumps({'type': 'heartbeat'})}\n\n"
+                try:
+                    msg = await asyncio.wait_for(queue.get(), timeout=30.0)
+                    yield f"data: {json.dumps(msg)}\n\n"
+                except asyncio.TimeoutError:
+                    # Keep the connection alive instead of ending the stream.
+                    yield f"data: {json.dumps({'type': 'heartbeat'})}\n\n"
         except asyncio.CancelledError:
             pass
 
