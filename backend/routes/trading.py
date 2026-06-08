@@ -401,9 +401,9 @@ async def get_stocks():
             data.append({
                 "symbol": sym,
                 "price": float(current),
-                "change24h": round(change_pct, 2),
+                "change24h": round(float(change_pct), 2),
                 "volume24h": float(vol),
-                "up": change_pct >= 0
+                "up": bool(change_pct >= 0)
             })
         except Exception:
             pass
@@ -434,13 +434,43 @@ async def get_forex():
             data.append({
                 "symbol": name,
                 "price": float(current),
-                "change24h": round(change_pct, 3), # closer precision for forex
+                "change24h": round(float(change_pct), 3), # closer precision for forex
                 "volume24h": 0.0, # yfinance often doesn't have reliable forex volume
-                "up": change_pct >= 0
+                "up": bool(change_pct >= 0)
             })
         except Exception:
             pass
     return {"data": data}
+
+
+@router.get("/markets/crypto")
+async def get_crypto(symbols: str = ""):
+    """Server-side proxy for Binance 24h crypto tickers.
+
+    The dashboard watchlist normally queries api.binance.com directly from the
+    browser, which fails in regions where Binance is geo-blocked (e.g. US/EEA
+    IPs return HTTP 451). The backend can reach Binance reliably, so the
+    frontend falls back to this endpoint. Returns a map keyed by symbol.
+    """
+    from backend.services.binance_market_data import binance_market_data
+    requested = [s.strip().upper() for s in symbols.split(",") if s.strip()]
+    try:
+        tickers = await binance_market_data.get_all_tickers_24h(requested or None)
+    except Exception:
+        tickers = []
+
+    result: Dict[str, Dict[str, Any]] = {}
+    for t in tickers:
+        sym = t.get("symbol", "")
+        if not sym:
+            continue
+        result[sym] = {
+            "price": float(t.get("lastPrice", 0) or 0),
+            "change24h": float(t.get("priceChangePercent", 0) or 0),
+            "changeAbs": float(t.get("priceChange", 0) or 0),
+            "volume": float(t.get("quoteVolume", 0) or 0),
+        }
+    return {"data": result, "count": len(result)}
 
 
 # ── Trading Loop Control ──────────────────────────────────────────────────────
@@ -1276,10 +1306,12 @@ async def event_stream(topics: str = ""):
     async def generator():
         try:
             while True:
-                msg = await asyncio.wait_for(queue.get(), timeout=30.0)
-                yield f"data: {json.dumps(msg)}\n\n"
-        except asyncio.TimeoutError:
-            yield f"data: {json.dumps({'type': 'heartbeat'})}\n\n"
+                try:
+                    msg = await asyncio.wait_for(queue.get(), timeout=30.0)
+                    yield f"data: {json.dumps(msg)}\n\n"
+                except asyncio.TimeoutError:
+                    # Keep the connection alive instead of ending the stream.
+                    yield f"data: {json.dumps({'type': 'heartbeat'})}\n\n"
         except asyncio.CancelledError:
             pass
 

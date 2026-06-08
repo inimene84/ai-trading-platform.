@@ -276,7 +276,34 @@ export function MultiAssetPanel({ currentSymbol, onSelectSymbol, onQuickTrade }:
     localStorage.setItem(STORAGE_KEY, JSON.stringify(watchlist));
   }, [watchlist]);
 
-  // ── Fetch crypto prices from Binance ────────────────────────────────────
+  // ── Record a price sample into the rolling history + result map ──────────
+  const recordPrice = useCallback((
+    results: Record<string, Partial<AssetData>>,
+    sym: string,
+    price: number,
+    change24h: number,
+    changeAbs: number,
+    volume: number,
+  ) => {
+    const hist = priceHistoryRef.current[sym] || [];
+    if (price > 0) {
+      hist.push(price);
+      if (hist.length > 20) hist.shift();
+    }
+    priceHistoryRef.current[sym] = hist;
+    results[sym] = {
+      price,
+      change24h,
+      changeAbs,
+      volume,
+      priceHistory: [...hist],
+      loading: false,
+    };
+  }, []);
+
+  // ── Fetch crypto prices: direct Binance first, backend proxy as fallback ──
+  // The direct browser call to api.binance.com fails in geo-blocked regions
+  // (HTTP 451). The backend reaches Binance reliably, so we fall back to it.
   const fetchCryptoPrices = useCallback(async (symbols: string[]) => {
     const cryptoSymbols = symbols.filter(s => !isForexPair(s));
     if (cryptoSymbols.length === 0) return {};
@@ -290,31 +317,48 @@ export function MultiAssetPanel({ currentSymbol, onSelectSymbol, onQuickTrade }:
       if (resp.ok) {
         const data = await resp.json();
         for (const ticker of data) {
-          const sym = ticker.symbol;
-          const price = parseFloat(ticker.lastPrice) || 0;
-          const hist = priceHistoryRef.current[sym] || [];
-          hist.push(price);
-          if (hist.length > 20) hist.shift();
-          priceHistoryRef.current[sym] = hist;
-
-          results[sym] = {
-            price,
-            change24h: parseFloat(ticker.priceChangePercent) || 0,
-            changeAbs: parseFloat(ticker.priceChange) || 0,
-            volume: parseFloat(ticker.quoteVolume) || 0,
-            priceHistory: [...hist],
-            loading: false,
-          };
+          recordPrice(
+            results,
+            ticker.symbol,
+            parseFloat(ticker.lastPrice) || 0,
+            parseFloat(ticker.priceChangePercent) || 0,
+            parseFloat(ticker.priceChange) || 0,
+            parseFloat(ticker.quoteVolume) || 0,
+          );
         }
       }
     } catch (err) {
-      console.warn('Binance fetch error:', err);
-      for (const sym of cryptoSymbols) {
-        results[sym] = { loading: false, error: 'fetch failed' };
+      console.warn('Binance direct fetch error, will try backend proxy:', err);
+    }
+
+    // Fall back to the backend proxy for any symbols still missing a price.
+    const missing = cryptoSymbols.filter(s => !results[s] || !(results[s].price! > 0));
+    if (missing.length > 0) {
+      try {
+        const resp = await fetch(
+          `/api/backend/trading/markets/crypto?symbols=${encodeURIComponent(missing.join(','))}`
+        );
+        if (resp.ok) {
+          const payload = await resp.json();
+          const map = payload.data || {};
+          for (const sym of missing) {
+            const q = map[sym];
+            if (q) {
+              recordPrice(results, sym, q.price || 0, q.change24h || 0, q.changeAbs || 0, q.volume || 0);
+            } else if (!results[sym]) {
+              results[sym] = { loading: false, error: 'no data' };
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('Backend crypto proxy error:', err);
+        for (const sym of missing) {
+          if (!results[sym]) results[sym] = { loading: false, error: 'fetch failed' };
+        }
       }
     }
     return results;
-  }, []);
+  }, [recordPrice]);
 
   // ── Fetch forex prices from backend ────────────────────────────────────
   const fetchForexPrices = useCallback(async (symbols: string[]) => {
