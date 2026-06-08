@@ -40,9 +40,48 @@ async def _poll_loop():
             broker_name = os.getenv("ACTIVE_BROKER", "ctrader")
             if broker_name == "binance_futures":
                 await _sync_open_orders(svc)
+                await _cancel_orphaned_orders(svc)
         except Exception as e:
             logger.warning(f"Order poller cycle error: {e}")
         await asyncio.sleep(_POLL_INTERVAL)
+
+
+_PROTECTIVE_ORDER_TYPES = {
+    "STOP_MARKET", "TAKE_PROFIT_MARKET", "TRAILING_STOP_MARKET", "STOP", "TAKE_PROFIT",
+}
+
+
+async def _cancel_orphaned_orders(svc):
+    """Cancel protective orders (SL/TP/trailing) left on the exchange for symbols
+    that no longer have an open position.
+
+    When a position closes on the exchange (e.g. the trailing stop or SL fires),
+    its sibling reduce-only orders are orphaned. They can't open a new position
+    but they clutter the account; clean them up within one poll cycle (~30s).
+    Pending entry orders (LIMIT/MARKET) are left untouched.
+    """
+    try:
+        positions = await asyncio.get_event_loop().run_in_executor(None, svc.get_positions)
+        pos_syms = {p["symbol"] for p in positions if abs(float(p.get("quantity", 0) or 0)) > 0}
+        orders = await asyncio.get_event_loop().run_in_executor(None, svc.get_open_orders)
+    except Exception as e:
+        logger.warning(f"Orphan reconcile: failed to fetch state: {e}")
+        return
+
+    client = svc._get_client()
+    cancelled = 0
+    for o in orders:
+        sym = o.get("symbol")
+        if sym in pos_syms:
+            continue  # live position — keep its protective orders
+        if o.get("type") in _PROTECTIVE_ORDER_TYPES:
+            try:
+                client.futures_cancel_order(symbol=sym, orderId=int(o["order_id"]))
+                cancelled += 1
+            except Exception as ce:
+                logger.debug(f"Orphan cancel failed for {sym} {o.get('order_id')}: {ce}")
+    if cancelled:
+        logger.info(f"Order poller: cancelled {cancelled} orphaned protective order(s)")
 
 
 async def _sync_open_orders(svc):
