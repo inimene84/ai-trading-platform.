@@ -189,109 +189,96 @@ async def get_fear_greed():
 # ─── Economic Calendar ────────────────────────────────────────────────────────
 @router.get("/economic-calendar")
 async def get_economic_calendar():
-    """Return upcoming economic events (curated mock data for reliability)."""
-    # Using realistic mock data since free live calendar APIs require registration
+    """Return upcoming economic events from Forex Factory, with mock fallback."""
+    cached = _cached("economic_calendar")
+    if cached:
+        return cached
+
     from datetime import date, timedelta
-    today = date.today()
-    events = [
-        {
-            "time": f"{today.strftime('%b %d')} 08:30",
-            "currency": "USD",
-            "event": "Non-Farm Payrolls",
-            "impact": "high",
-            "forecast": "185K",
-            "previous": "177K",
-        },
-        {
-            "time": f"{today.strftime('%b %d')} 10:00",
-            "currency": "USD",
-            "event": "ISM Manufacturing PMI",
-            "impact": "high",
-            "forecast": "49.5",
-            "previous": "50.3",
-        },
-        {
-            "time": f"{today.strftime('%b %d')} 14:00",
-            "currency": "USD",
-            "event": "FOMC Meeting Minutes",
-            "impact": "high",
-            "forecast": "-",
-            "previous": "-",
-        },
-        {
-            "time": f"{(today + timedelta(days=1)).strftime('%b %d')} 09:00",
-            "currency": "EUR",
-            "event": "ECB Interest Rate Decision",
-            "impact": "high",
-            "forecast": "3.40%",
-            "previous": "3.65%",
-        },
-        {
-            "time": f"{(today + timedelta(days=1)).strftime('%b %d')} 08:30",
-            "currency": "USD",
-            "event": "CPI (YoY)",
-            "impact": "high",
-            "forecast": "3.1%",
-            "previous": "3.2%",
-        },
-        {
-            "time": f"{(today + timedelta(days=1)).strftime('%b %d')} 08:30",
-            "currency": "USD",
-            "event": "Unemployment Claims",
-            "impact": "medium",
-            "forecast": "212K",
-            "previous": "219K",
-        },
-        {
-            "time": f"{(today + timedelta(days=2)).strftime('%b %d')} 10:00",
-            "currency": "USD",
-            "event": "Consumer Confidence",
-            "impact": "medium",
-            "forecast": "104.0",
-            "previous": "104.7",
-        },
-        {
-            "time": f"{(today + timedelta(days=2)).strftime('%b %d')} 08:30",
-            "currency": "USD",
-            "event": "GDP (QoQ)",
-            "impact": "high",
-            "forecast": "2.4%",
-            "previous": "3.2%",
-        },
-        {
-            "time": f"{(today + timedelta(days=3)).strftime('%b %d')} 08:30",
-            "currency": "CAD",
-            "event": "Employment Change",
-            "impact": "medium",
-            "forecast": "25.0K",
-            "previous": "22.1K",
-        },
-        {
-            "time": f"{(today + timedelta(days=3)).strftime('%b %d')} 03:00",
-            "currency": "CNY",
-            "event": "Caixin Manufacturing PMI",
-            "impact": "medium",
-            "forecast": "50.3",
-            "previous": "51.2",
-        },
-        {
-            "time": f"{(today + timedelta(days=4)).strftime('%b %d')} 05:30",
-            "currency": "GBP",
-            "event": "BoE Interest Rate Decision",
-            "impact": "high",
-            "forecast": "4.50%",
-            "previous": "4.75%",
-        },
-        {
-            "time": f"{(today + timedelta(days=4)).strftime('%b %d')} 08:30",
-            "currency": "USD",
-            "event": "PPI (MoM)",
-            "impact": "low",
-            "forecast": "0.2%",
-            "previous": "0.4%",
-        },
-    ]
-    return {"events": events}
+    import httpx
+
+    try:
+        # Fetch real live data from Forex Factory free JSON endpoint
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(
+                "https://nfs.faireconomy.media/ff_calendar_thisweek.json",
+                headers={"User-Agent": "Mozilla/5.0"}
+            )
+            resp.raise_for_status()
+            raw_data = resp.json()
+        
+        events = []
+        for d in raw_data:
+            # Map Forex Factory structure to our app structure
+            # Example: {"title": "OPEC-JMMC Meetings", "country": "All", "date": "2026-06-07T05:15:00-04:00", "impact": "Medium", "forecast": "", "previous": ""}
+            try:
+                dt = datetime.fromisoformat(d.get("date", "").replace("Z", "+00:00"))
+                time_str = dt.strftime("%b %d %H:%M")
+            except Exception:
+                time_str = d.get("date", "")
+            
+            events.append({
+                "time": time_str,
+                "currency": d.get("country", "USD"),
+                "event": d.get("title", ""),
+                "impact": d.get("impact", "low").lower(),
+                "forecast": d.get("forecast", ""),
+                "previous": d.get("previous", ""),
+            })
+        
+        response = {"events": events}
+        _set_cache("economic_calendar", response)
+        return response
+
+    except Exception as e:
+        logger.warning(f"Failed to fetch economic calendar, using mock fallback: {e}")
+        # Realistic mock data fallback
+        today = date.today()
+        events = [
+            {
+                "time": f"{today.strftime('%b %d')} 08:30",
+                "currency": "USD",
+                "event": "Non-Farm Payrolls",
+                "impact": "high",
+                "forecast": "185K",
+                "previous": "177K",
+            },
+            {
+                "time": f"{today.strftime('%b %d')} 14:00",
+                "currency": "USD",
+                "event": "FOMC Meeting Minutes",
+                "impact": "high",
+                "forecast": "-",
+                "previous": "-",
+            },
+            {
+                "time": f"{(today + timedelta(days=1)).strftime('%b %d')} 08:30",
+                "currency": "USD",
+                "event": "CPI (YoY)",
+                "impact": "high",
+                "forecast": "3.1%",
+                "previous": "3.2%",
+            },
+            {
+                "time": f"{(today + timedelta(days=2)).strftime('%b %d')} 08:30",
+                "currency": "USD",
+                "event": "GDP (QoQ)",
+                "impact": "high",
+                "forecast": "2.4%",
+                "previous": "3.2%",
+            },
+            {
+                "time": f"{(today + timedelta(days=4)).strftime('%b %d')} 05:30",
+                "currency": "GBP",
+                "event": "BoE Interest Rate Decision",
+                "impact": "high",
+                "forecast": "4.50%",
+                "previous": "4.75%",
+            },
+        ]
+        response = {"events": events}
+        _set_cache("economic_calendar", response)
+        return response
 
 
 # ─── Market Sentiment ─────────────────────────────────────────────────────────
