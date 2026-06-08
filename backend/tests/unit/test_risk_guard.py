@@ -139,12 +139,19 @@ def test_risk_guard_blocks_excessive_daily_loss(db_session):
         sl_cooldown_minutes=30
     )
     
-    # Start of today (UTC) value was 10000
-    start_time = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(minutes=10)
+    # Anchor both snapshots to fixed mid-day UTC timestamps so the test never
+    # depends on the wall-clock time CI happens to run at. (A previous version
+    # used datetime.now(...).replace(hour=0...) + 10min as the baseline, which
+    # broke when CI ran in the first 10 minutes of a UTC day: the "now" snapshot
+    # then sorted BEFORE the baseline and became the day's baseline itself,
+    # yielding 0% loss and no breach.)
+    today = datetime.now(timezone.utc).replace(hour=12, minute=0, second=0, microsecond=0)
+
+    # First snapshot of today (UTC) value was 10000
     snap_today_start = PortfolioSnapshot(
         total_value=10000.0,
         cash=10000.0,
-        timestamp=start_time
+        timestamp=today
     )
     db_session.add(snap_today_start)
     
@@ -152,7 +159,7 @@ def test_risk_guard_blocks_excessive_daily_loss(db_session):
     snap_now = PortfolioSnapshot(
         total_value=9400.0,
         cash=9400.0,
-        timestamp=datetime.now(timezone.utc)
+        timestamp=today + timedelta(hours=2)
     )
     db_session.add(snap_now)
     db_session.commit()
