@@ -35,10 +35,8 @@ def get_active_broker():
         return binance_futures_broker
     return ctrader_broker
 
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
-# Use root logger propagation so uvicorn/nohup captures all cycle logs
-logger.propagate = True  # propagate to root logger (captured by nohup)
+import structlog
+logger = structlog.get_logger(__name__)
 
 
 class TradingLoopService:
@@ -289,6 +287,10 @@ class TradingLoopService:
     async def _run_cycle(self):
         """Execute one trading cycle across all symbols in parallel."""
         self._cycle_count += 1
+        
+        # Bind the cycle number to all structured logs emitted in this cycle
+        structlog.contextvars.bind_contextvars(cycle=self._cycle_count)
+        
         self._last_cycle = datetime.now(timezone.utc).isoformat()
         _cycle_start = datetime.now(timezone.utc).timestamp()
         self._state = "running"
@@ -666,6 +668,9 @@ class TradingLoopService:
             db.close()
 
     async def _process_symbol(self, symbol: str, min_confidence: float, ai_threshold: float, max_positions: int):
+        """Analyze a single symbol and execute a trade if conditions are met."""
+        import structlog
+        structlog.contextvars.bind_contextvars(symbol=symbol)
         from backend.services.decision_engine import DecisionEngine
         from backend.database.connection import SessionLocal
         from backend.database.models import Trade, TradingSignal
