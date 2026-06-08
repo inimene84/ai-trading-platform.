@@ -35,6 +35,14 @@ export default defineConfig(({mode}) => {
           target: env.BACKEND_URL || 'http://localhost:8000',
           changeOrigin: true,
         },
+        '/api/historical': {
+          target: env.BACKEND_URL || 'http://localhost:8000',
+          changeOrigin: true,
+        },
+        '/api/telemetry': {
+          target: env.BACKEND_URL || 'http://localhost:8000',
+          changeOrigin: true,
+        },
       },
     },
   };

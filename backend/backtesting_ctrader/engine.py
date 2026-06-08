@@ -464,6 +464,43 @@ def _atr(highs: "np.ndarray", lows: "np.ndarray", closes: "np.ndarray", period: 
     return float(np.mean(tr[-period:]))
 
 
+def _bars_from_klines(raw: list) -> list:
+    """Convert Binance /fapi/v1/klines rows to engine bar dicts."""
+    bars = []
+    for k in raw:
+        bars.append({
+            "timestamp": int(k[0]),
+            "open": float(k[1]),
+            "high": float(k[2]),
+            "low": float(k[3]),
+            "close": float(k[4]),
+            "volume": float(k[5]),
+        })
+    return bars
+
+
+def _download_crypto_bars(symbol: str, interval: str = "1h", limit: int = 500) -> list:
+    """Download Binance Futures klines (sync, no API key required)."""
+    import httpx
+
+    sym = symbol.upper().replace("-", "").replace("/", "")
+    if not (sym.endswith("USDT") or sym.endswith("USDC")):
+        raise ValueError(f"Not a crypto futures symbol: {symbol!r}")
+
+    url = "https://fapi.binance.com/fapi/v1/klines"
+    with httpx.Client(timeout=20.0) as client:
+        resp = client.get(url, params={
+            "symbol": sym,
+            "interval": interval,
+            "limit": min(limit, 1500),
+        })
+        resp.raise_for_status()
+        data = resp.json()
+    if not data:
+        raise ValueError(f"Binance returned no klines for {sym!r}.")
+    return _bars_from_klines(data)
+
+
 def _download_bars(symbol: str, days: int) -> list:
     """
     Download historical OHLCV data via yfinance and convert to bar dicts.
@@ -488,6 +525,35 @@ def _download_bars(symbol: str, days: int) -> list:
             "volume":    float(row.get("Volume", 0)),
         })
     return bars
+
+
+def download_bars_for_symbol(symbol: str, days: int = 90, interval: str = "1h") -> list:
+    """Pick Binance Futures for crypto pairs, yfinance otherwise."""
+    sym = symbol.upper().replace("-", "").replace("/", "")
+    if sym.endswith("USDT") or sym.endswith("USDC"):
+        limit = min(1500, max(100, days * 24))
+        return _download_crypto_bars(sym, interval=interval, limit=limit)
+    yf_symbol = symbol if ("-" in symbol or "=" in symbol) else f"{symbol}-USD"
+    return _download_bars(yf_symbol, days=days)
+
+
+def backtest_result_to_dict(result: BacktestResult) -> dict:
+    """Serialize BacktestResult for JSON API responses."""
+    return {
+        "symbol": result.symbol,
+        "strategy": result.strategy,
+        "total_trades": result.total_trades,
+        "win_rate": result.win_rate,
+        "total_pnl": result.total_pnl,
+        "total_profit": result.total_pnl,
+        "max_drawdown": result.max_drawdown,
+        "sharpe_ratio": result.sharpe_ratio,
+        "sharpe": result.sharpe_ratio,
+        "profit_factor": result.profit_factor,
+        "avg_trade_duration_mins": result.avg_trade_duration_mins,
+        "equity_curve": result.equity_curve,
+        "trades": result.total_trades,
+    }
 
 
 # ── CLI entry point ───────────────────────────────────────────────────────────

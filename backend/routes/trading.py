@@ -89,43 +89,34 @@ async def list_strategies():
 
 @router.post("/run-backtest")
 async def run_backtest(request: dict):
-    """Run a backtest with specified parameters. Returns results."""
-    symbol = request.get("symbol", "ETH-USD")
-    strategy = request.get("strategy", "breakout")
-    days = request.get("days", 90)
-
-    import subprocess
-
-    result = subprocess.run(
-        [
-            "python",
-            "-c",
-            f"""
-import sys
-sys.path.insert(0, '.')
-try:
-    from backend.backtesting_ctrader.engine import BacktestEngine
-    engine = BacktestEngine(initial_balance=10000)
-    result = engine.run(symbol='{symbol}', strategy='{strategy}', days={days})
-    import json
-    print(json.dumps(result))
-except Exception as e:
-    import json
-    print(json.dumps({{'error': str(e), 'symbol': '{symbol}', 'strategy': '{strategy}', 'pnl': 0, 'trades': 0, 'win_rate': 0, 'sharpe': 0}}))
-""",
-        ],
-        capture_output=True,
-        text=True,
-        cwd=".",
-    )
+    """Run a bar-by-bar backtest using CombinedStrategy on Binance or yfinance data."""
+    symbol = request.get("symbol", "ETHUSDT")
+    strategy = request.get("strategy", "combined")
+    days = int(request.get("days", 90))
+    balance = float(request.get("balance", 10_000))
 
     try:
-        return json.loads(result.stdout.strip())
-    except Exception:
+        from backend.backtesting_ctrader.engine import (
+            BacktestEngine,
+            download_bars_for_symbol,
+            backtest_result_to_dict,
+        )
+        bars = download_bars_for_symbol(symbol, days=days)
+        if len(bars) < 50:
+            return {"error": f"Insufficient bars ({len(bars)}) for {symbol}", "symbol": symbol}
+        engine = BacktestEngine(strategy_name=strategy, initial_balance=balance)
+        result = engine.run(symbol=symbol, bars=bars)
+        return backtest_result_to_dict(result)
+    except Exception as e:
+        logger.error(f"Backtest failed for {symbol}: {e}")
         return {
-            "error": result.stderr or "Unknown error",
+            "error": str(e),
             "symbol": symbol,
             "strategy": strategy,
+            "pnl": 0,
+            "trades": 0,
+            "win_rate": 0,
+            "sharpe": 0,
         }
 
 
