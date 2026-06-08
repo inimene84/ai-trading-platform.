@@ -43,7 +43,12 @@ class OllamaService:
             self._sync_client = None
         
         logger.info(f"OllamaService initialized with host: {self._host}")
-    
+
+    def _is_real_ollama_host(self) -> bool:
+        """False when the host points at the LiteLLM proxy (no Ollama /api/tags)."""
+        host = self._host or ""
+        return bool(host) and "litellm" not in host.lower()
+
     # =============================================================================
     # PUBLIC API METHODS
     # =============================================================================
@@ -194,6 +199,10 @@ class OllamaService:
     
     async def _check_installation(self) -> bool:
         """Check if Ollama is installed locally OR available remotely."""
+        # Skip remote probe when the host is the LiteLLM proxy (not Ollama).
+        if not self._is_real_ollama_host():
+            loop = asyncio.get_event_loop()
+            return await loop.run_in_executor(None, self._is_ollama_installed)
         # First check if remote server is reachable
         try:
             async with httpx.AsyncClient(timeout=3.0) as client:
@@ -219,6 +228,9 @@ class OllamaService:
     
     async def _check_server_running(self) -> bool:
         """Check if the Ollama server is running (local or remote)."""
+        # The LiteLLM proxy is not an Ollama server; skip probing it.
+        if not self._is_real_ollama_host():
+            return False
         # Try with ollama client first
         if self._async_client:
             try:
