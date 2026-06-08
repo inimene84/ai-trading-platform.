@@ -109,23 +109,28 @@ def enforce_risk_limits(
         current_value = latest_snapshot.total_value
 
         # 3. Max portfolio drawdown — peak over a ROLLING window (see module note).
-        window_start = datetime.now(timezone.utc) - timedelta(hours=PEAK_LOOKBACK_HOURS)
-        peak_value = (
-            db.query(func.max(PortfolioSnapshot.total_value))
-            .filter(PortfolioSnapshot.timestamp >= window_start)
-            .scalar()
-        )
-        # Fallback if the window is empty (fresh DB / sparse history): use the
-        # all-time peak so we still have *some* drawdown anchor rather than none.
-        if peak_value is None:
-            peak_value = db.query(func.max(PortfolioSnapshot.total_value)).scalar() or current_value
-        if current_value < peak_value:
-            drawdown_pct = ((peak_value - current_value) / peak_value) * 100
-            if drawdown_pct > cfg.max_portfolio_drawdown_pct:
-                raise RiskBreach(
-                    f"Max portfolio drawdown exceeded: {drawdown_pct:.2f}% > {cfg.max_portfolio_drawdown_pct}% "
-                    f"(Peak: ${peak_value:.2f}, Current: ${current_value:.2f})"
-                )
+        #    Disable entirely by setting max_portfolio_drawdown_pct >= 100
+        #    (e.g. RISK_MAX_DRAWDOWN_PCT=99 in .env) — useful for testing the
+        #    loop through an existing drawdown. >=100 means "no drawdown can ever
+        #    exceed it", so we skip the query work and never raise.
+        if cfg.max_portfolio_drawdown_pct < 100:
+            window_start = datetime.now(timezone.utc) - timedelta(hours=PEAK_LOOKBACK_HOURS)
+            peak_value = (
+                db.query(func.max(PortfolioSnapshot.total_value))
+                .filter(PortfolioSnapshot.timestamp >= window_start)
+                .scalar()
+            )
+            # Fallback if the window is empty (fresh DB / sparse history): use the
+            # all-time peak so we still have *some* drawdown anchor rather than none.
+            if peak_value is None:
+                peak_value = db.query(func.max(PortfolioSnapshot.total_value)).scalar() or current_value
+            if current_value < peak_value:
+                drawdown_pct = ((peak_value - current_value) / peak_value) * 100
+                if drawdown_pct > cfg.max_portfolio_drawdown_pct:
+                    raise RiskBreach(
+                        f"Max portfolio drawdown exceeded: {drawdown_pct:.2f}% > {cfg.max_portfolio_drawdown_pct}% "
+                        f"(Peak: ${peak_value:.2f}, Current: ${current_value:.2f})"
+                    )
 
         # 4. Max daily loss — relative to the first snapshot of today (UTC).
         start_of_today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
