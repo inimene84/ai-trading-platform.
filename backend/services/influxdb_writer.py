@@ -280,7 +280,10 @@ class InfluxDBWriter:
             f"{k}={self._field_value(v)}"
             for k, v in fields.items()
         )
-        line = f"{measurement},{tag_str} {field_str}"
+        # Line protocol: omit the comma entirely when there are no tags,
+        # otherwise InfluxDB rejects "measurement, field=.." as a parse error.
+        prefix = f"{measurement},{tag_str}" if tag_str else measurement
+        line = f"{prefix} {field_str}"
         if ts is not None:
             line += f" {ts}"
         return line
