@@ -8,8 +8,8 @@ model_list:
       max_tokens: 256
       rpm: 30
 
-  # ── Kie.ai (Claude Sonnet 4-6 — PRIMARY persona model) ──
-  - model_name: gemini-3-flash
+  # ── Kie.ai Claude Sonnet 4.6 — PRIMARY (alias: claude-sonnet) ──
+  - model_name: claude-sonnet
     litellm_params:
       model: claude-sonnet-4-6
       api_key: os.environ/KIE_API_KEY
@@ -18,9 +18,10 @@ model_list:
       headers:
         Authorization: os.environ/KIE_BEARER_TOKEN
       temperature: 0.3
-      max_tokens: 512
+      max_tokens: 1024
 
-  - model_name: claude-sonnet
+  # Legacy alias (same Kie Sonnet 4.6 backend)
+  - model_name: gemini-3-flash
     litellm_params:
       model: claude-sonnet-4-6
       api_key: os.environ/KIE_API_KEY
@@ -79,12 +80,12 @@ general_settings:
 
 router_settings:
   fallbacks:
-    # Personas: kie.ai first, OpenRouter free as safety net
-    - gemini-3-flash:
-        - claude-sonnet
+    # PRIMARY: Kie Sonnet 4.6 → OpenRouter safety net
+    - claude-sonnet:
         - openrouter/free
         - kimi-k2-instruct
-    - claude-sonnet:
+    - gemini-3-flash:
+        - claude-sonnet
         - openrouter/free
         - kimi-k2-instruct
     # General: OpenRouter free → specific models
