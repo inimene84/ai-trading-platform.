@@ -244,9 +244,10 @@ async def get_status():
     if os.getenv('GOOGLE_API_KEY') and os.getenv('GOOGLE_API_KEY') != 'your_google_api_key_here':
         llm_providers.append({'name': 'Google', 'model': 'gemini', 'status': 'configured', 'type': 'cloud'})
 
-    # Ollama (local models)
+    # Ollama (local models) — skip when pointed at the LiteLLM proxy, which is
+    # an OpenAI-compatible endpoint and has no Ollama /api/tags route.
     ollama_url = os.getenv('OLLAMA_BASE_URL', '')
-    if ollama_url:
+    if ollama_url and 'litellm' not in ollama_url.lower():
         try:
             resp = httpx.get(f"{ollama_url}/api/tags", timeout=5)
             if resp.status_code == 200:
