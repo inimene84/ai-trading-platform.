@@ -35,47 +35,51 @@ class ModelConfig:
 # ── Default model registry ───────────────────────────────────────────────────
 # These can be overridden via environment variables per task type.
 
+# LiteLLM model alias → Kie.ai claude-sonnet-4-6 (see litellm-config.yaml)
+_KIE_SONNET_LITELLM_MODEL = os.getenv("KIE_LITELLM_MODEL", "claude-sonnet")
+_KIE_SONNET_DIRECT_MODEL = os.getenv("KIE_MODEL", "claude-sonnet-4-6")
+_LITELLM_BASE_URL = os.getenv("LITELLM_BASE_URL", os.getenv("PERSONA_LLM_BASE_URL", "http://litellm:4000/v1"))
+
 _DEFAULT_REGISTRY: dict[str, ModelConfig] = {
-    # KieAI Gemini 3 Flash — cheap, fast, 1h cached personas running in parallel
-    # Routed via VPS LiteLLM proxy (docker: http://litellm:4000/v1)
+    # PRIMARY: Kie.ai Claude Sonnet 4.6 via LiteLLM proxy (docker: http://litellm:4000/v1)
     "persona_analysis": ModelConfig(
-        name=os.getenv("PERSONA_LLM_MODEL", "gemini-3-flash"),
+        name=os.getenv("PERSONA_LLM_MODEL", _KIE_SONNET_LITELLM_MODEL),
         provider=os.getenv("PERSONA_LLM_PROVIDER", "litellm"),
-        tier="cheap",
-        base_url=os.getenv("PERSONA_LLM_BASE_URL", "http://litellm:4000/v1"),
-        max_tokens=512,   # Personas only output short JSON — keep tokens low
-        temperature=0.3,  # Lower temp = more consistent JSON output
-        api_key_env="LITELLM_API_KEY",  # Set to LITELLM master key in docker-compose
-    ),
-
-    # Premium — used for deep single-symbol analysis (ai_analysis.py)
-    "deep_analysis": ModelConfig(
-        name=os.getenv("XAI_MODEL", "grok-4-1-fast-reasoning"),
-        provider="xai",
-        tier="premium",
-        max_tokens=4096,
+        tier="balanced",
+        base_url=_LITELLM_BASE_URL,
+        max_tokens=1024,
         temperature=0.3,
-        api_key_env="XAI_API_KEY",
+        api_key_env="LITELLM_API_KEY",
     ),
 
-    # Balanced — used for general LLM tasks (news scoring, etc.)
-    # Also routes through KieAI/LiteLLM proxy for cost efficiency
+    # Deep trading analysis — same Kie Sonnet 4.6 route as personas
+    "deep_analysis": ModelConfig(
+        name=os.getenv("DEEP_ANALYSIS_LLM_MODEL", os.getenv("PERSONA_LLM_MODEL", _KIE_SONNET_LITELLM_MODEL)),
+        provider=os.getenv("DEEP_ANALYSIS_LLM_PROVIDER", os.getenv("PERSONA_LLM_PROVIDER", "litellm")),
+        tier="balanced",
+        base_url=_LITELLM_BASE_URL,
+        max_tokens=1024,
+        temperature=0.3,
+        api_key_env="LITELLM_API_KEY",
+    ),
+
+    # General LLM tasks (news scoring, etc.) — Kie Sonnet via LiteLLM
     "general": ModelConfig(
-        name=os.getenv("GENERAL_LLM_MODEL", "gemini-3-flash"),
+        name=os.getenv("GENERAL_LLM_MODEL", _KIE_SONNET_LITELLM_MODEL),
         provider=os.getenv("GENERAL_LLM_PROVIDER", "litellm"),
         tier="balanced",
-        base_url=os.getenv("PERSONA_LLM_BASE_URL", "http://litellm:4000/v1"),
+        base_url=_LITELLM_BASE_URL,
         max_tokens=1024,
         temperature=0.4,
         api_key_env="LITELLM_API_KEY",
     ),
 
-    # Fallback chains for ai_analysis.py cascading calls
+    # Direct Kie.ai fallback (bypasses LiteLLM proxy)
     "fallback_1": ModelConfig(
-        name=os.getenv("KIE_MODEL", "claude-haiku-4-5"),
+        name=_KIE_SONNET_DIRECT_MODEL,
         provider="kie",
-        tier="cheap",
-        base_url=os.getenv("KIE_BASE_URL", "https://api.kie.ai/openai/v1"),
+        tier="balanced",
+        base_url=os.getenv("KIE_BASE_URL", "https://api.kie.ai/claude"),
         api_key_env="KIE_API_KEY",
     ),
     "fallback_2": ModelConfig(

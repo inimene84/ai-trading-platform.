@@ -18,7 +18,7 @@ _env_path = Path(__file__).resolve().parents[2] / '.env'
 load_dotenv(_env_path, override=True)
 
 def _read_env_direct(key, default=''):
-    """Read directly from .env file as fallback."""
+    """Read directly from .env file on disk."""
     try:
         for line in _env_path.read_text().splitlines():
             line = line.strip()
@@ -31,6 +31,14 @@ def _read_env_direct(key, default=''):
         pass
     return default
 
+
+def _env(key: str, default: str = '') -> str:
+    """Process env first (Docker/compose), then .env file on disk."""
+    val = os.getenv(key)
+    if val is not None and val != '':
+        return val
+    return _read_env_direct(key, default)
+
 logger = logging.getLogger(__name__)
 
 
@@ -38,39 +46,58 @@ class AIAnalysisService:
     """Multi-step AI analysis pipeline using multi-provider fallback chain."""
 
     def __init__(self):
-        self.ollama_url = os.getenv('OLLAMA_BASE_URL', 'http://localhost:11434')
-        self.ollama_model = _read_env_direct('OLLAMA_PRIMARY_MODEL', 'phi3.5')
-        logger.info(f"AI Analysis using Ollama model: {self.ollama_model}")
+        from backend.llm.router import pick_model, get_api_key
 
-        # Primary: xAI
-        self.xai_model = _read_env_direct('XAI_MODEL', 'grok-4-1-fast-reasoning')
-        self.xai_api_key = _read_env_direct('XAI_API_KEY', '')
-        self.xai_base_url = _read_env_direct('XAI_BASE_URL', 'https://api.x.ai/v1')
+        self.ollama_url = _env('OLLAMA_BASE_URL', 'http://localhost:11434')
+        self.ollama_model = _env('OLLAMA_PRIMARY_MODEL', 'phi3.5')
 
-        # Fallback 1: Kie.ai (Claude proxy)
-        self.kieai_api_key = _read_env_direct('KIE_API_KEY', '')
-        self.kieai_model = _read_env_direct('KIE_MODEL', 'claude-haiku-4-5')
+        # Primary: Kie.ai Claude Sonnet 4.6 via LiteLLM proxy
+        deep_cfg = pick_model('deep_analysis')
+        self.litellm_model = deep_cfg.name
+        self.litellm_base_url = deep_cfg.base_url or 'http://litellm:4000/v1'
+        self.litellm_api_key = get_api_key(deep_cfg)
 
-        # Fallback 2: Anthropic
-        self.anthropic_api_key = _read_env_direct('ANTHROPIC_API_KEY', '')
-        self.anthropic_model = _read_env_direct('ANTHROPIC_MODEL', 'claude-sonnet-4-6')
+        # Fallback: direct Kie.ai Claude proxy
+        self.kieai_api_key = _env('KIE_API_KEY', '')
+        self.kieai_model = _env('KIE_MODEL', 'claude-sonnet-4-6')
 
-        # Fallback 3: Google Gemini
-        self.gemini_api_key = _read_env_direct('GOOGLE_API_KEY', '')
-        self.gemini_model = _read_env_direct('GEMINI_MODEL', 'gemini-2.5-flash')
+        # Fallback: xAI
+        self.xai_model = _env('XAI_MODEL', 'grok-4-1-fast-reasoning')
+        self.xai_api_key = _env('XAI_API_KEY', '')
+        self.xai_base_url = _env('XAI_BASE_URL', 'https://api.x.ai/v1')
 
-        # Legacy aliases for backward compat
-        self.expensive_model = self.xai_model
-        self.expensive_provider = 'xai'
-        self.expensive_api_key = self.xai_api_key
-        self.expensive_base_url = self.xai_base_url
+        # Fallback: Anthropic / Gemini
+        self.anthropic_api_key = _env('ANTHROPIC_API_KEY', '')
+        self.anthropic_model = _env('ANTHROPIC_MODEL', 'claude-sonnet-4-6')
+        self.gemini_api_key = _env('GOOGLE_API_KEY', '')
+        self.gemini_model = _env('GEMINI_MODEL', 'gemini-2.5-flash')
 
-        self.enabled = _read_env_direct('AI_ANALYSIS_ENABLED', 'true').lower() == 'true'
-        self.ollama_url = _read_env_direct('OLLAMA_BASE_URL', 'http://localhost:11434')
+        # Legacy aliases — primary decision model is Kie Sonnet via LiteLLM
+        self.expensive_model = self.litellm_model
+        self.expensive_provider = 'Kie.ai (LiteLLM)'
+        self.expensive_api_key = self.litellm_api_key
+        self.expensive_base_url = self.litellm_base_url
+
+        self.enabled = _env('AI_ANALYSIS_ENABLED', 'true').lower() == 'true'
+        logger.info(
+            f"AI Analysis primary: {self.litellm_model} @ {self.litellm_base_url} "
+            f"(configured={self._litellm_configured()})"
+        )
 
     def reload_config(self):
         load_dotenv(_env_path, override=True)
         self.__init__()
+
+    def _litellm_configured(self) -> bool:
+        return bool(self.litellm_api_key and self.litellm_base_url)
+
+    def _ollama_configured(self) -> bool:
+        """Only use native Ollama when not pointed at the LiteLLM proxy."""
+        if not self.ollama_url:
+            return False
+        if 'litellm' in self.ollama_url:
+            return False
+        return True
 
     @property
     def models_info(self) -> dict:
@@ -81,20 +108,24 @@ class AIAnalysisService:
                 'role': 'Technical Indicators, Bull/Bear Analysis (instant, FREE)', 'cost': 'free',
             },
             'decision_model': {
-                'model': self.xai_model, 'provider': 'xAI',
-                'url': self.xai_base_url, 'role': 'AI Trading Decision (fast, ~3-5s)',
-                'cost': 'paid', 'configured': bool(self.xai_api_key),
+                'model': self.litellm_model,
+                'provider': 'Kie.ai (LiteLLM → claude-sonnet-4-6)',
+                'url': self.litellm_base_url,
+                'role': 'AI Trading Decision via Kie.ai Sonnet 4.6',
+                'cost': 'paid',
+                'configured': self._litellm_configured(),
             },
             'fallback_chain': [
-                {'order': 1, 'provider': 'xAI', 'model': self.xai_model, 'configured': bool(self.xai_api_key)},
-                {'order': 2, 'provider': 'Kie.ai', 'model': self.kieai_model, 'configured': bool(self.kieai_api_key)},
-                {'order': 3, 'provider': 'Anthropic', 'model': self.anthropic_model, 'configured': bool(self.anthropic_api_key)},
-                {'order': 4, 'provider': 'Google Gemini', 'model': self.gemini_model, 'configured': bool(self.gemini_api_key)},
-                {'order': 5, 'provider': 'Ollama', 'model': self.ollama_model, 'configured': True},
+                {'order': 1, 'provider': 'Kie.ai (LiteLLM)', 'model': self.litellm_model, 'configured': self._litellm_configured()},
+                {'order': 2, 'provider': 'Kie.ai (direct)', 'model': self.kieai_model, 'configured': bool(self.kieai_api_key)},
+                {'order': 3, 'provider': 'xAI', 'model': self.xai_model, 'configured': bool(self.xai_api_key)},
+                {'order': 4, 'provider': 'Anthropic', 'model': self.anthropic_model, 'configured': bool(self.anthropic_api_key)},
+                {'order': 5, 'provider': 'Google Gemini', 'model': self.gemini_model, 'configured': bool(self.gemini_api_key)},
+                {'order': 6, 'provider': 'Ollama', 'model': self.ollama_model, 'configured': self._ollama_configured()},
             ],
             'pipeline_steps': [
                 {'step': 1, 'name': 'Technical Analysis + Bull/Bear', 'model': 'local-compute', 'provider': 'system', 'cost': 'free'},
-                {'step': 2, 'name': 'AI Decision', 'model': self.xai_model, 'provider': 'xAI', 'cost': 'paid'},
+                {'step': 2, 'name': 'AI Decision', 'model': self.litellm_model, 'provider': 'Kie.ai (LiteLLM)', 'cost': 'paid'},
             ],
         }
 
@@ -117,6 +148,35 @@ class AIAnalysisService:
         except Exception as e:
             logger.error(f"Ollama error: {e}")
             return f'[ERROR] Ollama call failed: {str(e)}'
+
+    async def run_litellm(self, prompt: str, system: str = '') -> dict:
+        """Primary: Kie.ai Claude Sonnet 4.6 via LiteLLM OpenAI-compatible proxy."""
+        if not self._litellm_configured():
+            raise ValueError('LiteLLM not configured (set LITELLM_API_KEY or KIE_API_KEY)')
+        messages = []
+        if system:
+            messages.append({'role': 'system', 'content': system})
+        messages.append({'role': 'user', 'content': prompt})
+        async with httpx.AsyncClient(timeout=90.0) as client:
+            resp = await client.post(
+                f"{self.litellm_base_url.rstrip('/')}/chat/completions",
+                headers={
+                    'Authorization': f'Bearer {self.litellm_api_key}',
+                    'Content-Type': 'application/json',
+                },
+                json={
+                    'model': self.litellm_model,
+                    'messages': messages,
+                    'temperature': 0.3,
+                    'max_tokens': 1024,
+                },
+            )
+            if not resp.is_success:
+                body = resp.text[:300]
+                logger.error(f"LiteLLM API {resp.status_code}: {body}")
+                resp.raise_for_status()
+            content = resp.json()['choices'][0]['message']['content']
+            return self._parse_decision(content)
 
     async def run_xai(self, prompt: str, system: str = '') -> dict:
         """Primary provider: xAI (Grok)."""
@@ -254,14 +314,15 @@ class AIAnalysisService:
 
     async def run_with_fallback(self, prompt: str, system: str = '') -> dict:
         """
-        Try providers in order: xAI → Kie.ai → Anthropic → Gemini → Ollama → fallback_decision.
+        Try providers in order: Kie.ai Sonnet (LiteLLM) → Kie.ai direct → xAI → Anthropic → Gemini → Ollama.
         """
         providers = [
+            ('Kie.ai (LiteLLM)', self.run_litellm, self._litellm_configured()),
+            ('Kie.ai (direct)', self.run_kieai, bool(self.kieai_api_key)),
             ('xAI', self.run_xai, bool(self.xai_api_key)),
-            ('Kie.ai', self.run_kieai, bool(self.kieai_api_key)),
             ('Anthropic', self.run_anthropic, bool(self.anthropic_api_key)),
             ('Gemini', self.run_gemini, bool(self.gemini_api_key)),
-            ('Ollama', self._run_ollama_decision, True),
+            ('Ollama', self._run_ollama_decision, self._ollama_configured()),
         ]
 
         for name, provider_fn, configured in providers:
