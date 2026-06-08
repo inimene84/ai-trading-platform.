@@ -35,7 +35,15 @@ class RiskConfig(BaseSettings):
     
     # Safety hard boundaries (Phase 7)
     max_position_risk_pct: float = 1.0
-    max_portfolio_drawdown_pct: float = 20.0
+    # Env-tunable so the loop can be tested through a drawdown without a rebuild.
+    # Set RISK_MAX_DRAWDOWN_PCT=99 in .env to effectively disable the drawdown
+    # halt; default 20.0 preserves the original protection.
+    max_portfolio_drawdown_pct: float = PydanticField(
+        default=20.0,
+        validation_alias=AliasChoices(
+            "max_portfolio_drawdown_pct", "RISK_MAX_DRAWDOWN_PCT"
+        ),
+    )
     max_daily_loss_pct: float = 5.0
     max_open_positions: int = 10
     
