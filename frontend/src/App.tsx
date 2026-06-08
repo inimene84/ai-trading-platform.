@@ -776,6 +776,7 @@ export default function App() {
   const [manualTp, setManualTp] = useState<string>('');
   const [manualOrderType, setManualOrderType] = useState<string>('market');
   const [recentTrades, setRecentTrades] = useState<any[]>([]);
+  const [botTrades, setBotTrades] = useState<any[]>([]);
   const [portfolioBalance, setPortfolioBalance] = useState(24500.00);
 
   // Workflow Execution State
@@ -801,6 +802,8 @@ export default function App() {
         setDryRun(st.dry_run);
         const ls = await apiService.getLoopStatus().catch(() => null);
         setLoopRunning(ls?.running ?? false);
+        const tr = await apiService.getTrades({ limit: 15 }).catch(() => null);
+        if (tr) setBotTrades(tr.trades || []);
       } catch {
         setBackendConnected(false);
         setLoopRunning(false);
@@ -1787,22 +1790,39 @@ export default function App() {
                     </div>
                   </div>
 
-                  {/* Recent Trades */}
+                  {/* Recent Trades — bot's executed trades from the backend */}
                   <div className="col-span-12 lg:col-span-4 bg-[#141416] border border-zinc-800 rounded-xl overflow-hidden flex flex-col" style={{ maxHeight: 480 }}>
-                    <div className="px-4 py-3 border-b border-zinc-800 flex-shrink-0">
+                    <div className="px-4 py-3 border-b border-zinc-800 flex-shrink-0 flex items-center justify-between">
                       <h3 className="text-xs font-semibold">Recent Trades</h3>
+                      <span className="text-[10px] text-zinc-500 font-mono">{botTrades.length}</span>
                     </div>
                     <div className="flex-1 overflow-y-auto py-1 scrollbar-hide">
-                      {recentTrades.length === 0 ? (
+                      {botTrades.length === 0 ? (
                         <div className="px-4 py-8 text-center text-zinc-500 text-xs italic">No trades yet.</div>
                       ) : (
-                        recentTrades.map((t, i) => (
-                          <div key={i} className="flex items-center justify-between px-4 py-1.5 text-[11px] font-mono hover:bg-white/5">
-                            <span className={cn(t.type === 'bid' ? 'text-emerald-400' : 'text-rose-400')}>{t.price}</span>
-                            <span className="text-zinc-400">{t.amount}</span>
-                            <span className="text-zinc-600">{t.time}</span>
-                          </div>
-                        ))
+                        botTrades.map((t, i) => {
+                          const isBuy = String(t.direction).toUpperCase() === 'BUY';
+                          const px = t.entry_price ?? t.price ?? 0;
+                          const when = t.timestamp ? new Date(t.timestamp).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
+                          const pnl = typeof t.pnl === 'number' ? t.pnl : null;
+                          return (
+                            <div key={t.id ?? i} className="flex items-center justify-between px-4 py-1.5 text-[11px] font-mono hover:bg-white/5">
+                              <span className="flex items-center gap-1.5">
+                                <span className={cn('font-bold', isBuy ? 'text-emerald-400' : 'text-rose-400')}>{isBuy ? 'BUY' : 'SELL'}</span>
+                                <span className="text-zinc-300">{t.symbol}</span>
+                              </span>
+                              <span className="text-zinc-400">{typeof px === 'number' ? px.toLocaleString(undefined, { maximumFractionDigits: 6 }) : px}</span>
+                              <span className="flex items-center gap-2">
+                                {pnl !== null && (
+                                  <span className={cn(pnl > 0 ? 'text-emerald-400' : pnl < 0 ? 'text-rose-400' : 'text-zinc-500')}>
+                                    {pnl > 0 ? '+' : ''}{pnl.toFixed(2)}
+                                  </span>
+                                )}
+                                <span className="text-zinc-600">{t.status === 'open' ? 'OPEN' : when}</span>
+                              </span>
+                            </div>
+                          );
+                        })
                       )}
                     </div>
                   </div>
