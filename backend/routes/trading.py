@@ -1,8 +1,8 @@
 import os
 import httpx
 from dotenv import load_dotenv
-from fastapi import APIRouter, Query
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Query, Request
+from fastapi.responses import StreamingResponse, JSONResponse
 import json
 import asyncio
 from datetime import datetime
@@ -443,34 +443,34 @@ async def get_forex():
     return {"data": data}
 
 
-@router.get("/markets/crypto")
-async def get_crypto(symbols: str = ""):
-    """Server-side proxy for Binance 24h crypto tickers.
+# Binance public spot endpoints the frontend is allowed to proxy through us.
+_BINANCE_PROXY_ALLOWED = {
+    "ticker/24hr", "ticker/price", "ticker/bookTicker",
+    "klines", "depth", "exchangeInfo", "avgPrice",
+}
 
-    The dashboard watchlist normally queries api.binance.com directly from the
-    browser, which fails in regions where Binance is geo-blocked (e.g. US/EEA
-    IPs return HTTP 451). The backend can reach Binance reliably, so the
-    frontend falls back to this endpoint. Returns a map keyed by symbol.
+
+@router.get("/binance/{endpoint:path}")
+async def binance_proxy(endpoint: str, request: Request):
+    """Server-side proxy for Binance public spot market data.
+
+    The dashboard queries api.binance.com directly from the browser, which
+    fails where Binance is geo-blocked (e.g. US/EEA IPs return HTTP 451) or via
+    CORS. The backend reaches Binance reliably, so the frontend falls back to
+    this passthrough. Only read-only public market-data endpoints are allowed.
     """
-    from backend.services.binance_market_data import binance_market_data
-    requested = [s.strip().upper() for s in symbols.split(",") if s.strip()]
-    try:
-        tickers = await binance_market_data.get_all_tickers_24h(requested or None)
-    except Exception:
-        tickers = []
+    endpoint = endpoint.strip("/")
+    if endpoint not in _BINANCE_PROXY_ALLOWED:
+        return JSONResponse({"error": f"endpoint not allowed: {endpoint}"}, status_code=400)
 
-    result: Dict[str, Dict[str, Any]] = {}
-    for t in tickers:
-        sym = t.get("symbol", "")
-        if not sym:
-            continue
-        result[sym] = {
-            "price": float(t.get("lastPrice", 0) or 0),
-            "change24h": float(t.get("priceChangePercent", 0) or 0),
-            "changeAbs": float(t.get("priceChange", 0) or 0),
-            "volume": float(t.get("quoteVolume", 0) or 0),
-        }
-    return {"data": result, "count": len(result)}
+    url = f"https://api.binance.com/api/v3/{endpoint}"
+    params = dict(request.query_params)
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(url, params=params)
+        return JSONResponse(content=resp.json(), status_code=resp.status_code)
+    except Exception as exc:
+        return JSONResponse({"error": f"binance proxy failed: {exc}"}, status_code=502)
 
 
 # ── Trading Loop Control ──────────────────────────────────────────────────────
