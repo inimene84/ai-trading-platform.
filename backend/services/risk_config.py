@@ -54,7 +54,10 @@ class RiskConfig(BaseSettings):
     
     # Signal thresholds
     min_signal_strength: float = 0.60
-    ai_analysis_threshold: float = 0.60
+    ai_analysis_threshold: float = PydanticField(
+        default=0.60,
+        validation_alias=AliasChoices("ai_analysis_threshold", "AI_ANALYSIS_THRESHOLD"),
+    )
     opinion_override_margin: float = 0.15
     opinion_entry_min: float = 0.25
     

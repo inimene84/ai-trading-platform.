@@ -322,6 +322,7 @@ def _aggregate_opinions(
     weighted_sum = 0.0
     total_possible_weight = 0.0
     conviction_sum = 0.0   # sum of weighted confidence magnitudes (direction-agnostic)
+    engaged_weight = 0.0   # weight of agents that actually have a non-neutral opinion
     opinion_lines = []
 
     for op in opinions:
@@ -333,6 +334,9 @@ def _aggregate_opinions(
         # Conviction: how sure any agent is (regardless of direction)
         conviction_sum += weight * op.confidence
         total_possible_weight += weight
+        # Track weight of engaged agents (conf > 0 or non-neutral signal)
+        if op.confidence > 0.0 or op.signal != "neutral":
+            engaged_weight += weight
         
         opinion_lines.append(
             f"  • {op.agent}: {op.signal.upper()} (conf={op.confidence:.2f}, weight={weight})"
@@ -340,8 +344,11 @@ def _aggregate_opinions(
 
     if total_possible_weight > 0:
         final_score = weighted_sum / total_possible_weight
-        # Average conviction (0-1): how strongly agents feel overall
-        avg_conviction = conviction_sum / total_possible_weight
+        # Average conviction: divide by engaged weight so abstaining agents
+        # don't dilute the conviction of agents that actually have an opinion.
+        # Falls back to total_possible_weight if nobody engaged (avoids div/0).
+        conviction_denom = engaged_weight if engaged_weight > 0.0 else total_possible_weight
+        avg_conviction = conviction_sum / conviction_denom
     else:
         final_score = 0.0
         avg_conviction = 0.0
