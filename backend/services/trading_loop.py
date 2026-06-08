@@ -349,7 +349,6 @@ class TradingLoopService:
                     )
                     # Write kill event to InfluxDB for Grafana alerting
                     try:
-                        from backend.services.influxdb_writer import influx
                         await influx._write(
                             influx.BUCKET_SYSTEM, 'system_event',
                             {'event': 'kill_switch', 'reason': 'equity_below_floor'},
