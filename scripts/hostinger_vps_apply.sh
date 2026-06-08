@@ -36,6 +36,11 @@ if [[ -f .env ]]; then
   grep -q '^EQUITY_SIZING_ENABLED=' .env || echo 'EQUITY_SIZING_ENABLED=true' >> .env
   grep -q '^PAPER_TRADING=' .env || echo 'PAPER_TRADING=false' >> .env
   grep -q '^DRY_RUN_ALL=' .env || echo 'DRY_RUN_ALL=false' >> .env
+  grep -q '^JSON_LOGS=' .env || echo 'JSON_LOGS=true' >> .env
+  if ! grep -q '^GRAFANA_URL=' .env; then
+    VPS_IP=$(curl -sf --max-time 3 ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')
+    echo "GRAFANA_URL=http://${VPS_IP:-localhost}:3000" >> .env
+  fi
 fi
 
 echo ""
