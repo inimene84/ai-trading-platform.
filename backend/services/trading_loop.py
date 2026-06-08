@@ -163,12 +163,27 @@ class TradingLoopService:
             db_trades = db.query(Trade).filter(Trade.status.in_(["open", "filled"])).all()
             
             updated = 0
+            exit_price_cache: dict = {}
             for t in db_trades:
                 if t.symbol not in broker_symbols:
                     # Position was closed externally (e.g. SL/TP hit on Binance)
                     logger.info(f"  [ {t.symbol} ] Position not found in broker, marking as closed in DB.")
+
+                    # Record exit price + realized P&L (one mark/fill lookup per symbol)
+                    if t.symbol not in exit_price_cache:
+                        exit_price_cache[t.symbol] = await asyncio.get_event_loop().run_in_executor(
+                            None, _bfs_sync.get_exit_price, t.symbol
+                        )
+                    exit_px = exit_price_cache[t.symbol]
+
                     t.status = "closed"
                     t.closed_at = datetime.now(timezone.utc)
+                    if exit_px and t.entry_price and t.quantity:
+                        t.exit_price = exit_px
+                        if str(t.direction).upper() == "BUY":
+                            t.pnl = round((exit_px - t.entry_price) * t.quantity, 4)
+                        else:
+                            t.pnl = round((t.entry_price - exit_px) * t.quantity, 4)
                     t.notes = (t.notes or "") + " | Closed externally (sync)"
                     
                     # Also cleanup pyramid layers
