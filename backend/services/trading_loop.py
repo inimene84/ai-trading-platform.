@@ -598,6 +598,12 @@ class TradingLoopService:
                 errors=_errors,
                 state=self._state,
             )
+
+            # Rolling performance metrics (win rate / drawdown / equity)
+            try:
+                await self._write_performance_metrics(db)
+            except Exception as _pe:
+                logger.warning(f"performance metrics write failed: {_pe}")
             
             _active_broker = get_active_broker()
             bal = _active_broker.get_balance() if hasattr(_active_broker, 'get_balance') else {}
@@ -844,6 +850,33 @@ class TradingLoopService:
         finally:
             db.close()
             
+    async def _write_performance_metrics(self, db):
+        """Compute and emit rolling win-rate / drawdown / equity to InfluxDB."""
+        from sqlalchemy import func as _func
+        closed = db.query(Trade).filter(Trade.status == "closed").all()
+        wins = sum(1 for t in closed if (t.pnl or 0) > 0)
+        losses = sum(1 for t in closed if (t.pnl or 0) < 0)
+        decided = wins + losses
+        win_rate = (wins / decided * 100.0) if decided else 0.0
+        realized_pnl = round(sum((t.pnl or 0.0) for t in closed), 4)
+
+        equity = float(getattr(self, "_cycle_equity", 0.0) or 0.0)
+        # Drawdown vs peak equity seen in portfolio snapshots
+        peak = db.query(_func.max(PortfolioSnapshot.total_value)).scalar() or equity
+        drawdown_pct = ((equity - peak) / peak * 100.0) if peak and peak > 0 else 0.0
+
+        await influx.write_performance(
+            equity=equity,
+            realized_pnl=realized_pnl,
+            win_rate=round(win_rate, 2),
+            wins=wins,
+            losses=losses,
+            total_trades=len(closed),
+            drawdown_pct=round(drawdown_pct, 3),
+            open_positions=self._open_count,
+            cycle=self._cycle_count,
+        )
+
     def _save_portfolio_snapshot(self, db):
         """Save portfolio snapshot with real broker balance."""
         try:

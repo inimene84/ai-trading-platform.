@@ -81,17 +81,68 @@ class MarketDataService {
 
     this.ws.onclose = () => {
       if (this.provider === 'binance') {
-        console.log('Binance websocket closed. Reconnecting...');
         this.ws = null;
-        setTimeout(() => this.connect(), 3000);
+        // If the direct WS never connected (geo-block/CORS), fall back to
+        // REST polling through the backend proxy instead of hammering reconnect.
+        if (this.connectionStatus !== 'connected') {
+          this._startRestFallback();
+        } else {
+          this.connectionStatus = 'connecting';
+          this.notifyStatus();
+          setTimeout(() => this.connect(), 3000);
+        }
       }
     };
 
-    this.ws.onerror = (err) => {
-      console.error('Binance websocket error:', err);
+    this.ws.onerror = () => {
+      // stream.binance.com is geo-blocked from some regions; degrade to REST.
+      console.warn('Binance WS error — falling back to backend REST polling');
       this.connectionStatus = 'error';
       this.notifyStatus();
+      try { this.ws?.close(); } catch { /* ignore */ }
+      this.ws = null;
+      this._startRestFallback();
     };
+  }
+
+  private _startRestFallback() {
+    if (this.pollInterval || this.provider !== 'binance') return;
+    const sym = this.symbol.toUpperCase();
+    const poll = async () => {
+      try {
+        const [kRes, tRes] = await Promise.all([
+          fetchBinance(`https://api.binance.com/api/v3/klines?symbol=${sym}&interval=1m&limit=2`),
+          fetchBinance(`https://api.binance.com/api/v3/depth?symbol=${sym}&limit=10`),
+        ]);
+        if (kRes.ok) {
+          const kl = await kRes.json();
+          const k = kl[kl.length - 1];
+          if (k) {
+            this.klineCallbacks.forEach(cb => cb({
+              time: k[0] / 1000,
+              open: parseFloat(k[1]), high: parseFloat(k[2]),
+              low: parseFloat(k[3]), close: parseFloat(k[4]),
+              volume: parseFloat(k[5]), isFinal: true,
+            }));
+          }
+        }
+        if (tRes.ok) {
+          const d = await tRes.json();
+          this.depthCallbacks.forEach(cb => cb({
+            bids: (d.bids || []).map((b: string[]) => [parseFloat(b[0]), parseFloat(b[1])]),
+            asks: (d.asks || []).map((a: string[]) => [parseFloat(a[0]), parseFloat(a[1])]),
+          }));
+        }
+        if (this.connectionStatus !== 'connected') {
+          this.connectionStatus = 'connected';
+          this.notifyStatus();
+        }
+      } catch (err) {
+        console.warn('REST fallback poll error:', err);
+      }
+    };
+    poll();
+    this.pollInterval = setInterval(poll, 3000);
   }
 
   private notifyStatus() {
