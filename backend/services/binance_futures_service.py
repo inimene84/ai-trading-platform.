@@ -320,12 +320,18 @@ class BinanceFuturesService:
         return None
 
     def get_open_orders(self) -> list:
-        """Return all open futures orders."""
+        """Return all open futures orders, INCLUDING conditional/algo orders.
+
+        On this account SL/TP/trailing orders placed via futures_create_order are
+        routed as CONDITIONAL (algo) orders, which do NOT appear in the regular
+        /fapi/v1/openOrders feed. We merge both so callers see every open order.
+        Conditional orders are tagged with `algo_id` for cancellation.
+        """
+        out = []
+        client = self._get_client()
         try:
-            client = self._get_client()
-            orders = client.futures_get_open_orders()
-            return [
-                {
+            for o in client.futures_get_open_orders():
+                out.append({
                     'order_id': str(o['orderId']),
                     'symbol':   o['symbol'],
                     'side':     o['side'],
@@ -333,12 +339,50 @@ class BinanceFuturesService:
                     'quantity': float(o['origQty']),
                     'price':    float(o.get('price', 0)),
                     'status':   o['status'],
-                }
-                for o in orders
-            ]
+                    'algo_id':  None,
+                })
         except Exception as e:
             logger.error(f"get_open_orders error: {e}")
-            return []
+        # Conditional / algo orders (STOP/TP/TRAILING on this account)
+        try:
+            algo = client.futures_get_open_algo_orders()
+            algo_list = algo if isinstance(algo, list) else algo.get('orders', [])
+            for o in algo_list:
+                out.append({
+                    'order_id': str(o.get('algoId', '')),
+                    'symbol':   o.get('symbol'),
+                    'side':     o.get('side'),
+                    'type':     o.get('orderType') or o.get('algoType'),
+                    'quantity': float(o.get('quantity', 0) or 0),
+                    'price':    float(o.get('triggerPrice', 0) or 0),
+                    'status':   o.get('algoStatus', 'NEW'),
+                    'algo_id':  o.get('algoId'),
+                })
+        except Exception as e:
+            logger.debug(f"get_open_algo_orders error: {e}")
+        return out
+
+    def cancel_all_orders(self, symbol: str) -> None:
+        """Cancel ALL open orders for a symbol — regular AND conditional/algo."""
+        client = self._get_client()
+        fsym = self._to_futures_symbol(symbol)
+        if not fsym:
+            return
+        try:
+            client.futures_cancel_all_open_orders(symbol=fsym)
+        except Exception as e:
+            logger.debug(f"[{fsym}] cancel regular orders: {e}")
+        try:
+            algo = client.futures_get_open_algo_orders()
+            algo_list = algo if isinstance(algo, list) else algo.get('orders', [])
+            for o in algo_list:
+                if o.get('symbol') == fsym and o.get('algoId'):
+                    try:
+                        client.futures_cancel_algo_order(algoId=o['algoId'])
+                    except Exception as ce:
+                        logger.debug(f"[{fsym}] cancel algo {o.get('algoId')}: {ce}")
+        except Exception as e:
+            logger.debug(f"[{fsym}] cancel algo orders: {e}")
 
     def place_order(
         self,
@@ -509,9 +553,18 @@ class BinanceFuturesService:
             # ── Cleanup Orphaned Orders on Close ──────────────────────────────
             if reduce_only:
                 try:
-                    # In hedge mode, we need to specify positionSide to cancel orders
+                    # Cancel BOTH regular and conditional/algo orders (SL/TP/trailing
+                    # are conditional orders that futures_cancel_all_open_orders misses).
                     client.futures_cancel_all_open_orders(symbol=futures_sym)
-                    logger.info(f"  ✓ Cancelled all remaining open orders for {futures_sym}")
+                    try:
+                        _algo = client.futures_get_open_algo_orders()
+                        _algo_list = _algo if isinstance(_algo, list) else _algo.get('orders', [])
+                        for _o in _algo_list:
+                            if _o.get('symbol') == futures_sym and _o.get('algoId'):
+                                client.futures_cancel_algo_order(algoId=_o['algoId'])
+                    except Exception as _ae:
+                        logger.warning(f"  [!] Failed to cancel conditional orders for {futures_sym}: {_ae}")
+                    logger.info(f"  ✓ Cancelled all remaining open + conditional orders for {futures_sym}")
                 except Exception as e:
                     logger.warning(f"  [!] Failed to cancel open orders for {futures_sym}: {e}")
 

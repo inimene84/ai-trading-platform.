@@ -74,12 +74,17 @@ async def _cancel_orphaned_orders(svc):
         sym = o.get("symbol")
         if sym in pos_syms:
             continue  # live position — keep its protective orders
-        if o.get("type") in _PROTECTIVE_ORDER_TYPES:
-            try:
+        if o.get("type") not in _PROTECTIVE_ORDER_TYPES:
+            continue
+        try:
+            if o.get("algo_id"):
+                # Conditional/algo order (SL/TP/trailing on this account)
+                client.futures_cancel_algo_order(algoId=o["algo_id"])
+            else:
                 client.futures_cancel_order(symbol=sym, orderId=int(o["order_id"]))
-                cancelled += 1
-            except Exception as ce:
-                logger.debug(f"Orphan cancel failed for {sym} {o.get('order_id')}: {ce}")
+            cancelled += 1
+        except Exception as ce:
+            logger.debug(f"Orphan cancel failed for {sym} {o.get('order_id')}: {ce}")
     if cancelled:
         logger.info(f"Order poller: cancelled {cancelled} orphaned protective order(s)")
 
