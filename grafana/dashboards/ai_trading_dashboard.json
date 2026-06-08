@@ -20,7 +20,7 @@
   "liveNow": false,
   "panels": [
     {
-      "datasource": "InfluxDB",
+      "datasource": "influxdb",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -94,7 +94,7 @@
       },
       "targets": [
         {
-          "datasource": "InfluxDB",
+          "datasource": "influxdb",
           "query": "from(bucket: \"trading-memory\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"frontend_trade\")\n  |> filter(fn: (r) => r[\"_field\"] == \"price\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> yield(name: \"mean\")",
           "refId": "A"
         }
@@ -103,7 +103,7 @@
       "type": "timeseries"
     },
     {
-      "datasource": "InfluxDB",
+      "datasource": "influxdb",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -177,7 +177,7 @@
       },
       "targets": [
         {
-          "datasource": "InfluxDB",
+          "datasource": "influxdb",
           "query": "from(bucket: \"trading-memory\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"binance_wallet\")\n  |> filter(fn: (r) => r[\"_field\"] == \"equity\")\n  |> aggregateWindow(every: v.windowPeriod, fn: last, createEmpty: false)\n  |> yield(name: \"equity\")",
           "refId": "A"
         }
