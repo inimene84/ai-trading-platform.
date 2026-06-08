@@ -66,6 +66,21 @@ class DecisionEngine:
         self.regime_detector = MarketRegimeDetector()
         self.enable_personas = os.getenv("ENABLE_PERSONAS", "true").lower() == "true"
         self.enable_kronos = os.getenv("ENABLE_KRONOS", "true").lower() == "true"
+        # Snapshot of the most recent evaluation so the loop can persist a
+        # signal row for EVERY symbol it scans (not just executed trades).
+        self.last_evaluation: Dict[str, Any] = {}
+
+    def _record_eval(self, symbol, direction, confidence, reason, entry=None, sl=None, tp=None, executed=False):
+        self.last_evaluation = {
+            "symbol": symbol,
+            "direction": (direction or "HOLD").upper(),
+            "confidence": float(confidence or 0.0),
+            "reason": reason,
+            "entry_price": entry,
+            "stop_loss": sl,
+            "take_profit": tp,
+            "executed": executed,
+        }
 
     async def evaluate_symbol(
         self,
@@ -81,9 +96,11 @@ class DecisionEngine:
         Does NOT execute trades or interact with the database.
         """
         if not bars or len(bars) < 50:
+            self._record_eval(symbol, "HOLD", 0.0, "insufficient bars")
             return None
             
         current_price = bars[-1]["close"]
+        self._record_eval(symbol, "HOLD", 0.0, "evaluating")
         
         # 1. Active position logic
         if existing_position:
@@ -129,6 +146,12 @@ class DecisionEngine:
             regime_weights=regime_result.weights()
         )
         if not signal or signal.signal not in ["BUY", "SELL"] or signal.confidence < self.config.min_signal_strength:
+            self._record_eval(
+                symbol,
+                signal.signal if signal else "HOLD",
+                signal.confidence if signal else 0.0,
+                f"strategy below threshold ({self.config.min_signal_strength})",
+            )
             return None
 
         # 4b. Apply Kronos Gate to the strategy signal
@@ -169,6 +192,9 @@ class DecisionEngine:
                     include_alerts=True,
                     include_personas=True,
                 )
+                if opinion:
+                    self._record_eval(symbol, opinion.direction, opinion.confidence,
+                                      "AI opinion evaluated")
                 if opinion and opinion.confidence < self.config.ai_analysis_threshold:
                     # Strategy can override weak AI if its own confidence is high enough
                     if signal.confidence > (self.config.ai_analysis_threshold + self.config.opinion_override_margin):
@@ -177,6 +203,8 @@ class DecisionEngine:
                         logger.info(
                             f"[{symbol}] AI opinion too weak (conf={opinion.confidence:.2f} < {self.config.ai_analysis_threshold}), skipping"
                         )
+                        self._record_eval(symbol, opinion.direction, opinion.confidence,
+                                          f"AI opinion too weak (<{self.config.ai_analysis_threshold})")
                         return None
             except Exception as e:
                 logger.warning(f"[{symbol}] Opinion layer error: {e}")
@@ -186,10 +214,17 @@ class DecisionEngine:
 
         # 6. Max positions check
         if open_count >= self.config.max_positions:
+            self._record_eval(symbol, signal.signal, signal.confidence,
+                              f"max positions reached ({self.config.max_positions})")
             return None
             
         # 7. Create Decision
-        return self._create_entry_decision(symbol, bars, signal, signal.signal, is_pyramid=False)
+        decision = self._create_entry_decision(symbol, bars, signal, signal.signal, is_pyramid=False)
+        if decision:
+            self._record_eval(symbol, decision.action, decision.confidence, "entry decision",
+                              entry=decision.entry_price, sl=decision.stop_loss,
+                              tp=decision.take_profit, executed=True)
+        return decision
 
     def _create_entry_decision(self, symbol: str, bars: List[Dict[str, Any]], signal: Any, direction: str, is_pyramid: bool) -> Optional[Decision]:
         current_price = bars[-1]["close"]
