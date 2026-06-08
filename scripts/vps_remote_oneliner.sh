@@ -6,7 +6,8 @@ PROJECT_DIR="${1:-/root/ai-trading-platform-v3}"
 cd "$PROJECT_DIR" || { echo "Missing $PROJECT_DIR"; exit 1; }
 
 git fetch origin 2>/dev/null || true
-git checkout cursor/hostinger-vps-fixes-df88 2>/dev/null || git pull origin main 2>/dev/null || true
+git checkout main 2>/dev/null || true
+git pull origin main 2>/dev/null || true
 
 if [[ -x scripts/hostinger_vps_apply.sh ]]; then
   PROJECT_DIR="$PROJECT_DIR" ./scripts/hostinger_vps_apply.sh
