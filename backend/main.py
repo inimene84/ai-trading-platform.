@@ -10,14 +10,20 @@ import structlog
 # Load environment variables
 load_dotenv()
 
-# Configure Sentry
-sentry_dsn = os.getenv("SENTRY_DSN")
-if sentry_dsn:
-    sentry_sdk.init(
-        dsn=sentry_dsn,
-        traces_sample_rate=1.0,
-        profiles_sample_rate=1.0,
-    )
+# Configure Sentry (skip invalid/placeholder DSNs — must not crash startup)
+sentry_dsn = (os.getenv("SENTRY_DSN") or "").strip()
+_placeholder_markers = ("<", ">", "your_", "example", "changeme", "xxx")
+if sentry_dsn and not any(m in sentry_dsn.lower() for m in _placeholder_markers):
+    try:
+        sentry_sdk.init(
+            dsn=sentry_dsn,
+            traces_sample_rate=1.0,
+            profiles_sample_rate=1.0,
+        )
+    except Exception as exc:
+        logging.getLogger(__name__).warning("Sentry init skipped: %s", exc)
+elif sentry_dsn:
+    logging.getLogger(__name__).warning("Sentry init skipped: SENTRY_DSN looks like a placeholder")
 
 # Configure structlog
 structlog.configure(
