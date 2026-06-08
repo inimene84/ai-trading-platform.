@@ -8,6 +8,7 @@ Interface compatible with ctrader_service for drop-in integration with trading_l
 
 import logging
 import os
+import time
 from pathlib import Path
 from typing import Dict, Optional
 
