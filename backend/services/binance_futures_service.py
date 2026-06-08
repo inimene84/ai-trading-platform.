@@ -291,6 +291,33 @@ class BinanceFuturesService:
             logger.error(f"get_positions error: {e}")
             return []
 
+    def get_exit_price(self, symbol: str) -> Optional[float]:
+        """Best-effort exit price for a just-closed position.
+
+        Prefers the most recent actual fill price (accurate when SL/TP filled
+        on the exchange), and falls back to the current mark price.
+        """
+        sym = self._to_futures_symbol(symbol)
+        if not sym:
+            return None
+        client = self._get_client()
+        try:
+            trades = client.futures_account_trades(symbol=sym, limit=1)
+            if trades:
+                px = float(trades[-1].get('price', 0) or 0)
+                if px > 0:
+                    return px
+        except Exception as e:
+            logger.warning(f"[{sym}] get_exit_price (fills) failed: {e}")
+        try:
+            data = client.futures_mark_price(symbol=sym)
+            px = float(data.get('markPrice', 0) or 0)
+            if px > 0:
+                return px
+        except Exception as e:
+            logger.warning(f"[{sym}] get_exit_price (mark) failed: {e}")
+        return None
+
     def get_open_orders(self) -> list:
         """Return all open futures orders."""
         try:
