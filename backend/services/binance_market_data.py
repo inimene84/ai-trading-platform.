@@ -38,8 +38,14 @@ class BinanceMarketDataService:
     def __init__(self):
         self._cache: dict[str, dict] = {}
         self._api_key = os.getenv('BINANCE_API_KEY', '')
-        self._api_secret = os.getenv('BINANCE_API_SECRET', '')
-        self.symbols = DEFAULT_SYMBOLS
+        # Accept both BINANCE_SECRET_KEY (compose) and BINANCE_API_SECRET (legacy)
+        self._api_secret = os.getenv('BINANCE_SECRET_KEY', '') or os.getenv('BINANCE_API_SECRET', '')
+        # Prefer the symbols the trading loop actually trades; fall back to USDT set
+        env_symbols = os.getenv('TRADING_SYMBOLS', '')
+        if env_symbols:
+            self.symbols = [s.strip().upper() for s in env_symbols.split(',') if s.strip()]
+        else:
+            self.symbols = DEFAULT_SYMBOLS
 
     # ── Cache helpers ─────────────────────────────────────────────────────
     def _get_cached(self, key: str) -> Optional[any]:

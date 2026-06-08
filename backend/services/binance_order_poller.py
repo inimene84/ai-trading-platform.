@@ -113,6 +113,16 @@ async def _sync_open_orders(svc):
                     logger.info(
                         f"  -> Order FILLED: trade.id={trade.id} fill_price={filled_price} qty={filled_qty}"
                     )
+                    # Record the confirmed fill in InfluxDB for Grafana
+                    try:
+                        await influx.write_trade(
+                            symbol=trade.symbol, direction=trade.direction,
+                            quantity=filled_qty, entry_price=filled_price,
+                            status="filled", strategy=trade.strategy or "",
+                            pnl=0.0,
+                        )
+                    except Exception as _ie:
+                        logger.warning(f"  -> InfluxDB write_trade(filled) failed: {_ie}")
 
                 elif binance_status in ("CANCELED", "EXPIRED", "REJECTED"):
                     trade.status = "failed"

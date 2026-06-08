@@ -326,13 +326,20 @@ export function MultiAssetPanel({ currentSymbol, onSelectSymbol, onQuickTrade }:
       const resp = await fetch('/api/backend/trading/markets/forex');
       if (resp.ok) {
         const data = await resp.json();
-        const rates = data.rates || data;
+        // Backend returns { data: [{symbol: "EUR/USD", price, change24h, up}, ...] }
+        const arr: any[] = Array.isArray(data) ? data : (data.data || []);
+        // Build lookup by display symbol, e.g. "EUR/USD"
+        const byDisplay: Record<string, any> = {};
+        for (const item of arr) byDisplay[item.symbol] = item;
+
         for (const sym of forexSymbols) {
-          const yahooSym = sym;
-          const rateData = rates[yahooSym] || rates[sym.replace('=X', '')];
+          // sym is "EURUSD=X" format; display is "EUR/USD"
+          const base = sym.replace('=X', '');
+          const displayKey = base.length === 6 ? `${base.slice(0, 3)}/${base.slice(3)}` : base;
+          const rateData = byDisplay[displayKey] || byDisplay[sym];
           if (rateData) {
-            const price = typeof rateData === 'number' ? rateData : (rateData.price || rateData.rate || 0);
-            const change = typeof rateData === 'object' ? (rateData.change_pct || rateData.changePct || 0) : 0;
+            const price = rateData.price || 0;
+            const change = rateData.change24h || 0;
             const hist = priceHistoryRef.current[sym] || [];
             if (price > 0) {
               hist.push(price);

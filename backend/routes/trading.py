@@ -131,16 +131,9 @@ except Exception as e:
 
 @router.get("/portfolio")
 async def get_portfolio():
-    """Get current portfolio state with open positions."""
+    """Get current portfolio state with live Binance balance."""
     db = SessionLocal()
     try:
-        # Get latest snapshot
-        snap = (
-            db.query(PortfolioSnapshot)
-            .order_by(PortfolioSnapshot.id.desc())
-            .first()
-        )
-        # Get open positions
         open_trades = db.query(Trade).filter(Trade.status.in_(["open", "filled"])).all()
         positions = []
         for t in open_trades:
@@ -156,28 +149,41 @@ async def get_portfolio():
                 "opened_at": t.timestamp.isoformat() if t.timestamp else None,
             })
 
-        if snap:
-            return {
-                "balance": snap.cash,
-                "equity": snap.total_value,
-                "positions": positions,
-                "total_pnl": snap.total_pnl,
-                "total_pnl_pct": (snap.total_pnl / 10000.0) * 100 if snap.total_pnl else 0.0,
-                "positions_value": snap.positions_value,
-                "open_positions_count": len(positions),
-                "last_updated": snap.timestamp.isoformat() if snap.timestamp else datetime.now().isoformat(),
-            }
-        else:
-            return {
-                "balance": 10000.00,
-                "equity": 10000.00,
-                "positions": positions,
-                "total_pnl": 0.0,
-                "total_pnl_pct": 0.0,
-                "positions_value": 0.0,
-                "open_positions_count": len(positions),
-                "last_updated": datetime.now().isoformat(),
-            }
+        # Prefer live broker balance over stale DB snapshot
+        balance = 0.0
+        equity = 0.0
+        try:
+            from backend.services.binance_futures_service import binance_futures_broker
+            bal = await asyncio.to_thread(binance_futures_broker.get_balance)
+            balance = bal.get("available", bal.get("balance", 0.0))
+            equity = bal.get("equity", balance)
+        except Exception:
+            snap = (
+                db.query(PortfolioSnapshot)
+                .order_by(PortfolioSnapshot.id.desc())
+                .first()
+            )
+            if snap:
+                balance = snap.cash or 0.0
+                equity = snap.total_value or balance
+
+        # Compute realized PnL from all closed trades
+        closed_pnl = db.query(Trade).filter(Trade.status == "closed").with_entities(
+            Trade.pnl
+        ).all()
+        total_pnl = round(sum((r.pnl or 0.0) for r in closed_pnl), 4)
+        pnl_pct = round((total_pnl / equity * 100) if equity > 0 else 0.0, 2)
+
+        return {
+            "balance": round(balance, 6),
+            "equity": round(equity, 6),
+            "positions": positions,
+            "total_pnl": total_pnl,
+            "total_pnl_pct": pnl_pct,
+            "positions_value": 0.0,
+            "open_positions_count": len(positions),
+            "last_updated": datetime.now().isoformat(),
+        }
     finally:
         db.close()
 
@@ -1316,6 +1322,47 @@ async def event_stream(topics: str = ""):
             pass
 
     return StreamingResponse(generator(), media_type="text/event-stream")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ─── Price helper (used by ActiveTradeCard for live P&L) ─────────────────────
+
+@router.get("/price")
+async def get_price(symbol: str = "BTCUSDT"):
+    """Return current mark/last price for a Binance Futures symbol."""
+    from backend.services.binance_market_data import binance_market_data
+    try:
+        ticker = await binance_market_data.get_ticker_24h(symbol.upper())
+        if ticker:
+            return {"symbol": symbol.upper(), "price": ticker.get("lastPrice", 0.0),
+                    "change24h": ticker.get("priceChangePercent", 0.0)}
+    except Exception:
+        pass
+    # Fallback via Binance proxy endpoint data
+    try:
+        async with httpx.AsyncClient(timeout=8) as c:
+            r = await c.get(f"https://fapi.binance.com/fapi/v1/ticker/price?symbol={symbol.upper()}")
+            if r.status_code == 200:
+                d = r.json()
+                return {"symbol": symbol.upper(), "price": float(d.get("price", 0)), "change24h": 0.0}
+    except Exception:
+        pass
+    return {"symbol": symbol.upper(), "price": 0.0, "change24h": 0.0}
+
+
+@router.get("/account/summary")
+async def get_account_summary():
+    """Return live account equity and balance for workflow engine."""
+    try:
+        from backend.services.binance_futures_service import binance_futures_broker
+        bal = await asyncio.to_thread(binance_futures_broker.get_balance)
+        equity = bal.get("equity", bal.get("balance", 0.0))
+        available = bal.get("available", equity)
+        return {"equity": round(equity, 4), "balance": round(available, 4),
+                "currency": "USDT", "source": "binance_futures"}
+    except Exception as e:
+        return {"equity": 0.0, "balance": 0.0, "currency": "USDT",
+                "error": str(e), "source": "binance_futures"}
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

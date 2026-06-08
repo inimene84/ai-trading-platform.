@@ -38,7 +38,7 @@ class InfluxDBWriter:
     def __init__(self):
         self.url   = os.getenv("INFLUXDB_URL", "").rstrip("/")
         self.token = os.getenv("INFLUXDB_TOKEN", "")
-        self.org   = os.getenv("INFLUXDB_ORG", "hedge-fund")
+        self.org   = os.getenv("INFLUXDB_ORG", "-")
         self._enabled = bool(self.token and self.url)
         if not self._enabled:
             logger.warning("InfluxDB token not set – metrics disabled")
@@ -203,12 +203,24 @@ class InfluxDBWriter:
         source: str = "newsapi",
         time_horizon: str = "short",
         topics: str = "",
+        confidence: float = 0.0,
+        direction: str = "NEUTRAL",
     ) -> None:
-        """Write processed news sentiment to news-sentiment bucket."""
-        tags = {"symbol": symbol, "source": source, "time_horizon": time_horizon}
+        """Write processed news sentiment to news-sentiment bucket.
+
+        Includes `confidence` and `direction` tag so that the InfluxDB
+        sentiment reader can read them directly instead of re-deriving.
+        """
+        # Direction tag must be one of the values the reader understands
+        _valid = {"BULLISH", "BEARISH", "NEUTRAL", "BUY", "SELL"}
+        direction_tag = direction.upper() if direction.upper() in _valid else "NEUTRAL"
+
+        tags = {"symbol": symbol, "source": source, "time_horizon": time_horizon,
+                "direction": direction_tag}
         fields: dict[str, Any] = {
             "sentiment_score": float(sentiment_score),
             "impact_score": float(impact_score),
+            "confidence": float(confidence),
             "topics_len": len(topics),
         }
         await self._write(self.BUCKET_NEWS, "news_sentiment", tags, fields)

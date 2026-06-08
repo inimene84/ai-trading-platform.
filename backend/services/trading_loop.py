@@ -20,9 +20,7 @@ from backend.database.models import TradingSignal, Trade, PortfolioSnapshot
 from backend.services.ctrader_service import ctrader_broker
 from backend.services.binance_futures_service import binance_futures_broker
 from backend.services.influxdb_writer import influx
-from backend.services.influxdb_sentiment_reader import sentiment_reader
 from backend.services.binance_market_data import binance_market_data
-from backend.services import kronos_service
 from backend.strategies.market_regime import MarketRegimeDetector
 from backend.services.unified_trading import UnifiedTrading, UnifiedOrder, OrderSide, OrderType
 from backend.services.position_manager import get_position_manager, ExitOpinion
@@ -686,7 +684,21 @@ class TradingLoopService:
 
             if decision:
                 _signals = 1
-                
+                # Write signal to InfluxDB for Grafana dashboards
+                try:
+                    await influx.write_signal(
+                        symbol=symbol,
+                        direction=decision.action,
+                        confidence=getattr(decision, "confidence", 0.0),
+                        entry_price=decision.entry_price,
+                        stop_loss=decision.stop_loss,
+                        take_profit=decision.take_profit,
+                        strategy=self._strategy_name,
+                        ai_used=True,
+                    )
+                except Exception as _ie:
+                    logger.warning(f"  [ {symbol} ] InfluxDB write_signal failed: {_ie}")
+
                 # Check directional exposure limit (if not pyramid)
                 _new_notional = decision.quantity * decision.entry_price
                 if not decision.is_pyramid:
@@ -718,14 +730,16 @@ class TradingLoopService:
                     if not existing:
                         self._open_count += 1
                     _trades = 1
-                    logger.info(f"  [ {symbol} ] SUCCESS: {res.order_id} filled @ {res.filled_price}")
-                    
+                    filled_px = float(res.filled_price or decision.entry_price)
+                    filled_qty = float(res.filled_qty or decision.quantity)
+                    logger.info(f"  [ {symbol} ] SUCCESS: {res.order_id} filled @ {filled_px}")
+
                     if decision.is_pyramid:
-                        self._pyramid_layers.setdefault(symbol, []).append(float(res.filled_price or decision.entry_price))
-                    
+                        self._pyramid_layers.setdefault(symbol, []).append(filled_px)
+
                     trade = Trade(
-                        symbol=symbol, direction=decision.action, quantity=res.filled_qty or decision.quantity,
-                        entry_price=res.filled_price or decision.entry_price, status="open",
+                        symbol=symbol, direction=decision.action, quantity=filled_qty,
+                        entry_price=filled_px, status="open",
                         strategy=self._strategy_name,
                         binance_order_id=res.order_id,
                         stop_loss=decision.stop_loss, take_profit=decision.take_profit,
@@ -733,6 +747,16 @@ class TradingLoopService:
                     )
                     db.add(trade)
                     db.commit()
+
+                    # Write to InfluxDB for Grafana dashboards
+                    try:
+                        await influx.write_trade(
+                            symbol=symbol, direction=decision.action,
+                            quantity=filled_qty, entry_price=filled_px,
+                            status="open", strategy=self._strategy_name, pnl=0.0,
+                        )
+                    except Exception as _ie:
+                        logger.warning(f"  [ {symbol} ] InfluxDB write_trade failed: {_ie}")
                 else:
                     logger.warning(f"  [ {symbol} ] FAILED: {res.message}")
 
@@ -780,12 +804,24 @@ class TradingLoopService:
                 real_cash = balance_info.get("balance", 0.0)
                 real_equity = balance_info.get("equity", 0.0)
             
+            # Compute realized P&L from all closed trades
+            from sqlalchemy import func as _func
+            realized_pnl = db.query(_func.coalesce(_func.sum(Trade.pnl), 0.0)).filter(
+                Trade.status == "closed"
+            ).scalar() or 0.0
+
+            # Compute positions value from open trades
+            positions_val = sum(
+                (t.quantity or 0) * (t.entry_price or 0)
+                for t in open_trades
+            )
+
             # Save snapshot
             snapshot = PortfolioSnapshot(
-                total_value=real_cash,
+                total_value=real_equity,
                 cash=real_cash,
-                positions_value=0.0,
-                total_pnl=0.0,
+                positions_value=round(positions_val, 4),
+                total_pnl=round(float(realized_pnl), 4),
                 open_positions=len(open_trades),
                 cycle_number=self._cycle_count,
             )

@@ -777,7 +777,7 @@ export default function App() {
   const [manualOrderType, setManualOrderType] = useState<string>('market');
   const [recentTrades, setRecentTrades] = useState<any[]>([]);
   const [botTrades, setBotTrades] = useState<any[]>([]);
-  const [portfolioBalance, setPortfolioBalance] = useState(24500.00);
+  const [portfolioBalance, setPortfolioBalance] = useState(0.00);
 
   // Workflow Execution State
   const [isExecutingFlow, setIsExecutingFlow] = useState(false);
@@ -791,7 +791,7 @@ export default function App() {
     }, 0);
   }, [openPositions, price]);
 
-  const pnlPercent = (totalPnL / 24500) * 100;
+  const pnlPercent = portfolioBalance > 0 ? (totalPnL / portfolioBalance) * 100 : 0;
 
   // Backend Health Check — polls every 30s to update sidebar badges
   useEffect(() => {
@@ -804,6 +804,8 @@ export default function App() {
         setLoopRunning(ls?.running ?? false);
         const tr = await apiService.getTrades({ limit: 15 }).catch(() => null);
         if (tr) setBotTrades(tr.trades || []);
+        const pf = await apiService.getPortfolio().catch(() => null);
+        if (pf && (pf.equity || pf.balance)) setPortfolioBalance(pf.equity || pf.balance);
       } catch {
         setBackendConnected(false);
         setLoopRunning(false);

@@ -26,6 +26,15 @@ export default defineConfig(({mode}) => {
           changeOrigin: true,
           rewrite: (p) => p.replace(/^\/api\/backend/, ''),
         },
+        // Direct /api/news and /api/market-data (same FastAPI backend)
+        '/api/news': {
+          target: env.BACKEND_URL || 'http://localhost:8000',
+          changeOrigin: true,
+        },
+        '/api/market-data': {
+          target: env.BACKEND_URL || 'http://localhost:8000',
+          changeOrigin: true,
+        },
       },
     },
   };

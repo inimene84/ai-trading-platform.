@@ -33,7 +33,7 @@ export const MarketsView = () => {
 
         // Filter USDT pairs and sort by volume
         const usdtPairs: CoinData[] = data
-          .filter((t: any) => t.symbol.endsWith('USDT') && parseFloat(t.quoteVolume) > 1_000_000)
+          .filter((t: any) => (t.symbol.endsWith('USDT') || t.symbol.endsWith('USDC')) && parseFloat(t.quoteVolume) > 1_000_000)
           .map((t: any) => ({
             symbol: t.symbol,
             baseAsset: t.symbol.replace('USDT', ''),

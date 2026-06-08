@@ -284,8 +284,8 @@ class WorkflowEngine {
     this.log(node.id, 'trigger', `Evaluating trigger for ${symbol}`, 'info');
 
     try {
-      // Fetch market data via REST API
-      const response = await fetch(`https://api.binance.com/api/v3/ticker/24hr?symbol=${symbol.toUpperCase()}`);
+      // Fetch market data via backend proxy (geo-block safe)
+      const response = await fetch(`/api/backend/trading/binance/ticker/24hr?symbol=${symbol.toUpperCase()}`);
       const data = await response.json();
       
       this.context.marketData.price = parseFloat(data.lastPrice);
