@@ -133,36 +133,40 @@ def enforce_risk_limits(
                     )
 
         # 4. Max daily loss — relative to the first snapshot of today (UTC).
-        start_of_today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-        first_snapshot_today = (
-            db.query(PortfolioSnapshot)
-            .filter(PortfolioSnapshot.timestamp >= start_of_today)
-            .order_by(PortfolioSnapshot.timestamp.asc())
-            .first()
-        )
-        if first_snapshot_today:
-            start_value = first_snapshot_today.total_value
-        else:
-            # No snapshot recorded yet today: the original code silently skipped
-            # the daily-loss check entirely (fail-open). Instead, fall back to
-            # the most recent snapshot strictly before today as the day's
-            # baseline so the check still has teeth on the first cycle of a day.
-            prev = (
+        #    Disable entirely with max_daily_loss_pct >= 100
+        #    (e.g. RISK_MAX_DAILY_LOSS_PCT=100 in .env) — mirrors the drawdown
+        #    sentinel so the loop can be tested through a down day.
+        if cfg.max_daily_loss_pct < 100:
+            start_of_today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+            first_snapshot_today = (
                 db.query(PortfolioSnapshot)
-                .filter(PortfolioSnapshot.timestamp < start_of_today)
-                .order_by(PortfolioSnapshot.timestamp.desc())
+                .filter(PortfolioSnapshot.timestamp >= start_of_today)
+                .order_by(PortfolioSnapshot.timestamp.asc())
                 .first()
             )
-            start_value = prev.total_value if prev else None
-            if start_value is None:
-                logger.warning(
-                    "[RISK GUARD] No baseline snapshot for daily-loss check; skipping (cold start)."
+            if first_snapshot_today:
+                start_value = first_snapshot_today.total_value
+            else:
+                # No snapshot recorded yet today: the original code silently skipped
+                # the daily-loss check entirely (fail-open). Instead, fall back to
+                # the most recent snapshot strictly before today as the day's
+                # baseline so the check still has teeth on the first cycle of a day.
+                prev = (
+                    db.query(PortfolioSnapshot)
+                    .filter(PortfolioSnapshot.timestamp < start_of_today)
+                    .order_by(PortfolioSnapshot.timestamp.desc())
+                    .first()
                 )
+                start_value = prev.total_value if prev else None
+                if start_value is None:
+                    logger.warning(
+                        "[RISK GUARD] No baseline snapshot for daily-loss check; skipping (cold start)."
+                    )
 
-        if start_value and current_value < start_value:
-            daily_loss_pct = ((start_value - current_value) / start_value) * 100
-            if daily_loss_pct > cfg.max_daily_loss_pct:
-                raise RiskBreach(
-                    f"Max daily loss exceeded: {daily_loss_pct:.2f}% > {cfg.max_daily_loss_pct}% "
-                    f"(Daily Start: ${start_value:.2f}, Current: ${current_value:.2f})"
-                )
+            if start_value and current_value < start_value:
+                daily_loss_pct = ((start_value - current_value) / start_value) * 100
+                if daily_loss_pct > cfg.max_daily_loss_pct:
+                    raise RiskBreach(
+                        f"Max daily loss exceeded: {daily_loss_pct:.2f}% > {cfg.max_daily_loss_pct}% "
+                        f"(Daily Start: ${start_value:.2f}, Current: ${current_value:.2f})"
+                    )

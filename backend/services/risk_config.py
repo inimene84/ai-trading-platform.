@@ -44,7 +44,12 @@ class RiskConfig(BaseSettings):
             "max_portfolio_drawdown_pct", "RISK_MAX_DRAWDOWN_PCT"
         ),
     )
-    max_daily_loss_pct: float = 5.0
+    max_daily_loss_pct: float = PydanticField(
+        default=5.0,
+        validation_alias=AliasChoices(
+            "max_daily_loss_pct", "RISK_MAX_DAILY_LOSS_PCT"
+        ),
+    )
     max_open_positions: int = 10
     
     # Signal thresholds
