@@ -210,7 +210,10 @@ class CombinedStrategy(BaseStrategy):
                 )
 
         # ── 4. No clear signal ────────────────────────────────────────────────
-        best_conf = max(buy_score, sell_score, 0.05)
+        # Surface best sub-strategy partial score on the dashboard (not a flat 5%
+        # for every pair when setups are near-miss).
+        partial_peak = max((s.confidence for s in sigs.values()), default=0.0)
+        best_conf = max(buy_score, sell_score, partial_peak, 0.05)
         return StrategySignal(
             symbol=symbol, signal="NEUTRAL",
             confidence=best_conf,
@@ -218,7 +221,7 @@ class CombinedStrategy(BaseStrategy):
             reasoning=(
                 f"No clear signal [{regime}]: "
                 f"BUY={buy_score:.2f} SELL={sell_score:.2f} "
-                f"weights={weights}"
+                f"peak={partial_peak:.2f} weights={weights}"
             ),
         )
 
