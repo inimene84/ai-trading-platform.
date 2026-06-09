@@ -1,4 +1,3 @@
-import os
 import asyncio
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Dict
@@ -28,15 +27,27 @@ class PositionManager:
         self.emergency_drawdown_pct = self.config.emergency_drawdown_pct
         self.max_hold_hours = self.config.max_position_hold_hours
         self.exit_opinion_threshold = self.config.exit_opinion_threshold
-        self.enable_personas = os.getenv("ENABLE_PERSONAS", "true").lower() == "true"
 
     async def analyze_open_position(self, symbol: str, trade: dict, bars: list,
-                                    current_price: float, opinion_layer_fn=None) -> ExitOpinion:
+                                    current_price: float, opinion_layer_fn=None,
+                                    current_funding_rate: float = 0.0) -> ExitOpinion:
         entry_price = trade.get("entry_price", current_price)
         direction = trade.get("direction", "BUY")
         opened_at = trade.get("opened_at")
         stop_loss = trade.get("stop_loss")
         take_profit = trade.get("take_profit")
+
+        # Local copies of exit parameters, adjustable via hold bonus
+        max_hold_hours = self.max_hold_hours
+        exit_opinion_threshold = self.exit_opinion_threshold
+
+        # Funding rate position hold bonus for shorts:
+        # If we are SHORT (SELL) and funding is positive (meaning longs pay shorts, e.g. > 0.0001),
+        # we add a hold bonus: increase max hold hours by 24h, and raise the exit opinion threshold (e.g. by 0.10)
+        if direction == "SELL" and current_funding_rate > 0.0001:
+            max_hold_hours += 24.0
+            exit_opinion_threshold = min(1.0, exit_opinion_threshold + 0.10)
+            logger.info(f"[{symbol}] Applying Short Funding Hold Bonus: max_hold_hours={max_hold_hours}h, exit_opinion_threshold={exit_opinion_threshold:.2f}")
 
         if direction == "BUY":
             pnl_pct = ((current_price - entry_price) / entry_price) * 100 if entry_price else 0
@@ -67,7 +78,7 @@ class PositionManager:
             return result
 
         # 2. TIME-BASED EXIT (negative only)
-        if duration_hours >= self.max_hold_hours and pnl_pct < 0:
+        if duration_hours >= max_hold_hours and pnl_pct < 0:
             result.exit = True
             result.direction = "EXIT"
             result.confidence = 0.85
@@ -82,7 +93,7 @@ class PositionManager:
             try:
                 ai_opinion = await opinion_layer_fn(
                     symbol=symbol, bars=bars, include_kronos=True,
-                    include_personas=self.enable_personas,
+                    include_personas=self.config.enable_personas,
                     metrics={
                         "pnl_pct": pnl_pct, "duration_hours": duration_hours,
                         "entry_price": entry_price, "current_price": current_price,
@@ -103,7 +114,7 @@ class PositionManager:
                 elif hasattr(ai_opinion, 'direction') and ai_opinion.direction in ("SELL", "BUY"):
                     ai_dir = ai_opinion.direction
                     is_exit = (direction == "BUY" and ai_dir == "SELL") or (direction == "SELL" and ai_dir == "BUY")
-                    if is_exit and ai_opinion.confidence >= self.exit_opinion_threshold:
+                    if is_exit and ai_opinion.confidence >= exit_opinion_threshold:
                         result.exit = True
                         result.direction = "EXIT"
                         result.confidence = ai_opinion.confidence
@@ -150,8 +161,8 @@ class PositionManager:
         result.reasoning = f"HOLD: PnL={pnl_pct:.1f}%, {duration_hours:.1f}h held."
         return result
 
-    async def should_exit(self, symbol: str, trade: dict, bars: list, current_price: float, opinion_layer_fn=None) -> bool:
-        opinion = await self.analyze_open_position(symbol, trade, bars, current_price, opinion_layer_fn)
+    async def should_exit(self, symbol: str, trade: dict, bars: list, current_price: float, opinion_layer_fn=None, current_funding_rate: float = 0.0) -> bool:
+        opinion = await self.analyze_open_position(symbol, trade, bars, current_price, opinion_layer_fn, current_funding_rate)
         return opinion.exit
 
 

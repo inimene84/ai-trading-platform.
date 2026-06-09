@@ -73,6 +73,7 @@ class TradingLoopService:
         # reached since entry (max for longs, min for shorts). In-memory only;
         # reconstructed lazily from entry/current price on first sight.
         self._high_water: dict = {}
+        self._last_digest_date = None
 
     @property
     def status(self) -> dict:
@@ -288,6 +289,19 @@ class TradingLoopService:
         """Execute one trading cycle across all symbols in parallel."""
         self._cycle_count += 1
         
+        # UTC rollover daily digest trigger
+        current_date_utc = datetime.now(timezone.utc).date()
+        if self._last_digest_date is None:
+            self._last_digest_date = current_date_utc
+        elif current_date_utc > self._last_digest_date:
+            self._last_digest_date = current_date_utc
+            try:
+                from backend.services.daily_digest import run_daily_digest
+                asyncio.create_task(run_daily_digest())
+                logger.info("Daily performance digest task queued successfully.")
+            except Exception as e:
+                logger.error(f"Failed to trigger automated daily digest: {e}")
+
         # Bind the cycle number to all structured logs emitted in this cycle
         structlog.contextvars.bind_contextvars(cycle=self._cycle_count)
         
@@ -467,9 +481,11 @@ class TradingLoopService:
         try:
             _bal = get_active_broker().get_balance()
             self._cycle_equity = float(_bal.get("equity", _bal.get("balance", 0.0)) or 0.0)
+            self._cycle_available = float(_bal.get("available", self._cycle_equity) or 0.0)
         except Exception as _be:
             logger.warning(f"Could not fetch equity for sizing: {_be}")
             self._cycle_equity = 0.0
+            self._cycle_available = 0.0
         # Pyramid DCA config
         self._pyramid_mode = self.risk_config.pyramid_mode
         self._pyramid_max_layers = self.risk_config.pyramid_max_layers
@@ -510,6 +526,13 @@ class TradingLoopService:
                         if not trade_bars or len(trade_bars) < 10:
                             continue
                         curr_price = trade_bars[-1]["close"]
+                        # Fetch funding rate for position exit review
+                        try:
+                            fr_data = await binance_market_data.get_funding_rate(trade.symbol)
+                            current_funding_rate = float(fr_data.get('fundingRate', 0)) if fr_data else 0.0
+                        except Exception:
+                            current_funding_rate = 0.0
+
                         from backend.services.opinion_layer import analyze_symbol as analyze_opinion
                         exit_opinion = await pm.analyze_open_position(
                             symbol=trade.symbol,
@@ -524,6 +547,7 @@ class TradingLoopService:
                             bars=trade_bars,
                             current_price=curr_price,
                             opinion_layer_fn=analyze_opinion,
+                            current_funding_rate=current_funding_rate,
                         )
                         if exit_opinion.exit:
                             logger.warning(
@@ -583,19 +607,55 @@ class TradingLoopService:
         except Exception as e:
             logger.error(f"Position Manager init error: {e}")
 
-        # ── SYMBOL-QUALITY GATE: drop blacklisted + illiquid symbols ──
-        # Kills the realized-PnL loss tail caused by low-liquidity / new-listing
-        # symbols (SIREN, AIGENSYN, MAGMA, SPK ...) before any analysis runs.
-        tradeable = await self._filter_tradeable_symbols(self._symbols)
+        # ── MARGIN-AWARE GATEKEEPER ───────────────────────────────────────
+        # Skip symbol evaluation if available balance is below minimum layer cost ($5)
+        # to avoid API cost, LLM/Kronos latency, and log/DB spam.
+        margin_sufficient = True
+        try:
+            _bal = get_active_broker().get_balance()
+            self._cycle_available = float(_bal.get("available", 0.0) or 0.0)
+            self._cycle_equity = float(_bal.get("equity", _bal.get("balance", 0.0)) or 0.0)
+        except Exception as _be:
+            logger.warning(f"Could not re-fetch balance for margin check: {_be}")
+            self._cycle_available = getattr(self, "_cycle_available", 0.0)
 
-        # Run all symbols in parallel
-        tasks = [
-            self._process_symbol(
-                symbol, min_confidence, ai_threshold, max_positions
-            )
-            for symbol in tradeable
-        ]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        if self._cycle_available < 5.0:
+            logger.warning(f"[MARGIN GATE] Insufficient available balance (${self._cycle_available:.2f} < $5.00). Skipping symbol evaluation.")
+            margin_sufficient = False
+            
+            # Write a single ACCOUNT-level signal to DB
+            db_sig = SessionLocal()
+            try:
+                db_sig.add(TradingSignal(
+                    symbol="ACCOUNT",
+                    strategy=self._strategy_name,
+                    direction="HOLD",
+                    confidence=0.0,
+                    status="evaluated",
+                    reasoning=f"Insufficient margin: available={self._cycle_available:.4f} < 5.0"
+                ))
+                db_sig.commit()
+            except Exception as _se:
+                logger.warning(f"Failed to write margin gate signal: {_se}")
+                db_sig.rollback()
+            finally:
+                db_sig.close()
+
+        results = []
+        if margin_sufficient:
+            # ── SYMBOL-QUALITY GATE: drop blacklisted + illiquid symbols ──
+            # Kills the realized-PnL loss tail caused by low-liquidity / new-listing
+            # symbols (SIREN, AIGENSYN, MAGMA, SPK ...) before any analysis runs.
+            tradeable = await self._filter_tradeable_symbols(self._symbols)
+
+            # Run all symbols in parallel
+            tasks = [
+                self._process_symbol(
+                    symbol, min_confidence, ai_threshold, max_positions
+                )
+                for symbol in tradeable
+            ]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
 
         _signals_generated = 0
         _trades_executed = 0

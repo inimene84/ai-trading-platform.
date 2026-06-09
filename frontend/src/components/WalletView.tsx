@@ -38,6 +38,7 @@ export const WalletView = () => {
   const handleWaitlist = () => showToast("You've been added to the crypto card waitlist!", "success");
 
   const balance = portfolio?.balance ?? 0;
+  const available = portfolio?.available ?? balance;
   const equity = portfolio?.equity ?? 0;
   const positionsValue = portfolio?.positions_value ?? 0;
 
@@ -70,7 +71,8 @@ export const WalletView = () => {
             <h3 className="font-semibold mb-6 flex items-center gap-2"><Wallet size={16} /> Account Overview</h3>
             <div className="space-y-4">
               {[
-                { name: 'Available Balance', fullName: 'Cash / Free Margin', balance: balance.toLocaleString(undefined, { minimumFractionDigits: 2 }), fiat: `$${balance.toLocaleString(undefined, { minimumFractionDigits: 2 })}`, icon: 'bg-emerald-500' },
+                { name: 'Wallet Balance', fullName: 'Cash / Wallet', balance: balance.toLocaleString(undefined, { minimumFractionDigits: 2 }), fiat: `$${balance.toLocaleString(undefined, { minimumFractionDigits: 2 })}`, icon: 'bg-emerald-500' },
+                { name: 'Available Balance', fullName: 'Free Margin', balance: available.toLocaleString(undefined, { minimumFractionDigits: 2 }), fiat: `$${available.toLocaleString(undefined, { minimumFractionDigits: 2 })}`, icon: 'bg-teal-500' },
                 { name: 'In Positions', fullName: 'Locked in open trades', balance: positionsValue.toLocaleString(undefined, { minimumFractionDigits: 2 }), fiat: `$${positionsValue.toLocaleString(undefined, { minimumFractionDigits: 2 })}`, icon: 'bg-amber-500' },
                 { name: 'Total Equity', fullName: 'Balance + Unrealized P&L', balance: equity.toLocaleString(undefined, { minimumFractionDigits: 2 }), fiat: `$${equity.toLocaleString(undefined, { minimumFractionDigits: 2 })}`, icon: 'bg-blue-500' },
               ].map((asset, i) => (
