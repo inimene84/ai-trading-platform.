@@ -18,9 +18,16 @@ def _parse_reviewer_response(content: str) -> tuple[bool, str]:
 
     text = content.strip()
     # Strip markdown code fences if the model wrapped JSON
-    if text.startswith("```"):
-        text = re.sub(r"^```(?:json)?\s*", "", text)
-        text = re.sub(r"\s*```$", "", text).strip()
+    if "```" in text:
+        fence = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", text, re.IGNORECASE)
+        if fence:
+            text = fence.group(1).strip()
+
+    # If the model added prose around JSON, extract the first object block
+    if not text.startswith("{"):
+        obj = re.search(r"\{[\s\S]*\}", text)
+        if obj:
+            text = obj.group(0).strip()
 
     try:
         result = json.loads(text)
@@ -152,8 +159,15 @@ async def review_trade_decision(
                 return True, f"Approved (LLM error: HTTP {resp.status_code})"
                 
             data = resp.json()
-            content = data["choices"][0]["message"]["content"]
-            return _parse_reviewer_response(content)
+            message = data["choices"][0].get("message") or {}
+            content = message.get("content") or ""
+            if isinstance(content, list):
+                # Some providers return content parts array
+                content = " ".join(
+                    part.get("text", "") if isinstance(part, dict) else str(part)
+                    for part in content
+                )
+            return _parse_reviewer_response(str(content))
                 
     except Exception as e:
         logger.error(f"Error calling risk reviewer LLM: {e}")
