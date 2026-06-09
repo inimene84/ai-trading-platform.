@@ -483,10 +483,13 @@ class BinanceFuturesService:
                     )
 
             passed_reduce_only = kwargs.get('reduce_only', False)
+            target_side = direction.upper()
 
-            # ── Hedge-mode guard: never stack a new leg on an open symbol ─────
-            # Binance hedge mode allows simultaneous LONG+SHORT on the same pair.
-            # That doubles margin use and leaves naked legs without coordinated SL/TP.
+            # ── Hedge-mode guard + pyramiding ─────────────────────────────────
+            # Block accidental opposite-side legs. Allow same-direction adds
+            # (pyramid/DCA) when is_pyramid=True from the decision engine OR when
+            # the exchange already has a position in the same direction.
+            is_pyramid = bool(kwargs.get('is_pyramid', False))
             if action != 'close' and not passed_reduce_only:
                 live_on_symbol = [
                     p for p in self.get_positions()
@@ -494,16 +497,35 @@ class BinanceFuturesService:
                 ]
                 if live_on_symbol:
                     sides = [p.get('side') for p in live_on_symbol]
-                    logger.warning(
-                        f"[Binance Futures] SKIP {futures_sym}: open position(s) already on exchange "
-                        f"({sides}) — refusing duplicate {direction.upper()} entry"
-                    )
-                    return {
-                        'status': 'skipped',
-                        'broker': 'binance_futures',
-                        'reason': f'position_already_open:{sides}',
-                        'symbol': futures_sym,
-                    }
+                    same_side_only = len(set(sides)) == 1 and sides[0] == target_side
+                    if same_side_only:
+                        is_pyramid = True
+                        logger.info(
+                            f"[Binance Futures] PYRAMID {target_side} add on {futures_sym} "
+                            f"(existing qty={[p.get('quantity') for p in live_on_symbol]}, "
+                            f"add={quantity})"
+                        )
+                        try:
+                            client.futures_cancel_all_open_orders(symbol=futures_sym)
+                            _algo = client.futures_get_open_algo_orders()
+                            _algo_list = _algo if isinstance(_algo, list) else _algo.get('orders', [])
+                            for _o in _algo_list:
+                                if _o.get('symbol') == futures_sym and _o.get('algoId'):
+                                    client.futures_cancel_algo_order(algoId=_o['algoId'])
+                            logger.info(f"  ✓ Cancelled old SL/TP before pyramid add on {futures_sym}")
+                        except Exception as ce:
+                            logger.warning(f"  [!] Could not cancel old orders before pyramid {futures_sym}: {ce}")
+                    else:
+                        logger.warning(
+                            f"[Binance Futures] SKIP {futures_sym}: open position(s) already "
+                            f"on exchange ({sides}) — refusing {target_side} entry"
+                        )
+                        return {
+                            'status': 'skipped',
+                            'broker': 'binance_futures',
+                            'reason': f'position_already_open:{sides}',
+                            'symbol': futures_sym,
+                        }
 
             # ── Pre-trade margin check ──────────────────────────────────────────
             acct = client.futures_account()
@@ -577,8 +599,10 @@ class BinanceFuturesService:
                 # current minute makes Binance reject an accidental duplicate
                 # (e.g. order filled but DB commit failed → restart re-enters).
                 if not reduce_only:
-                    bucket = int(time.time() // 60)
-                    order_params["newClientOrderId"] = f"x{futures_sym[:8]}{side[0]}{bucket}"[:36]
+                    # Include seconds so pyramid layers in the same minute don't collide.
+                    bucket = int(time.time())
+                    layer_tag = "p" if is_pyramid else "e"
+                    order_params["newClientOrderId"] = f"x{futures_sym[:6]}{side[0]}{layer_tag}{bucket}"[:36]
                 # Note: In Hedge Mode, we DO NOT send reduceOnly as positionSide handles it.
                 # Sending it causes APIError -1106.
                 result = self._safe_create_order(client, order_params)
@@ -628,8 +652,7 @@ class BinanceFuturesService:
                             "side": sl_side,
                             "type": 'STOP_MARKET',
                             "stopPrice": self._round_price(futures_sym, stop_loss),
-                            "quantity": quantity,
-                            "timeInForce": 'GTC',
+                            "closePosition": "true",
                             "positionSide": position_side,
                         }
                         sl_order = self._safe_create_order(client, sl_params)
@@ -681,8 +704,7 @@ class BinanceFuturesService:
                             "side": tp_side,
                             "type": 'TAKE_PROFIT_MARKET',
                             "stopPrice": self._round_price(futures_sym, take_profit),
-                            "quantity": quantity,
-                            "timeInForce": 'GTC',
+                            "closePosition": "true",
                             "positionSide": position_side,
                         }
                         tp_order = self._safe_create_order(client, tp_params)
