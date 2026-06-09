@@ -275,19 +275,21 @@ class BinanceMarketDataService:
         return result
 
     async def get_all_tickers_24h(self, symbols: list[str] = None) -> list[dict]:
-        """Get 24h tickers for all configured symbols."""
-        cache_key = "ticker24h:all"
-        cached = self._get_cached(cache_key)
-        if cached is not None:
-            return cached
-
+        """Get 24h tickers for requested symbols (filters from cached full snapshot)."""
         target_symbols = symbols or self.symbols
-        # Batch endpoint: GET /fapi/v1/ticker/24hr without symbol returns all
-        data = await self._request('/fapi/v1/ticker/24hr')
-        if not data:
-            return []
+        target_set = {s.upper() for s in target_symbols}
 
-        target_set = set(s.upper() for s in target_symbols)
+        # Cache the FULL Binance response — never cache a symbol-filtered subset.
+        # A filtered cache caused stale entries when TRADING_SYMBOLS grew (13/20
+        # pairs falsely reported as no-ticker in the symbol-quality gate).
+        raw_key = "ticker24h:raw"
+        data = self._get_cached(raw_key)
+        if data is None:
+            data = await self._request('/fapi/v1/ticker/24hr')
+            if not data:
+                return []
+            self._set_cache(raw_key, data)
+
         results = []
         for entry in data:
             sym = entry.get('symbol', '')
@@ -305,7 +307,6 @@ class BinanceMarketDataService:
                     'count': int(entry.get('count', 0)),
                 })
 
-        self._set_cache(cache_key, results)
         return results
 
     # ══════════════════════════════════════════════════════════════════════
