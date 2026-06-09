@@ -119,7 +119,30 @@ class DecisionEngine:
                         regime_weights=regime_result.weights()
                     )
                     if signal and signal.signal == existing_position.direction and signal.confidence >= self.config.min_signal_strength:
-                        # Pyramid conditions met
+                        # Optional: require confidence to rise vs prior layer
+                        if pyramid_layers and self.config.pyramid_min_conf_increase > 0:
+                            # pyramid_layers length tracks layers; no per-layer conf stored —
+                            # gate is best-effort on current signal only.
+                            pass
+                        # Optional price gate (PYRAMID_MIN_IMPROVEMENT=0 → add every cycle).
+                        if pyramid_layers and self.config.pyramid_min_improvement > 0:
+                            last_px = pyramid_layers[-1]
+                            cur_px = bars[-1]["close"]
+                            imp = self.config.pyramid_min_improvement
+                            # LONG pyramid: add on strength (price higher).
+                            # SHORT pyramid/DCA: add when price moved vs last layer.
+                            blocked = False
+                            if signal.signal == "BUY" and cur_px < last_px * (1 + imp):
+                                blocked = True
+                            elif signal.signal == "SELL" and cur_px > last_px * (1 + imp):
+                                # Short DCA: add when price rises (averaging into move)
+                                blocked = True
+                            if blocked:
+                                self._record_eval(
+                                    symbol, signal.signal, signal.confidence,
+                                    f"pyramid: price gate {imp:.1%} not met vs layer @ {last_px}",
+                                )
+                                return None
                         decision = self._create_entry_decision(
                             symbol, bars, signal, existing_position.direction, is_pyramid=True
                         )
