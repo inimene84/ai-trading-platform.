@@ -129,3 +129,70 @@ async def test_evaluate_symbol_skips_when_cooldown_active(risk_config):
     bars = _make_bars(60)
     result = await engine.evaluate_symbol("ETHUSDT", bars, None, 0, [], cooldown_active=True)
     assert result is None
+
+@pytest.mark.asyncio
+async def test_evaluate_symbol_funding_rate_adjustments(risk_config):
+    engine = DecisionEngine(risk_config)
+    engine.enable_kronos = False
+    engine.config.enable_personas = False
+    engine.config.use_risk_reviewer_llm = False
+    bars = _make_bars(60)
+    
+    # SELL signal with positive funding should boost confidence
+    signal = StrategySignal(
+        symbol="ETHUSDT", signal="SELL", confidence=0.40,
+        entry_price=bars[-1]["close"], strategy="trend_following",
+    )
+    engine.strategy.generate_signal = MagicMock(return_value=signal)
+    engine.regime_detector.detect = MagicMock(return_value=MagicMock(
+        regime="TRENDING", weights=MagicMock(return_value={})
+    ))
+    
+    result = await engine.evaluate_symbol("ETHUSDT", bars, None, 0, [], False, current_funding_rate=0.0001)
+    assert result is not None
+    assert result.confidence == pytest.approx(0.50)
+
+@pytest.mark.asyncio
+async def test_ranging_regime_sizing_and_gate(risk_config):
+    engine = DecisionEngine(risk_config)
+    engine.enable_kronos = False
+    engine.config.enable_personas = False
+    engine.config.use_risk_reviewer_llm = False
+    engine.config.trade_usdt_amount = 100.0
+    bars = _make_bars(60)
+    
+    signal = StrategySignal(
+        symbol="ETHUSDT", signal="BUY", confidence=0.50,
+        entry_price=bars[-1]["close"], strategy="mean_reversion",
+    )
+    engine.strategy.generate_signal = MagicMock(return_value=signal)
+    
+    # 1. RANGING regime check: should fail because confidence 0.50 < 0.60 required (0.45 + 0.15)
+    engine.regime_detector.detect = MagicMock(return_value=MagicMock(
+        regime="RANGING", weights=MagicMock(return_value={})
+    ))
+    result_ranging = await engine.evaluate_symbol("ETHUSDT", bars, None, 0, [], False)
+    assert result_ranging is None
+    
+    # 2. TRENDING regime check: should pass because confidence 0.50 >= 0.45
+    engine.regime_detector.detect = MagicMock(return_value=MagicMock(
+        regime="TRENDING", weights=MagicMock(return_value={})
+    ))
+    result_trending = await engine.evaluate_symbol("ETHUSDT", bars, None, 0, [], False)
+    assert result_trending is not None
+    
+    # 3. Position sizing halving in RANGING regime
+    engine.regime_detector.detect = MagicMock(return_value=MagicMock(
+        regime="TRENDING"
+    ))
+    decision_trending = engine._create_entry_decision("ETHUSDT", bars, signal, "BUY", is_pyramid=False)
+    
+    engine.regime_detector.detect = MagicMock(return_value=MagicMock(
+        regime="RANGING"
+    ))
+    decision_ranging = engine._create_entry_decision("ETHUSDT", bars, signal, "BUY", is_pyramid=False)
+    
+    assert decision_trending is not None
+    assert decision_ranging is not None
+    # Ranging notional should be half of trending notional
+    assert decision_ranging.quantity == pytest.approx(decision_trending.quantity * 0.5)
