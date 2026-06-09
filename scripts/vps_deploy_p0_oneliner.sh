@@ -7,17 +7,23 @@ PROJECT_DIR="${PROJECT_DIR:-/root/ai-trading-platform-v3}"
 BRANCH="cursor/observability-env-vars-f7d8"
 CLOUD_AGENT_PUBKEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMPdc81hu58Qrgt5ODe8OvMJmqrM11GB848GmSqj1d7t valgutom@gmail.com"
 
-echo "=== 0. Ensure cloud-agent SSH key (optional) ==="
+echo "=== 0. SSH + authorized_keys hygiene ==="
+# sshd rejects pubkey auth if /root is not owned by root (StrictModes)
+chown root:root /root
+chmod 700 /root
 mkdir -p /root/.ssh
 chmod 700 /root/.ssh
 touch /root/.ssh/authorized_keys
 chmod 600 /root/.ssh/authorized_keys
-if ! grep -qF "$CLOUD_AGENT_PUBKEY" /root/.ssh/authorized_keys; then
-  echo "$CLOUD_AGENT_PUBKEY" >> /root/.ssh/authorized_keys
-  echo "  Added cloud-agent pubkey"
-else
-  echo "  Cloud-agent pubkey already present"
+# De-dupe cloud-agent key; keep hostinger-managed rsa on its own line
+grep -vF "$CLOUD_AGENT_PUBKEY" /root/.ssh/authorized_keys > /tmp/ak_clean || true
+if grep -q '#hostinger-managed-key' /tmp/ak_clean 2>/dev/null; then
+  sed -i 's/#hostinger-managed-key.*/#hostinger-managed-key/' /tmp/ak_clean
 fi
+printf '%s\n' "$CLOUD_AGENT_PUBKEY" >> /tmp/ak_clean
+mv /tmp/ak_clean /root/.ssh/authorized_keys
+chmod 600 /root/.ssh/authorized_keys
+echo "  /root owner: $(stat -c '%U:%G' /root)"
 
 cd "$PROJECT_DIR"
 echo "=== 1. Git: fetch + checkout $BRANCH ==="
