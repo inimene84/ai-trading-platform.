@@ -758,9 +758,12 @@ class TradingLoopService:
             signal_status = "evaluated"
             signal_reason = ev.get("reason", "")
             order_result = None
+            # Keep decision metadata for signal persist even if the order fails.
+            decision_snapshot = decision
 
             if decision:
                 _signals = 1
+                signal_reason = "pyramid entry" if decision.is_pyramid else "entry decision"
                 # Write signal to InfluxDB for Grafana dashboards
                 try:
                     await influx.write_signal(
@@ -867,22 +870,29 @@ class TradingLoopService:
                     except Exception as _ie:
                         logger.warning(f"  [ {symbol} ] InfluxDB write_trade failed: {_ie}")
                 elif decision and order_result:
-                    signal_status = "rejected"
-                    signal_reason = f"{signal_reason} | order failed: {order_result.message}"
-                    logger.warning(f"  [ {symbol} ] FAILED: {order_result.message}")
+                    signal_status = "skipped"
+                    fail_msg = order_result.message or "unknown"
+                    if "position_already_open" in fail_msg:
+                        signal_reason = (
+                            f"{signal_reason} | duplicate blocked: "
+                            "position already open on Binance (no second entry)"
+                        )
+                    else:
+                        signal_reason = f"{signal_reason} | order failed: {fail_msg}"
+                    logger.warning(f"  [ {symbol} ] FAILED: {fail_msg}")
 
             # Persist evaluation AFTER order attempt so status reflects Binance reality.
             # Prefer the Decision object over last_evaluation — pyramid re-entries used
             # to leave last_evaluation stuck at "evaluating" (HOLD 0% in the UI).
             try:
-                if ev or decision:
+                if ev or decision_snapshot:
+                    dec = decision_snapshot
                     sig_direction = (
-                        decision.action if decision
-                        else ev.get("direction", "HOLD")
+                        dec.action if dec else ev.get("direction", "HOLD")
                     )
                     sig_confidence = (
-                        float(getattr(decision, "confidence", 0.0))
-                        if decision else float(ev.get("confidence", 0.0))
+                        float(getattr(dec, "confidence", 0.0))
+                        if dec else float(ev.get("confidence", 0.0))
                     )
                     db.add(TradingSignal(
                         symbol=symbol,
@@ -890,13 +900,13 @@ class TradingLoopService:
                         direction=sig_direction,
                         confidence=sig_confidence,
                         entry_price=(
-                            decision.entry_price if decision else ev.get("entry_price")
+                            dec.entry_price if dec else ev.get("entry_price")
                         ),
                         stop_loss=(
-                            decision.stop_loss if decision else ev.get("stop_loss")
+                            dec.stop_loss if dec else ev.get("stop_loss")
                         ),
                         take_profit=(
-                            decision.take_profit if decision else ev.get("take_profit")
+                            dec.take_profit if dec else ev.get("take_profit")
                         ),
                         status=signal_status,
                         reasoning=signal_reason,
