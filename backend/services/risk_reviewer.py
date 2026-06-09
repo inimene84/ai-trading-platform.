@@ -112,11 +112,14 @@ async def review_trade_decision(
     
     system_prompt = (
         "You are the Chief Risk Officer (CRO) of a systematic quantitative hedge fund. "
-        "Your role is to perform a final review of proposed trade signals and VETO any trade that carries "
-        "excessive risk, is counter-trend, is economically unviable, or contradicts major news sentiment. "
-        "Be extremely critical. Your performance is measured by avoiding bad trades. "
-        "You must respond ONLY with a valid JSON object matching this schema: "
-        '{"approved": true|false, "reasoning": "A concise 1-2 sentence explanation of your decision."}'
+        "The trading engine already filtered this signal; your job is a final sanity check — "
+        "not to block every trade. APPROVE by default when risk/reward is reasonable, "
+        "SL/TP are set, and news does not strongly contradict the direction. "
+        "VETO only for clear problems: catastrophic opposing news, uneconomic funding, "
+        "obvious counter-trend setup, or confidence below 0.5. "
+        "Signals at confidence >= 0.75 with 2:1+ reward-to-risk should usually be APPROVED. "
+        "Respond ONLY with valid JSON: "
+        '{"approved": true|false, "reasoning": "A concise 1-2 sentence explanation."}'
     )
     
     user_prompt = (
