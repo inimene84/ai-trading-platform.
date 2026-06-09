@@ -28,6 +28,20 @@ class RiskConfig(BaseSettings):
     max_positions: int = 4
     max_directional_exposure_usdt: float = 500.0
     trade_usdt_amount: float = 10.0
+    # ── P0 safety gates ──
+    # Skip the whole entry pipeline when Binance availableBalance is below this
+    # floor — prevents blind-firing orders that fail with "Insufficient margin"
+    # and wasting Kronos/LLM calls on entries that can never fill.
+    min_available_margin_usdt: float = PydanticField(
+        default=5.0,
+        validation_alias=AliasChoices("min_available_margin_usdt", "MIN_AVAILABLE_MARGIN_USDT"),
+    )
+    # Correlation cap: max open positions (distinct symbols) in the SAME
+    # direction. Alts are ~0.9 correlated — 8 parallel shorts is one bet.
+    max_same_direction_positions: int = PydanticField(
+        default=5,
+        validation_alias=AliasChoices("max_same_direction_positions", "MAX_SAME_DIRECTION_POSITIONS"),
+    )
     # ── Position sizing ──
     # When enabled, size each entry so a stop-loss hit loses ~risk_per_trade_pct
     # of account equity (proper risk-based sizing) instead of a flat $ notional.
