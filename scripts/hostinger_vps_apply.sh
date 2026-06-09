@@ -41,6 +41,17 @@ if [[ -f .env ]]; then
     VPS_IP=$(curl -sf --max-time 3 ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')
     echo "GRAFANA_URL=http://${VPS_IP:-localhost}:3000" >> .env
   fi
+  # Expanded symbol universe (20 liquid USDT perps) — more pairs = more signal chances
+  EXPANDED_SYMBOLS='BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT,ADAUSDT,DOGEUSDT,AVAXUSDT,DOTUSDT,LINKUSDT,POLUSDT,LTCUSDT,UNIUSDT,ATOMUSDT,NEARUSDT,OPUSDT,ARBUSDT,APTUSDT,INJUSDT,SUIUSDT'
+  if grep -q '^TRADING_SYMBOLS=' .env; then
+    sym_count=$(grep '^TRADING_SYMBOLS=' .env | cut -d= -f2- | tr ',' '\n' | grep -c . || echo 0)
+    if [[ "$sym_count" -lt 15 ]]; then
+      sed -i "s|^TRADING_SYMBOLS=.*|TRADING_SYMBOLS=${EXPANDED_SYMBOLS}|" .env
+      echo "  Expanded TRADING_SYMBOLS to ${sym_count} -> 20 symbols"
+    fi
+  else
+    echo "TRADING_SYMBOLS=${EXPANDED_SYMBOLS}" >> .env
+  fi
 fi
 
 echo ""
@@ -88,17 +99,19 @@ curl -sf -o /dev/null -w "api/historical: %{http_code}\n" \
   "http://127.0.0.1:8001/api/historical?symbol=BTCUSDT&interval=1h&limit=3" || true
 
 echo ""
-echo "=== 9. Ensure trading loop is running ==="
-LOOP_STATE=$(curl -sf http://127.0.0.1:8001/trading/loop/status 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('running',False))" 2>/dev/null || echo "false")
-if [[ "$LOOP_STATE" != "True" && "$LOOP_STATE" != "true" ]]; then
-  echo "  Loop not running — starting..."
-  curl -sf -X POST http://127.0.0.1:8001/trading/start -H 'Content-Type: application/json' -d '{}' || true
-  sleep 2
-fi
+echo "=== 9. Ensure trading loop is running with current TRADING_SYMBOLS ==="
+SYMS_JSON=$(grep '^TRADING_SYMBOLS=' .env 2>/dev/null | cut -d= -f2- | python3 -c "import sys,json; print(json.dumps([s.strip() for s in sys.stdin.read().split(',') if s.strip()]))" 2>/dev/null || echo '[]')
+curl -sf -X POST http://127.0.0.1:8001/trading/loop/stop -H 'Content-Type: application/json' >/dev/null 2>&1 || true
+sleep 1
+curl -sf -X POST http://127.0.0.1:8001/trading/loop/start \
+  -H 'Content-Type: application/json' \
+  -d "{\"interval_minutes\":15,\"strategy\":\"combined\",\"symbols\":${SYMS_JSON}}" || true
+sleep 2
 curl -sf http://127.0.0.1:8001/trading/loop/status | python3 -c "
 import sys,json
 d=json.load(sys.stdin)
-print(f\"  loop_running={d.get('running')} cycle_count={d.get('cycle_count')} next={d.get('next_cycle')}\")
+print(f\"  loop_running={d.get('running')} symbols={len(d.get('symbols',[]))} cycle_count={d.get('cycle_count')}\")
+print(f\"  pairs={d.get('symbols')}\")
 " 2>/dev/null || true
 
 echo ""
