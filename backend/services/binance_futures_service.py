@@ -65,7 +65,7 @@ MIN_QTY = {
     'BNBUSDT': 0.01,  'XRPUSDT': 1.0,   'ADAUSDT': 1.0,
     'DOGEUSDT': 1.0,  'AVAXUSDT': 1.0,  'DOTUSDT': 0.1,
     'LINKUSDT': 0.01, 'POLUSDT': 1.0, 'LTCUSDT': 0.001,
-    'UNIUSDT': 0.1,   'ATOMUSDT': 0.01, 'NEARUSDT': 0.1,
+    'UNIUSDT': 1.0,   'ATOMUSDT': 0.01, 'NEARUSDT': 0.1,
     'OPUSDT': 0.1,    'ARBUSDT': 1.0,   'APTUSDT': 0.1,
     'INJUSDT': 0.1,   'SUIUSDT': 1.0,
     # USDC perpetuals (real LOT_SIZE.minQty from /fapi/v1/exchangeInfo)
@@ -80,7 +80,7 @@ QTY_PRECISION = {
     'BNBUSDT': 2, 'XRPUSDT': 0, 'ADAUSDT': 0,
     'DOGEUSDT': 0, 'AVAXUSDT': 0, 'DOTUSDT': 1,
     'LINKUSDT': 2, 'POLUSDT': 0, 'LTCUSDT': 3,
-    'UNIUSDT': 1, 'ATOMUSDT': 2, 'NEARUSDT': 1,
+    'UNIUSDT': 0, 'ATOMUSDT': 2, 'NEARUSDT': 1,
     'OPUSDT': 1, 'ARBUSDT': 0, 'APTUSDT': 1,
     'INJUSDT': 1,   'SUIUSDT': 0,
     # USDC perpetuals (real quantityPrecision from /fapi/v1/exchangeInfo)
@@ -122,20 +122,35 @@ class BinanceFuturesService:
         self.dry_run    = os.getenv('BINANCE_DRY_RUN', 'false').lower() == 'true'
         self._client    = None
         self._leverage_set: set = set()
+        # Runtime LOT_SIZE from /fapi/v1/exchangeInfo (authoritative step/min qty).
+        self._lot_step: Dict[str, float] = {}
+        self._lot_min: Dict[str, float] = {}
+        self._qty_precision: Dict[str, int] = {}
         logger.info(
             f"BinanceFuturesService: testnet={self.testnet} "
             f"leverage={self.leverage}x margin={self.margin_type} dry_run={self.dry_run}"
         )
 
-        # Load price precision per symbol from exchange info
+        # Load price + lot precision per symbol from exchange info
         try:
             client = self._get_client()
             exchange_info = client.futures_exchange_info()
             for sym_info in exchange_info.get('symbols', []):
-                PRICE_PRECISION[sym_info['symbol']] = sym_info.get('pricePrecision', 2)
-            logger.info(f"Price precision loaded for {len(PRICE_PRECISION)} symbols")
+                sym = sym_info['symbol']
+                PRICE_PRECISION[sym] = sym_info.get('pricePrecision', 2)
+                self._qty_precision[sym] = sym_info.get(
+                    'quantityPrecision', QTY_PRECISION.get(sym, 3)
+                )
+                for filt in sym_info.get('filters', []):
+                    if filt.get('filterType') == 'LOT_SIZE':
+                        self._lot_step[sym] = float(filt['stepSize'])
+                        self._lot_min[sym] = float(filt['minQty'])
+            logger.info(
+                f"Exchange filters loaded for {len(PRICE_PRECISION)} symbols "
+                f"({len(self._lot_step)} lot steps)"
+            )
         except Exception as e:
-            logger.warning(f"Could not load price precision: {e} — defaulting to 2dp")
+            logger.warning(f"Could not load exchange filters: {e} — using static defaults")
 
     # ── Private helpers ───────────────────────────────────────────────────────
 
@@ -191,16 +206,21 @@ class BinanceFuturesService:
         self._leverage_set.add(sym)
 
     def _round_qty(self, sym: str, qty: float) -> float:
-        decimals = QTY_PRECISION.get(sym, 3)
-        min_q = MIN_QTY.get(sym, 0.001)
-        if decimals == 0:
-            rounded = float(int(qty))
-        else:
-            rounded = round(qty, decimals)
-        # Never go below min_qty after rounding (e.g. BTC 0.000314 rounds to 0.0)
+        """Floor quantity to Binance LOT_SIZE step (avoids -1111 precision errors)."""
+        import math
+        step = self._lot_step.get(sym) or MIN_QTY.get(sym, 0.001)
+        min_q = self._lot_min.get(sym) or MIN_QTY.get(sym, step)
+        if step <= 0:
+            step = 0.001
+        rounded = math.floor(qty / step + 1e-9) * step
         if rounded < min_q:
-            rounded = min_q
-        return rounded
+            rounded = math.ceil(min_q / step - 1e-9) * step
+        prec = self._qty_precision.get(sym)
+        if prec is None:
+            prec = QTY_PRECISION.get(sym, 3)
+        if prec == 0:
+            return float(int(round(rounded)))
+        return round(rounded, prec)
 
     def _round_price(self, symbol: str, price: float) -> float:
         """Round price to exchange-specified precision for the symbol.
@@ -848,14 +868,23 @@ class BinanceFuturesService:
                 return client.futures_create_order(**params)
             except Exception as e:
                 err_str = str(e)
-                # Precision error: reduce stopPrice decimals and retry immediately
-                if "-1111" in err_str and "stopPrice" in params:
-                    sp_str = str(params["stopPrice"])
-                    if "." in sp_str:
-                        decimals = len(sp_str.split(".")[1])
-                        if decimals > 0:
-                            params["stopPrice"] = float(f"{params['stopPrice']:.{decimals - 1}f}")
-                            continue
+                # Precision error: trim decimals and retry immediately
+                if "-1111" in err_str:
+                    if "stopPrice" in params:
+                        sp_str = str(params["stopPrice"])
+                        if "." in sp_str:
+                            decimals = len(sp_str.split(".")[1])
+                            if decimals > 0:
+                                params["stopPrice"] = float(f"{params['stopPrice']:.{decimals - 1}f}")
+                                continue
+                    if "price" in params:
+                        sym = params.get("symbol", "")
+                        params["price"] = self._round_price(sym, float(params["price"]))
+                        continue
+                    if "quantity" in params:
+                        sym = params.get("symbol", "")
+                        params["quantity"] = self._round_qty(sym, float(params["quantity"]))
+                        continue
                 # Duplicate clientOrderId (-4015/-2010 "Duplicate") → idempotent no-op
                 if "duplicate" in err_str.lower() or "-4015" in err_str:
                     logger.warning(f"  [idempotency] duplicate order suppressed: {err_str[:120]}")

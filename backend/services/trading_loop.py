@@ -754,37 +754,10 @@ class TradingLoopService:
                 cooldown_active=cooldown_active
             )
 
-            # Persist the evaluation for EVERY scanned symbol so the dashboard
-            # shows all pairs being analysed each cycle (not just executed ones).
-            try:
-                ev = getattr(decision_engine, "last_evaluation", None) or {}
-                if ev:
-                    db.add(TradingSignal(
-                        symbol=symbol,
-                        strategy=self._strategy_name,
-                        direction=ev.get("direction", "HOLD"),
-                        confidence=float(ev.get("confidence", 0.0)),
-                        entry_price=ev.get("entry_price"),
-                        stop_loss=ev.get("stop_loss"),
-                        take_profit=ev.get("take_profit"),
-                        status="executed" if ev.get("executed") else "evaluated",
-                        reasoning=ev.get("reason", ""),
-                    ))
-                    db.commit()
-                    # Mirror the evaluation into InfluxDB agent_state for Grafana
-                    try:
-                        await influx.write_agent_state(
-                            agent="decision_engine",
-                            symbol=symbol,
-                            direction=ev.get("direction", "HOLD"),
-                            confidence=float(ev.get("confidence", 0.0)),
-                            reasoning=ev.get("reason", ""),
-                        )
-                    except Exception:
-                        pass
-            except Exception as _se:
-                logger.warning(f"  [ {symbol} ] signal persist failed: {_se}")
-                db.rollback()
+            ev = getattr(decision_engine, "last_evaluation", None) or {}
+            signal_status = "evaluated"
+            signal_reason = ev.get("reason", "")
+            order_result = None
 
             if decision:
                 _signals = 1
@@ -812,10 +785,16 @@ class TradingLoopService:
                     
                     if decision.action == "BUY" and (_long_notional + _new_notional > self.risk_config.max_directional_exposure_usdt):
                         logger.warning(f"  [ {symbol} ] BUY blocked: LONG exposure cap reached")
+                        signal_status = "rejected"
+                        signal_reason = f"{signal_reason} | LONG exposure cap reached"
                         decision = None
                     elif decision.action == "SELL" and (_short_notional + _new_notional > self.risk_config.max_directional_exposure_usdt):
                         logger.warning(f"  [ {symbol} ] SELL blocked: SHORT exposure cap reached")
+                        signal_status = "rejected"
+                        signal_reason = f"{signal_reason} | SHORT exposure cap reached"
                         decision = None
+                    else:
+                        signal_status = "approved"
 
             if decision:
                 # 5. Execute Order — serialized across the parallel symbol tasks
@@ -828,28 +807,41 @@ class TradingLoopService:
                             f"  [ {symbol} ] entry skipped: max positions "
                             f"({self.risk_config.max_positions}) reached at execution time"
                         )
-                        self._check_sl_tp(db, symbol, bars)
-                        db.commit()
-                        return {"signals": _signals, "trades": 0}
+                        signal_status = "rejected"
+                        signal_reason = (
+                            f"{signal_reason} | max positions "
+                            f"({self.risk_config.max_positions}) at execution time"
+                        )
+                        decision = None
 
-                    ut = UnifiedTrading()
-                    order_side = OrderSide.BUY if decision.action == "BUY" else OrderSide.SELL
+                    if decision:
+                        ut = UnifiedTrading()
+                        order_side = OrderSide.BUY if decision.action == "BUY" else OrderSide.SELL
 
-                    logger.info(f"  [ {symbol} ] Attempting {decision.action} order: qty={decision.quantity:.6f} @ {decision.entry_price} | SL={decision.stop_loss} TP={decision.take_profit}")
+                        logger.info(
+                            f"  [ {symbol} ] Attempting {decision.action} order: "
+                            f"qty={decision.quantity:.6f} @ {decision.entry_price} | "
+                            f"SL={decision.stop_loss} TP={decision.take_profit}"
+                        )
 
-                    order = UnifiedOrder(
-                        symbol=symbol, side=order_side, quantity=decision.quantity, price=decision.entry_price,
-                        stop_loss=decision.stop_loss, take_profit=decision.take_profit
-                    )
+                        order = UnifiedOrder(
+                            symbol=symbol, side=order_side, quantity=decision.quantity,
+                            price=decision.entry_price,
+                            stop_loss=decision.stop_loss, take_profit=decision.take_profit,
+                        )
 
-                    res = await asyncio.get_event_loop().run_in_executor(None, lambda: ut.place_order(order))
-                    if res.success and not existing:
-                        self._open_count += 1
-                if res.success:
+                        order_result = await asyncio.get_event_loop().run_in_executor(
+                            None, lambda: ut.place_order(order)
+                        )
+                        if order_result.success and not existing:
+                            self._open_count += 1
+                if decision and order_result and order_result.success:
                     _trades = 1
-                    filled_px = float(res.filled_price or decision.entry_price)
-                    filled_qty = float(res.filled_qty or decision.quantity)
-                    logger.info(f"  [ {symbol} ] SUCCESS: {res.order_id} filled @ {filled_px}")
+                    filled_px = float(order_result.filled_price or decision.entry_price)
+                    filled_qty = float(order_result.filled_qty or decision.quantity)
+                    signal_status = "executed"
+                    signal_reason = f"{signal_reason} | filled {order_result.order_id}"
+                    logger.info(f"  [ {symbol} ] SUCCESS: {order_result.order_id} filled @ {filled_px}")
 
                     if decision.is_pyramid:
                         self._pyramid_layers.setdefault(symbol, []).append(filled_px)
@@ -858,7 +850,7 @@ class TradingLoopService:
                         symbol=symbol, direction=decision.action, quantity=filled_qty,
                         entry_price=filled_px, status="open",
                         strategy=self._strategy_name,
-                        binance_order_id=res.order_id,
+                        binance_order_id=order_result.order_id,
                         stop_loss=decision.stop_loss, take_profit=decision.take_profit,
                         notes=f"pyramid_layer_{len(self._pyramid_layers.get(symbol, []))}" if decision.is_pyramid else None
                     )
@@ -874,8 +866,39 @@ class TradingLoopService:
                         )
                     except Exception as _ie:
                         logger.warning(f"  [ {symbol} ] InfluxDB write_trade failed: {_ie}")
-                else:
-                    logger.warning(f"  [ {symbol} ] FAILED: {res.message}")
+                elif decision and order_result:
+                    signal_status = "rejected"
+                    signal_reason = f"{signal_reason} | order failed: {order_result.message}"
+                    logger.warning(f"  [ {symbol} ] FAILED: {order_result.message}")
+
+            # Persist evaluation AFTER order attempt so status reflects Binance reality.
+            try:
+                if ev:
+                    db.add(TradingSignal(
+                        symbol=symbol,
+                        strategy=self._strategy_name,
+                        direction=ev.get("direction", "HOLD"),
+                        confidence=float(ev.get("confidence", 0.0)),
+                        entry_price=ev.get("entry_price"),
+                        stop_loss=ev.get("stop_loss"),
+                        take_profit=ev.get("take_profit"),
+                        status=signal_status,
+                        reasoning=signal_reason,
+                    ))
+                    db.commit()
+                    try:
+                        await influx.write_agent_state(
+                            agent="decision_engine",
+                            symbol=symbol,
+                            direction=ev.get("direction", "HOLD"),
+                            confidence=float(ev.get("confidence", 0.0)),
+                            reasoning=signal_reason,
+                        )
+                    except Exception:
+                        pass
+            except Exception as _se:
+                logger.warning(f"  [ {symbol} ] signal persist failed: {_se}")
+                db.rollback()
 
             # SL/TP Check
             self._check_sl_tp(db, symbol, bars)

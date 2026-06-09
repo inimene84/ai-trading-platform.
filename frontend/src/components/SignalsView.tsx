@@ -48,6 +48,8 @@ const StatusBadge = ({ status }: { status: string }) => {
   const s = status.toLowerCase();
   const map: Record<string, { bg: string; text: string }> = {
     executed: { bg: 'bg-emerald-500/10 border-emerald-500/20', text: 'text-emerald-400' },
+    approved: { bg: 'bg-sky-500/10 border-sky-500/20', text: 'text-sky-400' },
+    evaluated: { bg: 'bg-zinc-800 border-zinc-700', text: 'text-zinc-400' },
     pending: { bg: 'bg-amber-500/10 border-amber-500/20', text: 'text-amber-400' },
     rejected: { bg: 'bg-rose-500/10 border-rose-500/20', text: 'text-rose-400' },
     expired: { bg: 'bg-zinc-800 border-zinc-700', text: 'text-zinc-500' },

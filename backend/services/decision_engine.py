@@ -73,7 +73,7 @@ class DecisionEngine:
         # 0 → fall back to fixed trade_usdt_amount notional.
         self.account_equity: float = 0.0
 
-    def _record_eval(self, symbol, direction, confidence, reason, entry=None, sl=None, tp=None, executed=False):
+    def _record_eval(self, symbol, direction, confidence, reason, entry=None, sl=None, tp=None, approved=False):
         self.last_evaluation = {
             "symbol": symbol,
             "direction": (direction or "HOLD").upper(),
@@ -82,7 +82,7 @@ class DecisionEngine:
             "entry_price": entry,
             "stop_loss": sl,
             "take_profit": tp,
-            "executed": executed,
+            "approved": approved,
         }
 
     async def evaluate_symbol(
@@ -227,7 +227,7 @@ class DecisionEngine:
         if decision:
             self._record_eval(symbol, decision.action, decision.confidence, "entry decision",
                               entry=decision.entry_price, sl=decision.stop_loss,
-                              tp=decision.take_profit, executed=True)
+                              tp=decision.take_profit, approved=True)
         return decision
 
     def _create_entry_decision(self, symbol: str, bars: List[Dict[str, Any]], signal: Any, direction: str, is_pyramid: bool) -> Optional[Decision]:
