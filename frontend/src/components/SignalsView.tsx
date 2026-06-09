@@ -52,6 +52,7 @@ const StatusBadge = ({ status }: { status: string }) => {
     evaluated: { bg: 'bg-zinc-800 border-zinc-700', text: 'text-zinc-400' },
     pending: { bg: 'bg-amber-500/10 border-amber-500/20', text: 'text-amber-400' },
     rejected: { bg: 'bg-rose-500/10 border-rose-500/20', text: 'text-rose-400' },
+    skipped: { bg: 'bg-amber-500/10 border-amber-500/20', text: 'text-amber-400' },
     expired: { bg: 'bg-zinc-800 border-zinc-700', text: 'text-zinc-500' },
     ai_analyzed: { bg: 'bg-indigo-500/10 border-indigo-500/20', text: 'text-indigo-400' },
   };
