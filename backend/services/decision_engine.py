@@ -120,7 +120,16 @@ class DecisionEngine:
                     )
                     if signal and signal.signal == existing_position.direction and signal.confidence >= self.config.min_signal_strength:
                         # Pyramid conditions met
-                        return self._create_entry_decision(symbol, bars, signal, existing_position.direction, is_pyramid=True)
+                        decision = self._create_entry_decision(
+                            symbol, bars, signal, existing_position.direction, is_pyramid=True
+                        )
+                        if decision:
+                            self._record_eval(
+                                symbol, decision.action, decision.confidence, "pyramid entry",
+                                entry=decision.entry_price, sl=decision.stop_loss,
+                                tp=decision.take_profit, approved=True,
+                            )
+                        return decision
             return None
 
         # 2. Cooldown check

@@ -872,16 +872,32 @@ class TradingLoopService:
                     logger.warning(f"  [ {symbol} ] FAILED: {order_result.message}")
 
             # Persist evaluation AFTER order attempt so status reflects Binance reality.
+            # Prefer the Decision object over last_evaluation — pyramid re-entries used
+            # to leave last_evaluation stuck at "evaluating" (HOLD 0% in the UI).
             try:
-                if ev:
+                if ev or decision:
+                    sig_direction = (
+                        decision.action if decision
+                        else ev.get("direction", "HOLD")
+                    )
+                    sig_confidence = (
+                        float(getattr(decision, "confidence", 0.0))
+                        if decision else float(ev.get("confidence", 0.0))
+                    )
                     db.add(TradingSignal(
                         symbol=symbol,
                         strategy=self._strategy_name,
-                        direction=ev.get("direction", "HOLD"),
-                        confidence=float(ev.get("confidence", 0.0)),
-                        entry_price=ev.get("entry_price"),
-                        stop_loss=ev.get("stop_loss"),
-                        take_profit=ev.get("take_profit"),
+                        direction=sig_direction,
+                        confidence=sig_confidence,
+                        entry_price=(
+                            decision.entry_price if decision else ev.get("entry_price")
+                        ),
+                        stop_loss=(
+                            decision.stop_loss if decision else ev.get("stop_loss")
+                        ),
+                        take_profit=(
+                            decision.take_profit if decision else ev.get("take_profit")
+                        ),
                         status=signal_status,
                         reasoning=signal_reason,
                     ))
