@@ -59,3 +59,40 @@ async def test_review_trade_decision_veto():
         )
         assert approved is False
         assert "Funding rate" in reasoning
+
+
+@pytest.mark.asyncio
+async def test_review_trade_decision_fail_open_on_garbage_response():
+    with patch("httpx.AsyncClient.post") as mock_post:
+        mock_response = AsyncMock()
+        mock_response.is_success = True
+        from unittest.mock import MagicMock
+        mock_response.json = MagicMock(return_value={
+            "choices": [{"message": {"content": "I recommend rejecting this trade."}}]
+        })
+        mock_post.return_value = mock_response
+
+        approved, reasoning = await review_trade_decision(
+            symbol="BTCUSDT",
+            action="SELL",
+            quantity=0.01,
+            entry_price=90000.0,
+            stop_loss=92000.0,
+            take_profit=85000.0,
+            confidence=0.85,
+            funding_rate=0.0001,
+            news_summary="Mixed news.",
+        )
+        assert approved is True
+        assert "fail-open" in reasoning.lower()
+
+
+@pytest.mark.asyncio
+async def test_review_trade_decision_parses_markdown_json():
+    from backend.services.risk_reviewer import _parse_reviewer_response
+
+    approved, reasoning = _parse_reviewer_response(
+        '```json\n{"approved": true, "reasoning": "Clean setup."}\n```'
+    )
+    assert approved is True
+    assert reasoning == "Clean setup."

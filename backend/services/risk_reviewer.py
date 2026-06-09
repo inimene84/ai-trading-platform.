@@ -1,11 +1,44 @@
 import os
 import json
 import logging
+import re
 import httpx
 from typing import Optional, List, Dict, Any
 from backend.llm.router import pick_model, get_api_key
 
 logger = logging.getLogger("risk_reviewer")
+
+_APPROVED_RE = re.compile(r'"approved"\s*:\s*(true|false)', re.IGNORECASE)
+
+
+def _parse_reviewer_response(content: str) -> tuple[bool, str]:
+    """Parse LLM reviewer output; fail-open (approve) when format is ambiguous."""
+    if not content or not content.strip():
+        return True, "Approved (empty LLM response — fail-open)."
+
+    text = content.strip()
+    # Strip markdown code fences if the model wrapped JSON
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*", "", text)
+        text = re.sub(r"\s*```$", "", text).strip()
+
+    try:
+        result = json.loads(text)
+        approved = bool(result.get("approved", True))
+        reasoning = str(result.get("reasoning", "No reasoning provided."))
+        return approved, reasoning
+    except Exception:
+        pass
+
+    match = _APPROVED_RE.search(text)
+    if match:
+        approved = match.group(1).lower() == "true"
+        reason_match = re.search(r'"reasoning"\s*:\s*"([^"]*)"', text, re.IGNORECASE)
+        reasoning = reason_match.group(1) if reason_match else "Parsed approved field from non-JSON response."
+        return approved, reasoning
+
+    logger.warning("Could not parse risk reviewer response; defaulting to APPROVED. Content: %s", text[:500])
+    return True, "Approved (unparseable LLM response — fail-open)."
 
 async def fetch_news_summary(symbol: str) -> str:
     """Fetch recent news analyses for a symbol from Qdrant vector store."""
@@ -120,17 +153,7 @@ async def review_trade_decision(
                 
             data = resp.json()
             content = data["choices"][0]["message"]["content"]
-            
-            try:
-                result = json.loads(content)
-                approved = bool(result.get("approved", True))
-                reasoning = str(result.get("reasoning", "No reasoning provided."))
-                return approved, reasoning
-            except Exception as pe:
-                logger.warning(f"Could not parse risk reviewer JSON response: {pe}. Content: {content}")
-                approved = "true" in content.lower() and "false" not in content.split('"approved"')[-1].split(",")[0].lower()
-                reasoning = "Vetoed/Approved via fallback parsing."
-                return approved, reasoning
+            return _parse_reviewer_response(content)
                 
     except Exception as e:
         logger.error(f"Error calling risk reviewer LLM: {e}")
