@@ -464,9 +464,10 @@ class BinanceFuturesService:
 
             passed_reduce_only = kwargs.get('reduce_only', False)
 
-            # ── Hedge-mode guard: never stack a new leg on an open symbol ─────
+            # ── Hedge-mode guard: never stack a naked opposite leg ──────────────
             # Binance hedge mode allows simultaneous LONG+SHORT on the same pair.
-            # That doubles margin use and leaves naked legs without coordinated SL/TP.
+            # We allow Pyramiding (same side) but block opposite sides to avoid naked legs.
+            is_pyramid = False
             if action != 'close' and not passed_reduce_only:
                 live_on_symbol = [
                     p for p in self.get_positions()
@@ -474,16 +475,26 @@ class BinanceFuturesService:
                 ]
                 if live_on_symbol:
                     sides = [p.get('side') for p in live_on_symbol]
-                    logger.warning(
-                        f"[Binance Futures] SKIP {futures_sym}: open position(s) already on exchange "
-                        f"({sides}) — refusing duplicate {direction.upper()} entry"
-                    )
-                    return {
-                        'status': 'skipped',
-                        'broker': 'binance_futures',
-                        'reason': f'position_already_open:{sides}',
-                        'symbol': futures_sym,
-                    }
+                    if len(set(sides)) == 1 and sides[0] == direction.upper():
+                        logger.info(f"[Binance Futures] Pyramiding {direction.upper()} into existing {futures_sym} position")
+                        is_pyramid = True
+                        try:
+                            # Cancel old conditional orders (SL/TP) so we can place a new unified one
+                            client.futures_cancel_all_open_orders(symbol=futures_sym)
+                            logger.info(f"  ✓ Cancelled old conditional orders for pyramiding {futures_sym}")
+                        except Exception as e:
+                            logger.warning(f"  [!] Failed to cancel open orders for pyramiding {futures_sym}: {e}")
+                    else:
+                        logger.warning(
+                            f"[Binance Futures] SKIP {futures_sym}: open position(s) already on exchange "
+                            f"({sides}) — refusing opposite/duplicate {direction.upper()} entry"
+                        )
+                        return {
+                            'status': 'skipped',
+                            'broker': 'binance_futures',
+                            'reason': f'position_already_open:{sides}',
+                            'symbol': futures_sym,
+                        }
 
             # ── Pre-trade margin check ──────────────────────────────────────────
             acct = client.futures_account()
@@ -608,8 +619,7 @@ class BinanceFuturesService:
                             "side": sl_side,
                             "type": 'STOP_MARKET',
                             "stopPrice": self._round_price(futures_sym, stop_loss),
-                            "quantity": quantity,
-                            "timeInForce": 'GTC',
+                            "closePosition": "true",
                             "positionSide": position_side,
                         }
                         sl_order = self._safe_create_order(client, sl_params)
@@ -661,8 +671,7 @@ class BinanceFuturesService:
                             "side": tp_side,
                             "type": 'TAKE_PROFIT_MARKET',
                             "stopPrice": self._round_price(futures_sym, take_profit),
-                            "quantity": quantity,
-                            "timeInForce": 'GTC',
+                            "closePosition": "true",
                             "positionSide": position_side,
                         }
                         tp_order = self._safe_create_order(client, tp_params)

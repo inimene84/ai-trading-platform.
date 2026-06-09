@@ -85,7 +85,7 @@ export const PortfolioView = () => {
   const totalPnl = portfolio?.total_pnl ?? 0;
   const totalPnlPct = portfolio?.total_pnl_pct ?? 0;
   const positionsValue = portfolio?.positions_value ?? 0;
-  const available = balance;
+  const available = portfolio?.available ?? balance;
 
   return (
     <motion.div 

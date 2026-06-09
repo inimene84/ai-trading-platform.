@@ -71,6 +71,16 @@ class RiskConfig(BaseSettings):
     )
     max_open_positions: int = 10
     
+    # LLM Overhaul Toggles
+    use_risk_reviewer_llm: bool = PydanticField(
+        default=True,
+        validation_alias=AliasChoices("use_risk_reviewer_llm", "USE_RISK_REVIEWER_LLM"),
+    )
+    enable_personas: bool = PydanticField(
+        default=False,
+        validation_alias=AliasChoices("enable_personas", "ENABLE_PERSONAS"),
+    )
+    
     # Signal thresholds (env-tunable so trade aggressiveness can change without a rebuild)
     min_signal_strength: float = PydanticField(
         default=0.45,
