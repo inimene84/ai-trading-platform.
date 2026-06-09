@@ -113,6 +113,7 @@ export interface Signal {
 
 export interface Portfolio {
   balance: number;
+  available: number;
   equity: number;
   positions: any[];
   total_pnl: number;
@@ -171,6 +172,13 @@ export const apiService = {
 
   async getConfig() {
     return request('/trading/config');
+  },
+
+  async updateConfig(payload: { use_risk_reviewer_llm?: boolean; enable_personas?: boolean }) {
+    return request('/trading/config/update', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
   },
 
   async getModels() {

@@ -36,6 +36,10 @@ class TradingConfigResponse(BaseModel):
     symbols: List[str]
     risk_limits: Dict[str, Any]
 
+class ConfigUpdateRequest(BaseModel):
+    use_risk_reviewer_llm: Optional[bool] = None
+    enable_personas: Optional[bool] = None
+
 load_dotenv()
 
 router = APIRouter(prefix="/trading", tags=["trading"])
@@ -142,12 +146,16 @@ async def get_portfolio():
 
         # Prefer live broker balance over stale DB snapshot
         balance = 0.0
+        available = 0.0
         equity = 0.0
+        positions_value = 0.0
         try:
             from backend.services.binance_futures_service import binance_futures_broker
             bal = await asyncio.to_thread(binance_futures_broker.get_balance)
-            balance = bal.get("available", bal.get("balance", 0.0))
+            balance = bal.get("balance", 0.0)
+            available = bal.get("available", balance)
             equity = bal.get("equity", balance)
+            positions_value = bal.get("margin_used", 0.0)
         except Exception:
             snap = (
                 db.query(PortfolioSnapshot)
@@ -156,7 +164,9 @@ async def get_portfolio():
             )
             if snap:
                 balance = snap.cash or 0.0
+                available = snap.cash or 0.0
                 equity = snap.total_value or balance
+                positions_value = snap.positions_value or 0.0
 
         # Compute realized PnL from all closed trades
         closed_pnl = db.query(Trade).filter(Trade.status == "closed").with_entities(
@@ -167,11 +177,12 @@ async def get_portfolio():
 
         return {
             "balance": round(balance, 6),
+            "available": round(available, 6),
             "equity": round(equity, 6),
             "positions": positions,
             "total_pnl": total_pnl,
             "total_pnl_pct": pnl_pct,
-            "positions_value": 0.0,
+            "positions_value": round(positions_value, 6),
             "open_positions_count": len(positions),
             "last_updated": datetime.now().isoformat(),
         }
@@ -408,6 +419,8 @@ async def get_config():
         "min_signal_strength": config.min_signal_strength,
         "sl_cooldown_minutes": config.sl_cooldown_minutes,
         "emergency_drawdown_pct": config.emergency_drawdown_pct,
+        "use_risk_reviewer_llm": config.use_risk_reviewer_llm,
+        "enable_personas": config.enable_personas,
     }
     return TradingConfigResponse(
         mode=mode,
@@ -415,6 +428,24 @@ async def get_config():
         symbols=trading_loop._symbols,
         risk_limits=risk_limits,
     )
+
+
+@router.post("/config/update")
+async def update_config(payload: ConfigUpdateRequest):
+    """Update risk/trading configuration toggles dynamically."""
+    from backend.services.risk_config import get_risk_config
+    config = get_risk_config()
+    if payload.use_risk_reviewer_llm is not None:
+        config.use_risk_reviewer_llm = payload.use_risk_reviewer_llm
+    if payload.enable_personas is not None:
+        config.enable_personas = payload.enable_personas
+    return {
+        "status": "success",
+        "config": {
+            "use_risk_reviewer_llm": config.use_risk_reviewer_llm,
+            "enable_personas": config.enable_personas
+        }
+    }
 
 
 # ── Market Data Feeds ────────────────────────────────────────────────────────
@@ -453,37 +484,6 @@ async def get_stocks():
     return {"data": data}
 
 
-@router.get("/markets/forex")
-async def get_forex():
-    """Fetch live data for top forex pairs using yfinance."""
-    import yfinance as yf
-    # mapping yfinance symbols to standard names
-    pairs = {"EURUSD=X": "EUR/USD", "GBPUSD=X": "GBP/USD", "JPY=X": "USD/JPY", "AUDUSD=X": "AUD/USD", "USDCAD=X": "USD/CAD"}
-    data = []
-    for yf_sym, name in pairs.items():
-        try:
-            ticker = yf.Ticker(yf_sym)
-            hist = ticker.history(period="2d")
-            if len(hist) >= 2:
-                prev_close = hist["Close"].iloc[-2]
-                current = hist["Close"].iloc[-1]
-                change_pct = ((current - prev_close) / prev_close) * 100
-            elif len(hist) == 1:
-                current = hist["Close"].iloc[-1]
-                change_pct = 0.0
-            else:
-                continue
-                
-            data.append({
-                "symbol": name,
-                "price": float(current),
-                "change24h": round(float(change_pct), 3), # closer precision for forex
-                "volume24h": 0.0, # yfinance often doesn't have reliable forex volume
-                "up": bool(change_pct >= 0)
-            })
-        except Exception:
-            pass
-    return {"data": data}
 
 
 # Binance public spot endpoints the frontend is allowed to proxy through us.

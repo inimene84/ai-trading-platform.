@@ -64,7 +64,6 @@ class DecisionEngine:
         self.config = risk_config
         self.strategy = CombinedStrategy()
         self.regime_detector = MarketRegimeDetector()
-        self.enable_personas = os.getenv("ENABLE_PERSONAS", "true").lower() == "true"
         self.enable_kronos = os.getenv("ENABLE_KRONOS", "true").lower() == "true"
         # Snapshot of the most recent evaluation so the loop can persist a
         # signal row for EVERY symbol it scans (not just executed trades).
@@ -92,7 +91,8 @@ class DecisionEngine:
         existing_position: Optional[Any],  # DB Trade object or dict
         open_count: int,
         pyramid_layers: List[float],
-        cooldown_active: bool
+        cooldown_active: bool,
+        current_funding_rate: float = 0.0
     ) -> Optional[Decision]:
         """
         Evaluate market data and return a trading Decision.
@@ -109,9 +109,12 @@ class DecisionEngine:
         if existing_position:
             # Check pyramid
             if self.config.pyramid_mode:
+                regime_result = self.regime_detector.detect(bars)
+                if regime_result.regime == "RANGING":
+                    logger.info(f"[{symbol}] Pyramiding blocked: market is in RANGING/CHOP regime.")
+                    return None
                 if len(pyramid_layers) < self.config.pyramid_max_layers:
                     # Strategy signal for pyramid
-                    regime_result = self.regime_detector.detect(bars)
                     signal = self.strategy.generate_signal(
                         symbol,
                         bars,
@@ -152,12 +155,35 @@ class DecisionEngine:
                                 entry=decision.entry_price, sl=decision.stop_loss,
                                 tp=decision.take_profit, approved=True,
                             )
+                        if decision and getattr(self.config, "use_risk_reviewer_llm", True):
+                            try:
+                                from backend.services.risk_reviewer import fetch_news_summary, review_trade_decision
+                                news_summary = await fetch_news_summary(symbol)
+                                approved, reasoning = await review_trade_decision(
+                                    symbol=symbol,
+                                    action=decision.action,
+                                    quantity=decision.quantity,
+                                    entry_price=decision.entry_price,
+                                    stop_loss=decision.stop_loss,
+                                    take_profit=decision.take_profit,
+                                    confidence=decision.confidence,
+                                    funding_rate=current_funding_rate,
+                                    news_summary=news_summary
+                                )
+                                if not approved:
+                                    logger.warning(f"[{symbol}] Pyramid add VETOED by Risk Reviewer: {reasoning}")
+                                    return None
+                                logger.info(f"[{symbol}] Pyramid add APPROVED by Risk Reviewer: {reasoning}")
+                                decision.reasoning += f" | Risk Reviewer: {reasoning}"
+                            except Exception as e:
+                                logger.error(f"[{symbol}] Error in LLM Risk Reviewer gate for pyramid add: {e}")
                         return decision
             return None
 
         # 2. Cooldown check
         if cooldown_active:
             return None
+
 
         # 3. Strategy execution — detect regime and generate signal.
         #    Runs FIRST so the expensive Kronos/opinion calls below are only
@@ -170,13 +196,47 @@ class DecisionEngine:
             regime=regime_result.regime,
             regime_weights=regime_result.weights()
         )
-        if not signal or signal.signal not in ["BUY", "SELL"] or signal.confidence < self.config.min_signal_strength:
+        if not signal or signal.signal not in ["BUY", "SELL"]:
             self._record_eval(
                 symbol,
                 signal.signal if signal else "HOLD",
                 signal.confidence if signal else 0.0,
-                f"strategy below threshold ({self.config.min_signal_strength})",
+                f"no strategy signal",
             )
+            return None
+
+        # Adjust signal confidence based on the perp funding rate
+        # Funding rate units on Binance: 0.0001 = 0.01% per 8h.
+        funding_adj = current_funding_rate * 1000.0
+        if signal.signal == "SELL":
+            # Boost shorts if positive funding (we get paid to hold)
+            old_conf = signal.confidence
+            signal.confidence = max(0.0, min(1.0, signal.confidence + funding_adj))
+            if funding_adj != 0:
+                logger.info(f"[{symbol}] SHORT confidence adjusted by funding rate ({current_funding_rate*100:.4f}%): {old_conf:.2f} -> {signal.confidence:.2f}")
+        elif signal.signal == "BUY":
+            # Dampen longs if positive funding (we pay to hold)
+            old_conf = signal.confidence
+            signal.confidence = max(0.0, min(1.0, signal.confidence - funding_adj))
+            if funding_adj != 0:
+                logger.info(f"[{symbol}] LONG confidence adjusted by funding rate ({current_funding_rate*100:.4f}%): {old_conf:.2f} -> {signal.confidence:.2f}")
+
+        # Regime-aware confidence gate
+        required_gate = self.config.min_signal_strength + (0.15 if regime_result.regime == "RANGING" else 0.0)
+        if signal.confidence < required_gate:
+            self._record_eval(
+                symbol,
+                signal.signal,
+                signal.confidence,
+                f"strategy confidence below threshold ({required_gate:.2f}) in {regime_result.regime} regime",
+            )
+            return None
+
+        # Block BUYs if funding rate is over cap
+        fr_cap = getattr(self.config, "funding_rate_cap", 0.0)
+        if signal.signal == "BUY" and fr_cap > 0 and current_funding_rate > fr_cap:
+            logger.info(f"[{symbol}] BUY signal blocked by Funding Rate Gate ({current_funding_rate*100:.3f}% > {fr_cap*100:.3f}%)")
+            self._record_eval(symbol, "HOLD", signal.confidence, "blocked by funding rate")
             return None
 
         # 4. Kronos foundation-model prediction (only for directional signals)
@@ -218,7 +278,7 @@ class DecisionEngine:
             return None
 
         # 5. AI Opinion Layer — multi-agent weighted consensus
-        if self.enable_personas:
+        if self.config.enable_personas:
             try:
                 opinion = await opinion_analyze(
                     symbol=symbol,
@@ -256,6 +316,35 @@ class DecisionEngine:
             
         # 7. Create Decision
         decision = self._create_entry_decision(symbol, bars, signal, signal.signal, is_pyramid=False)
+        if not decision:
+            return None
+
+        # 8. Single LLM Risk Reviewer (Veto Gate)
+        if getattr(self.config, "use_risk_reviewer_llm", True):
+            try:
+                from backend.services.risk_reviewer import fetch_news_summary, review_trade_decision
+                news_summary = await fetch_news_summary(symbol)
+                approved, reasoning = await review_trade_decision(
+                    symbol=symbol,
+                    action=decision.action,
+                    quantity=decision.quantity,
+                    entry_price=decision.entry_price,
+                    stop_loss=decision.stop_loss,
+                    take_profit=decision.take_profit,
+                    confidence=decision.confidence,
+                    funding_rate=current_funding_rate,
+                    news_summary=news_summary
+                )
+                if not approved:
+                    logger.warning(f"[{symbol}] VETOED by Risk Reviewer: {reasoning}")
+                    self._record_eval(symbol, decision.action, decision.confidence, f"vetoed by risk reviewer: {reasoning}")
+                    return None
+                else:
+                    logger.info(f"[{symbol}] APPROVED by Risk Reviewer: {reasoning}")
+                    decision.reasoning += f" | Risk Reviewer: {reasoning}"
+            except Exception as e:
+                logger.error(f"[{symbol}] Error in LLM Risk Reviewer gate: {e}")
+
         if decision:
             self._record_eval(symbol, decision.action, decision.confidence, "entry decision",
                               entry=decision.entry_price, sl=decision.stop_loss,
@@ -288,6 +377,13 @@ class DecisionEngine:
                 # Cap per-trade notional at a multiple of equity (post-leverage)
                 max_notional = self.account_equity * self.config.max_trade_notional_equity_mult
                 notional = max(trade_usdt, min(notional, max_notional))
+        
+        # Halve the trade notional in RANGING regime
+        regime = self.regime_detector.detect(bars).regime
+        if regime == "RANGING":
+            notional = notional * 0.5
+            logger.info(f"[{symbol}] RANGING regime detected: Trade notional halved to ${notional:.2f}")
+
         # Floor at Binance MIN_NOTIONAL ($20 for most symbols, $100 for BTC)
         _bn_min = 100.0 if 'BTC' in symbol else 20.0
         notional = max(notional, _bn_min)
