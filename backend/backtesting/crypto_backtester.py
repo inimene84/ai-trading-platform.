@@ -83,7 +83,7 @@ class CryptoBacktestEngine:
         self.trade_history.append(trade)
         logger.info(f"[{timestamp}] CLOSE {direction} {symbol}: {qty:.4f} @ ${exit_price:.4f} | PnL: ${pnl:.2f} | Reason: {reason} | Cash: ${self.cash:.2f}")
 
-    def _check_exits(self, symbol: str, candle: Dict):
+    def _check_exits(self, symbol: str, candle: Dict, history: List[Dict]):
         if symbol not in self.positions:
             return
             
@@ -94,18 +94,77 @@ class CryptoBacktestEngine:
         
         high = candle['high']
         low = candle['low']
+        close = candle['close']
         timestamp = candle['date']
         
+        # Check if trailing stop is enabled
+        cfg = self.risk_config
+        if getattr(cfg, "trailing_stop_enabled", False):
+            # Calculate ATR over the last 15 bars
+            try:
+                highs = [b["high"] for b in history[-15:]]
+                lows = [b["low"] for b in history[-15:]]
+                closes = [b["close"] for b in history[-16:-1]]
+                trs = []
+                for h, l, c in zip(highs, lows, closes):
+                    trs.append(max(h - l, abs(h - c), abs(l - c)))
+                atr = sum(trs) / len(trs) if trs else 0.0
+            except Exception:
+                atr = close * 0.02
+                
+            if atr <= 0:
+                atr = close * 0.02
+                
+            activation_dist = cfg.trail_activation_atr * atr
+            trail_dist = cfg.trail_atr_mult * atr
+            
+            if direction == 'BUY':
+                hw = pos.get('hw', max(pos['entry_price'], close))
+                hw = max(hw, close)
+                pos['hw'] = hw
+                
+                # Step-Trailing: Move to breakeven at 0.5x activation distance
+                if hw - pos['entry_price'] < activation_dist:
+                    if hw - pos['entry_price'] >= (activation_dist * 0.5):
+                        candidate = pos['entry_price']
+                        if candidate > sl:
+                            sl = candidate
+                            pos['sl'] = sl
+                else:
+                    candidate = hw - trail_dist
+                    candidate = min(candidate, close)
+                    if candidate > sl:
+                        sl = candidate
+                        pos['sl'] = sl
+            else: # SELL
+                lw = pos.get('lw', min(pos['entry_price'], close))
+                lw = min(lw, close)
+                pos['lw'] = lw
+                
+                # Step-Trailing: Move to breakeven at 0.5x activation distance
+                if pos['entry_price'] - lw < activation_dist:
+                    if pos['entry_price'] - lw >= (activation_dist * 0.5):
+                        candidate = pos['entry_price']
+                        if candidate < sl:
+                            sl = candidate
+                            pos['sl'] = sl
+                else:
+                    candidate = lw + trail_dist
+                    candidate = max(candidate, close)
+                    if candidate < sl:
+                        sl = candidate
+                        pos['sl'] = sl
+
         # Check SL/TP hits
         if direction == 'BUY':
             if low <= sl:
                 self._close_trade(symbol, sl, timestamp, "SL")
-            elif high >= tp:
+            elif tp is not None and tp > 0 and tp < 99999.0 and high >= tp:
                 self._close_trade(symbol, tp, timestamp, "TP")
         elif direction == 'SELL':
             if high >= sl:
                 self._close_trade(symbol, sl, timestamp, "SL")
-            elif low <= tp:
+            elif tp is not None and tp > 0 and tp < 99999.0 and low <= tp:
                 self._close_trade(symbol, tp, timestamp, "TP")
 
     async def run(self):
@@ -124,7 +183,8 @@ class CryptoBacktestEngine:
             
             # 1. Check open positions for exits using current candle High/Low
             for sym, (candle, idx) in tick_data.items():
-                self._check_exits(sym, candle)
+                history = data_by_sym[sym][:idx+1]
+                self._check_exits(sym, candle, history)
                 
             # 2. Evaluate strategies for new entries
             for sym, (candle, idx) in tick_data.items():
