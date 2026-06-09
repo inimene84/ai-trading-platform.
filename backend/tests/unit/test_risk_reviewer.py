@@ -91,7 +91,7 @@ async def test_review_trade_decision_fail_open_on_garbage_response():
 
 
 @pytest.mark.asyncio
-async def test_review_trade_decision_parses_markdown_json():
+async def test_parse_reviewer_parses_markdown_json():
     from backend.services.risk_reviewer import _parse_reviewer_response
 
     approved, reasoning = _parse_reviewer_response(
@@ -99,3 +99,25 @@ async def test_review_trade_decision_parses_markdown_json():
     )
     assert approved is True
     assert reasoning == "Clean setup."
+
+
+@pytest.mark.asyncio
+async def test_parse_reviewer_extracts_json_from_prose():
+    from backend.services.risk_reviewer import _parse_reviewer_response
+
+    approved, reasoning = _parse_reviewer_response(
+        'After review, here is my decision: {"approved": true, "reasoning": "Trend aligned."}'
+    )
+    assert approved is True
+    assert "Trend aligned" in reasoning
+
+
+@pytest.mark.asyncio
+async def test_parse_reviewer_fail_open_on_plain_prose_veto():
+    from backend.services.risk_reviewer import _parse_reviewer_response
+
+    approved, reasoning = _parse_reviewer_response(
+        "I cannot approve this trade due to excessive risk."
+    )
+    assert approved is True
+    assert "fail-open" in reasoning.lower()
