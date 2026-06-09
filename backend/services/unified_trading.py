@@ -659,11 +659,18 @@ class UnifiedTrading:
                 take_profit=tp,
                 reduce_only=order.reduce_only
             )
-            ok = result.get("status") in ("simulated", "sent", "filled")
+            status = result.get("status", "error")
+            ok = status in ("simulated", "sent", "filled")
+            message = (
+                result.get("message")
+                or result.get("reason")
+                or result.get("error")
+                or ("Live order placed" if ok else f"Order {status}")
+            )
             return UnifiedOrderResponse(
                 success=ok,
                 order_id=result.get("order_id", ""),
-                message=result.get("message", "Live order placed"),
+                message=message,
                 mode="live",
                 filled_price=result.get("filled_price"),
                 filled_qty=result.get("quantity"),
