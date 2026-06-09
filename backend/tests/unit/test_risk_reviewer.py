@@ -4,7 +4,8 @@ from backend.services.risk_reviewer import review_trade_decision, fetch_news_sum
 
 @pytest.mark.asyncio
 async def test_review_trade_decision_approve():
-    with patch("httpx.AsyncClient.post") as mock_post:
+    with patch("backend.services.risk_reviewer.get_api_key", return_value="test-key"), \
+         patch("httpx.AsyncClient.post") as mock_post:
         mock_response = AsyncMock()
         mock_response.is_success = True
         from unittest.mock import MagicMock
@@ -33,7 +34,8 @@ async def test_review_trade_decision_approve():
 
 @pytest.mark.asyncio
 async def test_review_trade_decision_veto():
-    with patch("httpx.AsyncClient.post") as mock_post:
+    with patch("backend.services.risk_reviewer.get_api_key", return_value="test-key"), \
+         patch("httpx.AsyncClient.post") as mock_post:
         mock_response = AsyncMock()
         mock_response.is_success = True
         from unittest.mock import MagicMock
@@ -63,7 +65,8 @@ async def test_review_trade_decision_veto():
 
 @pytest.mark.asyncio
 async def test_review_trade_decision_fail_open_on_garbage_response():
-    with patch("httpx.AsyncClient.post") as mock_post:
+    with patch("backend.services.risk_reviewer.get_api_key", return_value="test-key"), \
+         patch("httpx.AsyncClient.post") as mock_post:
         mock_response = AsyncMock()
         mock_response.is_success = True
         from unittest.mock import MagicMock
