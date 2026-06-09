@@ -21,6 +21,7 @@ import { cn } from '../lib/utils';
 import { motion } from 'motion/react';
 import { configService } from '../services/configService';
 import { useToast } from './Toast';
+import { apiService } from '../services/apiService';
 
 interface SettingFieldProps {
   label: string;
@@ -104,6 +105,8 @@ export const SettingsView = () => {
   const [settings, setSettings] = useState<Record<string, string>>({});
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [isSaved, setIsSaved] = useState(false);
+  const [useRiskReviewerLlm, setUseRiskReviewerLlm] = useState(true);
+  const [enablePersonas, setEnablePersonas] = useState(false);
 
   useEffect(() => {
     const saved = localStorage.getItem('quantum_trade_settings');
@@ -119,7 +122,45 @@ export const SettingsView = () => {
       });
       setErrors(initialErrors);
     }
+
+    async function loadBackendConfig() {
+      try {
+        const cfg = await apiService.getConfig();
+        const limits = cfg.risk_limits || {};
+        if (limits.use_risk_reviewer_llm !== undefined) {
+          setUseRiskReviewerLlm(limits.use_risk_reviewer_llm);
+        }
+        if (limits.enable_personas !== undefined) {
+          setEnablePersonas(limits.enable_personas);
+        }
+      } catch (err) {
+        console.error('Failed to load backend config in settings:', err);
+      }
+    }
+    loadBackendConfig();
   }, []);
+
+  const handleToggleRiskReviewer = async (val: boolean) => {
+    try {
+      setUseRiskReviewerLlm(val);
+      await apiService.updateConfig({ use_risk_reviewer_llm: val });
+      showToast(`Single LLM Risk Reviewer ${val ? 'enabled' : 'disabled'}`, 'success');
+    } catch (err) {
+      showToast('Failed to update LLM Risk Reviewer setting', 'error');
+      setUseRiskReviewerLlm(!val);
+    }
+  };
+
+  const handleTogglePersonas = async (val: boolean) => {
+    try {
+      setEnablePersonas(val);
+      await apiService.updateConfig({ enable_personas: val });
+      showToast(`Multi-Persona Committee ${val ? 'enabled' : 'disabled'}`, 'success');
+    } catch (err) {
+      showToast('Failed to update Multi-Persona Committee setting', 'error');
+      setEnablePersonas(!val);
+    }
+  };
 
   const validateSetting = (key: string, val: string) => {
     if (!val) return null; // Allow empty
@@ -518,6 +559,51 @@ export const SettingsView = () => {
               placeholder="https://primary-production.up.railway.app/webhook/..."
               description="Trigger external workflows when trades execute."
             />
+          </div>
+        </div>
+      </SettingsSection>
+
+      <SettingsSection title="AI Opinion & Veto Gate (Dynamic Switch)" icon={Cpu}>
+        <div className="col-span-full space-y-6">
+          <div className="flex items-center justify-between p-5 bg-zinc-900/30 rounded-2xl border border-zinc-800 hover:border-zinc-700/80 transition-all">
+            <div className="space-y-1.5 pr-4">
+              <h4 className="text-xs font-bold text-zinc-200 uppercase tracking-wider flex items-center gap-2">
+                Single LLM Risk Reviewer (Claude)
+                <span className="px-1.5 py-0.5 bg-emerald-500/10 text-emerald-400 text-[8px] font-bold rounded border border-emerald-500/20 uppercase tracking-tighter">Recommended</span>
+              </h4>
+              <p className="text-[10px] text-zinc-500 leading-relaxed max-w-2xl">
+                Invokes a single, highly capable model (Claude via LiteLLM) to inspect the complete trade ticket (symbol, action, size, SL, TP, current funding rate) and relevant Qdrant news headlines. It acts as a strict risk veto gate. Cheap, extremely fast (~2 seconds), and highly intelligent.
+              </p>
+            </div>
+            <label className="relative inline-flex items-center cursor-pointer flex-shrink-0">
+              <input
+                type="checkbox"
+                checked={useRiskReviewerLlm}
+                onChange={(e) => handleToggleRiskReviewer(e.target.checked)}
+                className="sr-only peer"
+              />
+              <div className="w-11 h-6 bg-zinc-850 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-zinc-900 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-zinc-600 after:border-zinc-500 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-500 peer-checked:after:bg-black peer-checked:after:border-black"></div>
+            </label>
+          </div>
+
+          <div className="flex items-center justify-between p-5 bg-zinc-900/30 rounded-2xl border border-zinc-800 hover:border-zinc-700/80 transition-all">
+            <div className="space-y-1.5 pr-4">
+              <h4 className="text-xs font-bold text-zinc-200 uppercase tracking-wider">
+                Multi-Persona Committee (18 Agents)
+              </h4>
+              <p className="text-[10px] text-zinc-500 leading-relaxed max-w-2xl">
+                Runs the full 18-agent persona consensus system (Charlie Munger, Nassim Taleb, etc.). Generates detailed multi-agent opinions on the setup. Resource-intensive and slow (~45-80 seconds per symbol), but offers multiple detailed perspectives.
+              </p>
+            </div>
+            <label className="relative inline-flex items-center cursor-pointer flex-shrink-0">
+              <input
+                type="checkbox"
+                checked={enablePersonas}
+                onChange={(e) => handleTogglePersonas(e.target.checked)}
+                className="sr-only peer"
+              />
+              <div className="w-11 h-6 bg-zinc-850 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-zinc-900 after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-zinc-600 after:border-zinc-500 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-500 peer-checked:after:bg-black peer-checked:after:border-black"></div>
+            </label>
           </div>
         </div>
       </SettingsSection>

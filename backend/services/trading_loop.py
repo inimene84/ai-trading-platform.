@@ -78,6 +78,7 @@ class TradingLoopService:
         # reached since entry (max for longs, min for shorts). In-memory only;
         # reconstructed lazily from entry/current price on first sight.
         self._high_water: dict = {}
+        self._last_digest_date = None
 
     @property
     def status(self) -> dict:
@@ -293,6 +294,19 @@ class TradingLoopService:
         """Execute one trading cycle across all symbols in parallel."""
         self._cycle_count += 1
         
+        # UTC rollover daily digest trigger
+        current_date_utc = datetime.now(timezone.utc).date()
+        if self._last_digest_date is None:
+            self._last_digest_date = current_date_utc
+        elif current_date_utc > self._last_digest_date:
+            self._last_digest_date = current_date_utc
+            try:
+                from backend.services.daily_digest import run_daily_digest
+                asyncio.create_task(run_daily_digest())
+                logger.info("Daily performance digest task queued successfully.")
+            except Exception as e:
+                logger.error(f"Failed to trigger automated daily digest: {e}")
+
         # Bind the cycle number to all structured logs emitted in this cycle
         structlog.contextvars.bind_contextvars(cycle=self._cycle_count)
         
@@ -543,6 +557,13 @@ class TradingLoopService:
                         if not trade_bars or len(trade_bars) < 10:
                             continue
                         curr_price = trade_bars[-1]["close"]
+                        # Fetch funding rate for position exit review
+                        try:
+                            fr_data = await binance_market_data.get_funding_rate(trade.symbol)
+                            current_funding_rate = float(fr_data.get('fundingRate', 0)) if fr_data else 0.0
+                        except Exception:
+                            current_funding_rate = 0.0
+
                         from backend.services.opinion_layer import analyze_symbol as analyze_opinion
                         exit_opinion = await pm.analyze_open_position(
                             symbol=trade.symbol,
@@ -557,6 +578,7 @@ class TradingLoopService:
                             bars=trade_bars,
                             current_price=curr_price,
                             opinion_layer_fn=analyze_opinion,
+                            current_funding_rate=current_funding_rate,
                         )
                         if exit_opinion.exit:
                             logger.warning(
@@ -616,19 +638,55 @@ class TradingLoopService:
         except Exception as e:
             logger.error(f"Position Manager init error: {e}")
 
-        # ── SYMBOL-QUALITY GATE: drop blacklisted + illiquid symbols ──
-        # Kills the realized-PnL loss tail caused by low-liquidity / new-listing
-        # symbols (SIREN, AIGENSYN, MAGMA, SPK ...) before any analysis runs.
-        tradeable = await self._filter_tradeable_symbols(self._symbols)
+        # ── MARGIN-AWARE GATEKEEPER ───────────────────────────────────────
+        # Skip symbol evaluation if available balance is below minimum layer cost ($5)
+        # to avoid API cost, LLM/Kronos latency, and log/DB spam.
+        margin_sufficient = True
+        try:
+            _bal = get_active_broker().get_balance()
+            self._cycle_available = float(_bal.get("available", 0.0) or 0.0)
+            self._cycle_equity = float(_bal.get("equity", _bal.get("balance", 0.0)) or 0.0)
+        except Exception as _be:
+            logger.warning(f"Could not re-fetch balance for margin check: {_be}")
+            self._cycle_available = getattr(self, "_cycle_available", 0.0)
 
-        # Run all symbols in parallel
-        tasks = [
-            self._process_symbol(
-                symbol, min_confidence, ai_threshold, max_positions
-            )
-            for symbol in tradeable
-        ]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        if self._cycle_available < 5.0:
+            logger.warning(f"[MARGIN GATE] Insufficient available balance (${self._cycle_available:.2f} < $5.00). Skipping symbol evaluation.")
+            margin_sufficient = False
+            
+            # Write a single ACCOUNT-level signal to DB
+            db_sig = SessionLocal()
+            try:
+                db_sig.add(TradingSignal(
+                    symbol="ACCOUNT",
+                    strategy=self._strategy_name,
+                    direction="HOLD",
+                    confidence=0.0,
+                    status="evaluated",
+                    reasoning=f"Insufficient margin: available={self._cycle_available:.4f} < 5.0"
+                ))
+                db_sig.commit()
+            except Exception as _se:
+                logger.warning(f"Failed to write margin gate signal: {_se}")
+                db_sig.rollback()
+            finally:
+                db_sig.close()
+
+        results = []
+        if margin_sufficient:
+            # ── SYMBOL-QUALITY GATE: drop blacklisted + illiquid symbols ──
+            # Kills the realized-PnL loss tail caused by low-liquidity / new-listing
+            # symbols (SIREN, AIGENSYN, MAGMA, SPK ...) before any analysis runs.
+            tradeable = await self._filter_tradeable_symbols(self._symbols)
+
+            # Run all symbols in parallel
+            tasks = [
+                self._process_symbol(
+                    symbol, min_confidence, ai_threshold, max_positions
+                )
+                for symbol in tradeable
+            ]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
 
         _signals_generated = 0
         _trades_executed = 0
@@ -783,6 +841,15 @@ class TradingLoopService:
                 db.commit()
                 return {"signals": 0, "trades": 0}
 
+            # Fetch funding rate before evaluation to allow gating
+            try:
+                from backend.services.binance_market_data import get_binance_market_data
+                bmd = get_binance_market_data()
+                fr_data = await bmd.get_funding_rate(symbol)
+                current_funding_rate = float(fr_data.get('fundingRate', 0)) if fr_data else 0.0
+            except Exception:
+                current_funding_rate = 0.0
+
             # 4. Evaluate using Decision Engine
             decision_engine = DecisionEngine(self.risk_config)
             decision_engine.account_equity = getattr(self, "_cycle_equity", 0.0)
@@ -792,7 +859,8 @@ class TradingLoopService:
                 existing_position=existing,
                 open_count=self._open_count,
                 pyramid_layers=self._pyramid_layers.get(symbol, []),
-                cooldown_active=cooldown_active
+                cooldown_active=cooldown_active,
+                current_funding_rate=current_funding_rate
             )
 
             ev = getattr(decision_engine, "last_evaluation", None) or {}
@@ -846,6 +914,9 @@ class TradingLoopService:
                         logger.warning(f"  [ {symbol} ] BUY blocked: LONG exposure cap reached")
                         signal_status = "rejected"
                         signal_reason = f"{signal_reason} | LONG exposure cap reached"
+                        decision = None
+                    elif decision.action == "BUY" and getattr(self, "_cycle_equity", 0.0) > 0 and (_long_notional + _new_notional > self._cycle_equity * 0.8):
+                        logger.warning(f"  [ {symbol} ] BUY blocked: 80% Portfolio LONG Correlation limit reached")
                         decision = None
                     elif decision.action == "SELL" and (_short_notional + _new_notional > self.risk_config.max_directional_exposure_usdt):
                         logger.warning(f"  [ {symbol} ] SELL blocked: SHORT exposure cap reached")
@@ -1133,9 +1204,17 @@ class TradingLoopService:
                     hw = max(hw, current_price)
                     self._high_water[trade.id] = hw
 
-                    # Only trail once price has advanced enough into profit
+                    # Step-Trailing: Move to breakeven at 0.5x activation distance
                     if hw - trade.entry_price < activation_dist:
+                        if hw - trade.entry_price >= (activation_dist * 0.5):
+                            candidate = trade.entry_price  # Breakeven
+                            old_stop = trade.stop_loss if trade.stop_loss is not None else float("-inf")
+                            if candidate > old_stop:
+                                trade.stop_loss = candidate
+                                logger.info(f"  [ {symbol} ] STEP-TRAIL ↑ stop to breakeven (hw={hw:.6f} >= 0.5 activation)")
+                                self._sync_exchange_stop(trade, candidate)
                         continue
+                    
                     candidate = hw - trail_dist
                     # Never above current price; never loosen an existing stop
                     candidate = min(candidate, current_price)
@@ -1152,7 +1231,15 @@ class TradingLoopService:
                     lw = min(lw, current_price)
                     self._high_water[trade.id] = lw
 
+                    # Step-Trailing: Move to breakeven at 0.5x activation distance
                     if trade.entry_price - lw < activation_dist:
+                        if trade.entry_price - lw >= (activation_dist * 0.5):
+                            candidate = trade.entry_price  # Breakeven
+                            old_stop = trade.stop_loss if trade.stop_loss is not None else float("inf")
+                            if candidate < old_stop:
+                                trade.stop_loss = candidate
+                                logger.info(f"  [ {symbol} ] STEP-TRAIL ↓ stop to breakeven (lw={lw:.6f} <= 0.5 activation)")
+                                self._sync_exchange_stop(trade, candidate)
                         continue
                     candidate = lw + trail_dist
                     candidate = max(candidate, current_price)

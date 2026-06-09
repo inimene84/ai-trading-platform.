@@ -42,6 +42,7 @@ class RiskConfig(BaseSettings):
         default=5,
         validation_alias=AliasChoices("max_same_direction_positions", "MAX_SAME_DIRECTION_POSITIONS"),
     )
+    funding_rate_cap: float = 0.0005  # 0.05%
     # ── Position sizing ──
     # When enabled, size each entry so a stop-loss hit loses ~risk_per_trade_pct
     # of account equity (proper risk-based sizing) instead of a flat $ notional.
@@ -83,6 +84,16 @@ class RiskConfig(BaseSettings):
         ),
     )
     max_open_positions: int = 10
+    
+    # LLM Overhaul Toggles
+    use_risk_reviewer_llm: bool = PydanticField(
+        default=True,
+        validation_alias=AliasChoices("use_risk_reviewer_llm", "USE_RISK_REVIEWER_LLM"),
+    )
+    enable_personas: bool = PydanticField(
+        default=False,
+        validation_alias=AliasChoices("enable_personas", "ENABLE_PERSONAS"),
+    )
     
     # Signal thresholds (env-tunable so trade aggressiveness can change without a rebuild)
     min_signal_strength: float = PydanticField(
