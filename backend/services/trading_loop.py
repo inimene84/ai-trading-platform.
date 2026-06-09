@@ -69,6 +69,11 @@ class TradingLoopService:
         # Cooldown tracker: symbol → datetime when SL/emergency exit fired
         # Prevents immediate re-entry after a losing close (30 min cooldown)
         self._sl_cooldown: dict = {}
+        # P0 margin gate state (set each cycle from broker balance)
+        self._entries_blocked = False
+        self._entries_blocked_reason = ""
+        self._cycle_available = 0.0
+        self._cycle_margin_used = 0.0
         # Trailing-stop high/low-water marks, keyed by trade id → extreme price
         # reached since entry (max for longs, min for shorts). In-memory only;
         # reconstructed lazily from entry/current price on first sight.
@@ -467,9 +472,37 @@ class TradingLoopService:
         try:
             _bal = get_active_broker().get_balance()
             self._cycle_equity = float(_bal.get("equity", _bal.get("balance", 0.0)) or 0.0)
+            self._cycle_available = float(_bal.get("available", 0.0) or 0.0)
+            self._cycle_margin_used = float(_bal.get("margin_used", 0.0) or 0.0)
         except Exception as _be:
             logger.warning(f"Could not fetch equity for sizing: {_be}")
             self._cycle_equity = 0.0
+            self._cycle_available = 0.0
+            self._cycle_margin_used = 0.0
+
+        # ── P0 margin gates: decide ONCE per cycle whether new entries are
+        # affordable, instead of letting every symbol fail at the broker.
+        self._entries_blocked = False
+        self._entries_blocked_reason = ""
+        _min_avail = self.risk_config.min_available_margin_usdt
+        _wallet_cap = self.risk_config.pyramid_max_wallet_pct
+        if self._cycle_available < _min_avail:
+            self._entries_blocked = True
+            self._entries_blocked_reason = (
+                f"available margin ${self._cycle_available:.2f} < floor ${_min_avail:.2f}"
+            )
+        elif (self._cycle_equity > 0
+              and self._cycle_margin_used >= self._cycle_equity * _wallet_cap):
+            self._entries_blocked = True
+            self._entries_blocked_reason = (
+                f"margin used ${self._cycle_margin_used:.2f} >= "
+                f"{_wallet_cap:.0%} of equity ${self._cycle_equity:.2f}"
+            )
+        if self._entries_blocked:
+            logger.warning(
+                f"[MARGIN GATE] New entries + pyramid adds BLOCKED this cycle: "
+                f"{self._entries_blocked_reason}. Exits/SL/TP still active."
+            )
         # Pyramid DCA config
         self._pyramid_mode = self.risk_config.pyramid_mode
         self._pyramid_max_layers = self.risk_config.pyramid_max_layers
@@ -742,6 +775,14 @@ class TradingLoopService:
                 else:
                     del self._sl_cooldown[symbol]
 
+            # 3b. Margin gate — when the cycle pre-check found no affordable
+            # margin, skip the whole entry pipeline (strategy + Kronos + LLM)
+            # for this symbol. Exits and SL/TP management still run below.
+            if getattr(self, "_entries_blocked", False):
+                self._check_sl_tp(db, symbol, bars)
+                db.commit()
+                return {"signals": 0, "trades": 0}
+
             # 4. Evaluate using Decision Engine
             decision_engine = DecisionEngine(self.risk_config)
             decision_engine.account_equity = getattr(self, "_cycle_equity", 0.0)
@@ -779,14 +820,29 @@ class TradingLoopService:
                 except Exception as _ie:
                     logger.warning(f"  [ {symbol} ] InfluxDB write_signal failed: {_ie}")
 
-                # Check directional exposure limit (if not pyramid)
+                # Check directional exposure + correlation limits (if not pyramid)
                 _new_notional = decision.quantity * decision.entry_price
                 if not decision.is_pyramid:
                     all_open = db.query(Trade).filter(Trade.status.in_(["open", "filled"])).all()
                     _long_notional = sum(t.quantity * (t.entry_price or 0.0) for t in all_open if t.direction == "BUY")
                     _short_notional = sum(t.quantity * (t.entry_price or 0.0) for t in all_open if t.direction == "SELL")
-                    
-                    if decision.action == "BUY" and (_long_notional + _new_notional > self.risk_config.max_directional_exposure_usdt):
+                    # Correlation cap: distinct symbols already open in this direction
+                    _same_dir_syms = {t.symbol for t in all_open if t.direction == decision.action}
+                    _dir_cap = self.risk_config.max_same_direction_positions
+
+                    if len(_same_dir_syms) >= _dir_cap:
+                        logger.warning(
+                            f"  [ {symbol} ] {decision.action} blocked: already "
+                            f"{len(_same_dir_syms)} {decision.action} positions (cap {_dir_cap}) "
+                            f"— correlated-exposure guard"
+                        )
+                        signal_status = "rejected"
+                        signal_reason = (
+                            f"{signal_reason} | same-direction cap "
+                            f"({len(_same_dir_syms)}/{_dir_cap} {decision.action})"
+                        )
+                        decision = None
+                    elif decision.action == "BUY" and (_long_notional + _new_notional > self.risk_config.max_directional_exposure_usdt):
                         logger.warning(f"  [ {symbol} ] BUY blocked: LONG exposure cap reached")
                         signal_status = "rejected"
                         signal_reason = f"{signal_reason} | LONG exposure cap reached"
@@ -831,6 +887,7 @@ class TradingLoopService:
                             symbol=symbol, side=order_side, quantity=decision.quantity,
                             price=decision.entry_price,
                             stop_loss=decision.stop_loss, take_profit=decision.take_profit,
+                            is_pyramid=decision.is_pyramid,
                         )
 
                         order_result = await asyncio.get_event_loop().run_in_executor(
