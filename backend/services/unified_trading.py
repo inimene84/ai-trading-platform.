@@ -82,6 +82,7 @@ class UnifiedOrder:
     stop_loss: float = 0.0
     take_profit: float = 0.0
     reduce_only: bool = False
+    is_pyramid: bool = False
 
 
 @dataclass
@@ -657,7 +658,8 @@ class UnifiedTrading:
                 price=order.price,
                 stop_loss=sl,
                 take_profit=tp,
-                reduce_only=order.reduce_only
+                reduce_only=order.reduce_only,
+                is_pyramid=order.is_pyramid,
             )
             status = result.get("status", "error")
             ok = status in ("simulated", "sent", "filled")
