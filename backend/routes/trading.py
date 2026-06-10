@@ -493,27 +493,7 @@ _BINANCE_PROXY_ALLOWED = {
 }
 
 
-@router.get("/binance/{endpoint:path}")
-async def binance_proxy(endpoint: str, request: Request):
-    """Server-side proxy for Binance public spot market data.
-
-    The dashboard queries api.binance.com directly from the browser, which
-    fails where Binance is geo-blocked (e.g. US/EEA IPs return HTTP 451) or via
-    CORS. The backend reaches Binance reliably, so the frontend falls back to
-    this passthrough. Only read-only public market-data endpoints are allowed.
-    """
-    endpoint = endpoint.strip("/")
-    if endpoint not in _BINANCE_PROXY_ALLOWED:
-        return JSONResponse({"error": f"endpoint not allowed: {endpoint}"}, status_code=400)
-
-    url = f"https://api.binance.com/api/v3/{endpoint}"
-    params = dict(request.query_params)
-    try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.get(url, params=params)
-        return JSONResponse(content=resp.json(), status_code=resp.status_code)
-    except Exception as exc:
-        return JSONResponse({"error": f"binance proxy failed: {exc}"}, status_code=502)
+# Proxy endpoint moved below to avoid shadowing static routes
 
 
 # ── Trading Loop Control ──────────────────────────────────────────────────────
@@ -978,6 +958,29 @@ async def binance_disable():
     """Switch active broker back to paper/ctrader."""
     os.environ["ACTIVE_BROKER"] = "ctrader"
     return {"status": "ok", "active_broker": "ctrader"}
+
+
+@router.get("/binance/{endpoint:path}")
+async def binance_proxy(endpoint: str, request: Request):
+    """Server-side proxy for Binance public spot market data.
+
+    The dashboard queries api.binance.com directly from the browser, which
+    fails where Binance is geo-blocked (e.g. US/EEA IPs return HTTP 451) or via
+    CORS. The backend reaches Binance reliably, so the frontend falls back to
+    this passthrough. Only read-only public market-data endpoints are allowed.
+    """
+    endpoint = endpoint.strip("/")
+    if endpoint not in _BINANCE_PROXY_ALLOWED:
+        return JSONResponse({"error": f"endpoint not allowed: {endpoint}"}, status_code=400)
+
+    url = f"https://api.binance.com/api/v3/{endpoint}"
+    params = dict(request.query_params)
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(url, params=params)
+        return JSONResponse(content=resp.json(), status_code=resp.status_code)
+    except Exception as exc:
+        return JSONResponse({"error": f"binance proxy failed: {exc}"}, status_code=502)
 
 
 @router.get("/crypto-news")
