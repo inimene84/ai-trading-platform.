@@ -5,10 +5,9 @@ on:
   push:
     branches: [main]
     paths:
-      - "backend/services/risk_reviewer.py"
-      - "backend/services/decision_engine.py"
-      - "scripts/vps_deploy_risk_reviewer_fix.sh"
-      - "scripts/hostinger_vps_apply.sh"
+      - "backend/**"
+      - ".github/workflows/**"
+      - "scripts/**"
 
 jobs:
   deploy:
@@ -50,6 +49,9 @@ jobs:
           cd "$PROJECT_DIR"
           git fetch origin main && git checkout main && git pull origin main
           git log -1 --oneline
+          # Ensure we run live on mainnet
+          sed -i 's/BINANCE_TESTNET=true/BINANCE_TESTNET=false/g' .env
+          sed -i 's/DRY_RUN_ALL=true/DRY_RUN_ALL=false/g' .env
           COMPOSE_FILE="docker-compose.prod.yml"
           [[ -f "$COMPOSE_FILE" ]] || COMPOSE_FILE="docker-compose.yml"
           docker compose -f "$COMPOSE_FILE" up -d --build backend
