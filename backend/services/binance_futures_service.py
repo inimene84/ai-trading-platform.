@@ -608,7 +608,13 @@ class BinanceFuturesService:
                 result = self._safe_create_order(client, order_params)
 
             order_id = str(result.get('orderId', ''))
-            filled_price = float(result.get('avgPrice') or result.get('price') or price or 0.0)
+            
+            # Binance fills for MARKET orders sometimes return "0.00000" for avgPrice/price.
+            # Since non-empty strings are truthy, we must parse them to float first to check if they are non-zero.
+            avg_px = float(result.get('avgPrice') or 0.0)
+            ord_px = float(result.get('price') or 0.0)
+            filled_price = avg_px if avg_px > 0.0 else (ord_px if ord_px > 0.0 else (price or 0.0))
+            
             if filled_price > 0:
                 price = filled_price
             logger.info(f"  ✓ Order {order_id} filled @ {filled_price}")
@@ -1029,13 +1035,14 @@ class BinanceFuturesService:
                 return {'status': 'skipped', 'reason': 'no open position quantity to protect'}
 
             # ── Place the NEW stop FIRST (never go naked) ──────────────────────
+            # Use closePosition="true" without quantity or timeInForce so it automatically
+            # and dynamically covers the entire position size on the exchange.
             new_params = {
                 "symbol": futures_sym,
                 "side": sl_side,
                 "type": 'STOP_MARKET',
                 "stopPrice": rounded_new,
-                "quantity": qty,
-                "timeInForce": 'GTC',
+                "closePosition": "true",
                 "positionSide": position_side,
             }
             new_order = self._safe_create_order(client, new_params)

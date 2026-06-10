@@ -141,7 +141,10 @@ async def _sync_open_orders(svc):
                 )
 
                 if binance_status == "FILLED":
-                    filled_price = float(order_status.get("avgPrice") or order_status.get("price") or trade.entry_price or 0)
+                    # Parse to float first to prevent "0.00000" truthy string bug from overriding price with 0.0
+                    avg_px = float(order_status.get("avgPrice") or 0.0)
+                    ord_px = float(order_status.get("price") or 0.0)
+                    filled_price = avg_px if avg_px > 0.0 else (ord_px if ord_px > 0.0 else float(trade.entry_price or 0.0))
                     filled_qty = float(order_status.get("executedQty") or trade.quantity or 0)
 
                     # Update fill details if more precise than what we stored
@@ -189,7 +192,9 @@ async def _sync_open_orders(svc):
 
                 elif binance_status == "PARTIALLY_FILLED":
                     filled_qty = float(order_status.get("executedQty") or 0)
-                    filled_price = float(order_status.get("avgPrice") or trade.entry_price or 0)
+                    # Parse to float first to prevent "0.00000" truthy string bug
+                    avg_px = float(order_status.get("avgPrice") or 0.0)
+                    filled_price = avg_px if avg_px > 0.0 else float(trade.entry_price or 0.0)
                     if filled_price:
                         trade.filled_price = filled_price
                     logger.info(
