@@ -172,8 +172,6 @@ services:
       GF_SERVER_ROOT_URL: "%(protocol)s://%(domain)s/grafana/"
       GF_SERVER_SERVE_FROM_SUB_PATH: "true"
     restart: unless-stopped
-    ports:
-      - "3000:3000"
     volumes:
       - grafana-storage:/var/lib/grafana
     depends_on:
