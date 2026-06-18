@@ -45,6 +45,10 @@ services:
       # OFF by default (fail-safe). Set true to cut entry fees 0.05%->0.02%.
       MAKER_ENTRY_ENABLED: ${MAKER_ENTRY_ENABLED:-false}
       MAKER_WAIT_SEC: ${MAKER_WAIT_SEC:-30}
+      INFLUXDB_URL: http://vps-influxdb:8086
+      INFLUXDB_TOKEN: ${INFLUXDB_TOKEN}
+      INFLUXDB_ORG: ${INFLUXDB_ORG:-hedge-fund}
+      INFLUXDB_BUCKET: ${INFLUXDB_BUCKET:-trading-system}
     command: ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000"]
     healthcheck:
       test:
@@ -131,9 +135,56 @@ services:
         reservations:
           cpus: '0.05'
           memory: 32M
+  qdrant:
+    image: qdrant/qdrant:v1.14.1
+    container_name: vps-qdrant
+    restart: unless-stopped
+    ports:
+      - "6333:6333"
+    volumes:
+      - ./qdrant-storage:/qdrant/storage
+    networks:
+      - trading-net
+  influxdb:
+    image: influxdb:2.7
+    container_name: vps-influxdb
+    environment:
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_USERNAME: admin
+      DOCKER_INFLUXDB_INIT_PASSWORD: ${INFLUXDB_ADMIN_PASSWORD:-hedgefund123}
+      DOCKER_INFLUXDB_INIT_ORG: ${INFLUXDB_ORG:-hedge-fund}
+      DOCKER_INFLUXDB_INIT_BUCKET: news-sentiment
+      DOCKER_INFLUXDB_INIT_RETENTION: 7d
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: ${INFLUXDB_TOKEN}
+    restart: unless-stopped
+    ports:
+      - "8086:8086"
+    volumes:
+      - influxdb-storage:/var/lib/influxdb2
+    networks:
+      - trading-net
+  grafana:
+    image: grafana/grafana:11.4.0
+    container_name: ai-trading-grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_SERVER_ROOT_URL: "%(protocol)s://%(domain)s/grafana/"
+      GF_SERVER_SERVE_FROM_SUB_PATH: "true"
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana-storage:/var/lib/grafana
+    depends_on:
+      - influxdb
+    networks:
+      - trading-net
 networks:
   trading-net:
     external: true
 volumes:
-  app-data: 
+  app-data:
   app-logs:
+  influxdb-storage:
+  grafana-storage:

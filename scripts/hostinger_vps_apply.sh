@@ -74,18 +74,30 @@ echo ""
 echo "=== 3. Frontend build ==="
 if [[ -d frontend ]]; then
   cd frontend
+  export NODE_OPTIONS="${NODE_OPTIONS:---max-old-space-size=2048}"
   npm ci 2>/dev/null || npm install
   npm run build
   cd ..
 fi
+if [[ ! -f frontend/dist/index.html ]]; then
+  echo "ERROR: frontend/dist/index.html missing — dashboard will be blank"
+  exit 1
+fi
+echo "  frontend/dist OK ($(du -sh frontend/dist | awk '{print $1}'))"
 
 echo ""
 echo "=== 4. Docker network ==="
 docker network create trading-net 2>/dev/null || true
 
 echo ""
-echo "=== 5. Rebuild & start stack ==="
-docker compose -f "$COMPOSE_FILE" up -d --build backend litellm nginx
+echo "=== 5. Rebuild & start full stack ==="
+docker compose -f "$COMPOSE_FILE" up -d --build \
+  backend litellm nginx influxdb grafana qdrant
+
+echo ""
+echo "=== 5b. InfluxDB buckets ==="
+chmod +x scripts/ensure_influx_buckets.sh 2>/dev/null || true
+./scripts/ensure_influx_buckets.sh || true
 
 echo ""
 echo "=== 6. Wait for backend health ==="
@@ -113,6 +125,19 @@ curl -sf -o /dev/null -w "nginx /api/backend/trading/status: %{http_code}\n" \
   http://127.0.0.1:8081/api/backend/trading/status || true
 curl -sf -o /dev/null -w "api/historical: %{http_code}\n" \
   "http://127.0.0.1:8001/api/historical?symbol=BTCUSDT&interval=1h&limit=3" || true
+curl -sf -o /dev/null -w "frontend /: %{http_code}\n" \
+  http://127.0.0.1:8081/ || true
+curl -sf -o /dev/null -w "influxdb :8086: %{http_code}\n" \
+  http://127.0.0.1:8086/health || true
+curl -sf -o /dev/null -w "grafana :3000: %{http_code}\n" \
+  http://127.0.0.1:3000/api/health || true
+
+echo ""
+echo "=== 8b. Grafana datasource + dashboard ==="
+GRAFANA_PASS=$(grep '^GRAFANA_PASSWORD=' .env 2>/dev/null | cut -d= -f2- || echo admin)
+chmod +x scripts/fix_grafana_influx.sh scripts/deploy_grafana.sh 2>/dev/null || true
+./scripts/fix_grafana_influx.sh "http://127.0.0.1:3000" "admin:${GRAFANA_PASS}" "$PROJECT_DIR" 2>/dev/null || \
+  echo "  (Grafana provisioning skipped — set INFLUXDB_TOKEN in .env and re-run fix_grafana_influx.sh)"
 
 echo ""
 echo "=== 9. Runtime LLM toggles ==="
@@ -137,4 +162,8 @@ print(f\"  pairs={d.get('symbols')}\")
 " 2>/dev/null || true
 
 echo ""
-echo "=== Done. Dashboard: http://<vps-ip>:8081/  API: :8001/health ==="
+echo "=== Done ==="
+echo "  Dashboard:  http://<vps-ip>:8081/"
+echo "  Grafana:    http://<vps-ip>:8081/grafana/  (or :3000)"
+echo "  InfluxDB:   http://<vps-ip>:8086"
+echo "  API health: http://<vps-ip>:8001/health"

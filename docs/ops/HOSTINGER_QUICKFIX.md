@@ -7,9 +7,13 @@ Run on the VPS as root (Hostinger browser terminal or SSH):
 ```bash
 cd /root/ai-trading-platform-v3
 git pull origin main
-chmod +x scripts/hostinger_vps_apply.sh scripts/lib/vps_ssh_hygiene.sh
+chmod +x scripts/hostinger_vps_apply.sh scripts/lib/vps_ssh_hygiene.sh scripts/ensure_influx_buckets.sh
 ./scripts/hostinger_vps_apply.sh
 ```
+
+This starts **backend, litellm, nginx, influxdb, grafana, qdrant** and builds **frontend/dist** for the dashboard on `:8081`.
+
+Ensure `.env` has `INFLUXDB_TOKEN` set (required for metrics + Grafana datasources).
 
 One-liner from anywhere:
 
