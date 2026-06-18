@@ -9,6 +9,17 @@
 
 const LOCAL_STORAGE_KEY = 'quantum_trade_settings';
 
+function getAdminApiKey(): string {
+  try {
+    const stored = localStorage.getItem(LOCAL_STORAGE_KEY);
+    if (stored) {
+      const settings = JSON.parse(stored);
+      if (settings.ADMIN_API_KEY) return settings.ADMIN_API_KEY;
+    }
+  } catch { /* ignore */ }
+  return '';
+}
+
 function getBackendUrl(): string {
   try {
     const stored = localStorage.getItem(LOCAL_STORAGE_KEY);
@@ -23,10 +34,12 @@ function getBackendUrl(): string {
 async function request<T = any>(path: string, options?: RequestInit): Promise<T> {
   const base = getBackendUrl();
   const url = `${base}${path}`;
+  const adminKey = getAdminApiKey();
   const res = await fetch(url, {
     ...options,
     headers: {
       'Content-Type': 'application/json',
+      ...(adminKey ? { 'X-API-Key': adminKey } : {}),
       ...(options?.headers || {}),
     },
   });

@@ -260,6 +260,16 @@ export const SettingsView = () => {
           placeholder="http://localhost:8000"
           description="FastAPI backend URL. Leave blank to use the default proxy (/api/backend)."
         />
+        <SettingField 
+          label="Admin API Key" 
+          secretKey="ADMIN_API_KEY"
+          value={settings.ADMIN_API_KEY || ''} 
+          error={errors.ADMIN_API_KEY}
+          onChange={(v) => updateSetting('ADMIN_API_KEY', v)}
+          type="password"
+          placeholder="Required when backend ADMIN_API_KEY is set"
+          description="Sent as X-API-Key for loop start/stop and config updates."
+        />
       </SettingsSection>
 
       <SettingsSection title="AI Brains (LLM Engines)" icon={Cpu}>

@@ -1,5 +1,6 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 import logging
 import asyncio
 import os
@@ -53,6 +54,7 @@ from backend.services.unified_trading import UnifiedTrading
 from backend.services.ctrader_service import ctrader_broker
 from backend.services.binance_futures_service import binance_futures_broker
 from backend.services.trading_loop import trading_loop
+from backend.security import admin_auth_enabled, is_sensitive_request, validate_admin_request
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -64,13 +66,32 @@ app = FastAPI(title="AI Hedge Fund API", description="Backend API for AI Hedge F
 Base.metadata.create_all(bind=engine)
 
 # Configure CORS
+_cors_env = os.getenv("CORS_ALLOWED_ORIGINS", "").strip()
+if _cors_env:
+    _allowed_origins = [origin.strip() for origin in _cors_env.split(",") if origin.strip()]
+else:
+    _allowed_origins = ["*"]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow all origins for VPS access
+    allow_origins=_allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def require_admin_token_for_sensitive_requests(request: Request, call_next):
+    if admin_auth_enabled() and is_sensitive_request(request):
+        try:
+            validate_admin_request(request)
+        except HTTPException as exc:
+            return JSONResponse(
+                status_code=exc.status_code,
+                content={"detail": exc.detail},
+                headers=exc.headers,
+            )
+    return await call_next(request)
 
 # Include all routes
 app.include_router(api_router)

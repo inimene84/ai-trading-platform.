@@ -36,6 +36,7 @@ frontend/.vite/
 .pytest_cache/
 .coverage
 htmlcov/
+test_strat.py
 
 # ── OS ───────────────────────────────────────────────────────────────────────
 .DS_Store

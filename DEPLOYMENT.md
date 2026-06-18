@@ -95,6 +95,8 @@ PROJECT_DIR=$PWD ./scripts/hostinger_vps_apply.sh
 
 **Remote from Cloud Agent:** Configure secrets `SSH_HOST`, `SSH_USER`, `SSH_PRIVATE_KEY`, then run `./scripts/ssh_vps_remote.sh`.
 
+**Canonical deploy only:** Use `hostinger_vps_apply.sh` on `main`. Older one-liners (`vps_deploy_p0_oneliner.sh`, `vps_deploy_risk_reviewer_fix.sh`) forward to it. To delete merged feature branches: `./scripts/cleanup_stale_branches.sh`.
+
 ## Nightly MySQL Backup Job
 
 Add this cron job on your VPS to sync Postgres trades to MySQL:

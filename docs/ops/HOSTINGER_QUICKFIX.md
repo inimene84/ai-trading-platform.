@@ -1,37 +1,39 @@
 # Hostinger VPS quick fix (72.60.18.113)
 
-## Diagnosis (verified remotely)
+## Canonical deploy (main branch)
 
-| Check | Result |
-|-------|--------|
-| Backend `:8001/health` | OK |
-| Trading loop | **Running** (15m interval, 10 symbols, cycle #30+) |
-| Mode | **live**, `dry_run: false` |
-| Nginx `:8081/api/backend/trading/status` | **404** — dashboard API broken |
-| Fix | Deploy updated `nginx.conf` from branch `cursor/hostinger-vps-fixes-df88` |
+Run on the VPS as root (Hostinger browser terminal or SSH):
 
-## One command (from your PC, after SSH key works)
+```bash
+cd /root/ai-trading-platform-v3
+git pull origin main
+chmod +x scripts/hostinger_vps_apply.sh scripts/lib/vps_ssh_hygiene.sh
+./scripts/hostinger_vps_apply.sh
+```
+
+One-liner from anywhere:
+
+```bash
+curl -fsSL "https://raw.githubusercontent.com/inimene84/ai-trading-platform./main/scripts/vps_bootstrap_and_deploy.sh" | bash
+```
+
+From your PC (when SSH works):
 
 ```powershell
-ssh -i C:\Users\thori\New root@72.60.18.113 "cd /root/ai-trading-platform-v3 && git fetch origin && git checkout cursor/hostinger-vps-fixes-df88 && chmod +x scripts/hostinger_vps_apply.sh && ./scripts/hostinger_vps_apply.sh"
+ssh root@72.60.18.113 "cd /root/ai-trading-platform-v3 && git pull origin main && ./scripts/hostinger_vps_apply.sh"
 ```
 
-## Cloud Agent SSH (optional)
+## Deprecated scripts
 
-Add this line to `/root/.ssh/authorized_keys` on the VPS:
-
-```
-ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIB8Tfjj7KDxsmm5deuH0WtDC+M9CoUyt8JqZKCWPjrr9 cursor-cloud-agent
-```
-
-Then re-run the Cloud Agent — it will use `./scripts/ssh_vps_remote.sh`.
+Do **not** use old branch-specific scripts (`cursor/observability-env-vars-f7d8`, etc.).
+`vps_deploy_p0_oneliner.sh` and `vps_deploy_risk_reviewer_fix.sh` now forward to `hostinger_vps_apply.sh`.
 
 ## Security (recommended)
 
-- Restrict port **8001** to localhost (API is currently public; loop start/stop is unauthenticated).
-- Consider `DRY_RUN_ALL=true` or `PAPER_TRADING=true` in `.env` until nginx + dashboard are verified.
-- Do not expose Docker port 2375 publicly if enabled.
+Set `ADMIN_API_KEY` in VPS `.env` to protect loop start/stop and config writes.
+Add the same value in dashboard **Settings** as `ADMIN_API_KEY` so POST requests include `X-API-Key`.
+Restrict port **8001** to localhost when nginx proxies the dashboard on **8081**.
 
-## Temporary dashboard workaround
+## Cloud Agent SSH
 
-In the app **Settings**, set **BACKEND_URL** to `http://72.60.18.113:8001` (bypasses broken nginx proxy until fix is applied).
+Add the cloud-agent public key to `/root/.ssh/authorized_keys`, then run `./scripts/ssh_vps_remote.sh`.
