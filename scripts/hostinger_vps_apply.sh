@@ -129,14 +129,14 @@ curl -sf -o /dev/null -w "frontend /: %{http_code}\n" \
   http://127.0.0.1:8081/ || true
 curl -sf -o /dev/null -w "influxdb :8086: %{http_code}\n" \
   http://127.0.0.1:8086/health || true
-curl -sf -o /dev/null -w "grafana :3000: %{http_code}\n" \
-  http://127.0.0.1:3000/api/health || true
+curl -sf -o /dev/null -w "grafana via nginx: %{http_code}\n" \
+  http://127.0.0.1:8081/grafana/api/health || true
 
 echo ""
 echo "=== 8b. Grafana datasource + dashboard ==="
 GRAFANA_PASS=$(grep '^GRAFANA_PASSWORD=' .env 2>/dev/null | cut -d= -f2- || echo admin)
 chmod +x scripts/fix_grafana_influx.sh scripts/deploy_grafana.sh 2>/dev/null || true
-./scripts/fix_grafana_influx.sh "http://127.0.0.1:3000" "admin:${GRAFANA_PASS}" "$PROJECT_DIR" 2>/dev/null || \
+./scripts/fix_grafana_influx.sh "http://127.0.0.1:8081/grafana" "admin:${GRAFANA_PASS}" "$PROJECT_DIR" 2>/dev/null || \
   echo "  (Grafana provisioning skipped — set INFLUXDB_TOKEN in .env and re-run fix_grafana_influx.sh)"
 
 echo ""
@@ -164,6 +164,6 @@ print(f\"  pairs={d.get('symbols')}\")
 echo ""
 echo "=== Done ==="
 echo "  Dashboard:  http://<vps-ip>:8081/"
-echo "  Grafana:    http://<vps-ip>:8081/grafana/  (or :3000)"
+echo "  Grafana:    http://<vps-ip>:8081/grafana/  (not :3000 — may be used by other stack)"
 echo "  InfluxDB:   http://<vps-ip>:8086"
 echo "  API health: http://<vps-ip>:8001/health"
