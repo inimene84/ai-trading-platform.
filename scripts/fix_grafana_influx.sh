@@ -12,11 +12,12 @@ if [[ ! -f "$PROJECT_DIR/.env" ]]; then
   exit 1
 fi
 
-INFLUX_URL=$(grep '^INFLUXDB_URL=' "$PROJECT_DIR/.env" | cut -d= -f2- | sed 's|http://||')
-INFLUX_HOST=${INFLUX_URL%%:*}
+GRAFANA_INFLUX_URL="http://vps-influxdb:8086"
 INFLUX_ORG=$(grep '^INFLUXDB_ORG=' "$PROJECT_DIR/.env" | cut -d= -f2-)
 INFLUX_TOKEN=$(grep '^INFLUXDB_TOKEN=' "$PROJECT_DIR/.env" | cut -d= -f2-)
-GRAFANA_INFLUX_URL="http://${INFLUX_HOST}:8086"
+if [ "$INFLUX_ORG" = "819d45e061531bd6" ] || [ -z "$INFLUX_ORG" ]; then
+  INFLUX_ORG="hedge-fund"
+fi
 
 echo "Fixing Grafana datasources → $GRAFANA_INFLUX_URL (org=$INFLUX_ORG)"
 
