@@ -146,21 +146,15 @@ services:
     networks:
       - trading-net
   influxdb:
-    image: influxdb:2.7
+    image: influxdb:2.8
     container_name: vps-influxdb
-    environment:
-      DOCKER_INFLUXDB_INIT_MODE: setup
-      DOCKER_INFLUXDB_INIT_USERNAME: admin
-      DOCKER_INFLUXDB_INIT_PASSWORD: ${INFLUXDB_ADMIN_PASSWORD:-hedgefund123}
-      DOCKER_INFLUXDB_INIT_ORG: ${INFLUXDB_ORG:-hedge-fund}
-      DOCKER_INFLUXDB_INIT_BUCKET: news-sentiment
-      DOCKER_INFLUXDB_INIT_RETENTION: 7d
-      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: ${INFLUXDB_TOKEN}
     restart: unless-stopped
     ports:
       - "8086:8086"
     volumes:
-      - influxdb-storage:/var/lib/influxdb2
+      # Reuse Hostinger stack volume with historical trading metrics
+      - influxdb-2-ksyg_influxdb2-data:/var/lib/influxdb2
+      - influxdb-2-ksyg_influxdb2-config:/etc/influxdb2
     networks:
       - trading-net
   grafana:
@@ -184,5 +178,8 @@ networks:
 volumes:
   app-data:
   app-logs:
-  influxdb-storage:
   grafana-storage:
+  influxdb-2-ksyg_influxdb2-data:
+    external: true
+  influxdb-2-ksyg_influxdb2-config:
+    external: true
