@@ -1,7 +1,5 @@
-"""Protective-order safety: place-new-first, restore missing SL, full-qty emergency close."""
+"""Protective-order safety: pyramid reuse, restore missing SL, full-qty emergency close."""
 from unittest.mock import MagicMock, patch
-
-import pytest
 
 from backend.services.binance_futures_service import BinanceFuturesService
 
@@ -18,35 +16,60 @@ def _broker():
     return svc
 
 
-def test_pyramid_does_not_cancel_before_new_sl():
-    """Pyramid adds must snapshot old orders and cancel only after new SL is placed."""
+def test_pyramid_reuses_existing_close_position_sl():
+    """Pyramid adds must not place duplicate closePosition SL (-4130) or emergency-close."""
     broker = _broker()
-    old_sl = {
-        "order_id": "99", "symbol": "XRPUSDT", "side": "BUY",
-        "type": "STOP_MARKET", "quantity": 0.0, "price": 1.18, "algo_id": None,
-    }
     client = MagicMock()
-    client.futures_symbol_ticker.return_value = {"price": "1.15"}
     client.futures_account.return_value = {"availableBalance": "1000"}
 
     with patch.object(broker, "get_positions", return_value=[
-        {"symbol": "XRPUSDT", "side": "SELL", "quantity": 10.0},
+        {"symbol": "DOGEUSDT", "side": "SELL", "quantity": 298.0},
     ]), patch.object(broker, "_get_client", return_value=client), \
          patch.object(broker, "_setup_symbol"), \
          patch.object(broker, "_round_qty", side_effect=lambda s, q: q), \
          patch.object(broker, "_round_price", side_effect=lambda s, p: p), \
-         patch.object(broker, "_collect_protective_orders", return_value=[old_sl]), \
-         patch.object(broker, "_safe_create_order", return_value={"orderId": 2, "avgPrice": "1.15"}), \
-         patch.object(broker, "_native_trailing_enabled", return_value=False), \
-         patch.object(broker, "_cancel_listed_orders", return_value=1) as cancel_mock:
-        broker.place_order(
-            symbol="XRPUSDT", direction="SELL", quantity=5,
-            price=1.15, stop_loss=1.18, take_profit=1.08, is_pyramid=True,
+         patch.object(broker, "_has_exchange_stop", return_value=True), \
+         patch.object(broker, "_has_exchange_take_profit", return_value=True), \
+         patch.object(broker, "replace_stop_loss", return_value={"status": "skipped"}) as replace_mock, \
+         patch.object(broker, "_safe_create_order", return_value={"orderId": 2, "avgPrice": "0.083"}), \
+         patch.object(broker, "_native_trailing_enabled", return_value=False):
+        result = broker.place_order(
+            symbol="DOGEUSDT", direction="SELL", quantity=298,
+            price=0.083, stop_loss=0.085, take_profit=0.081, is_pyramid=True,
         )
 
-    client.futures_cancel_all_open_orders.assert_not_called()
-    cancel_mock.assert_called_once()
-    assert cancel_mock.call_args[0][2] == [old_sl]
+    assert result.get("status") == "sent"
+    replace_mock.assert_called_once()
+    client.futures_create_order.assert_not_called()
+
+
+def test_pyramid_4130_with_live_stop_no_emergency_close():
+    broker = _broker()
+    client = MagicMock()
+    client.futures_account.return_value = {"availableBalance": "1000"}
+
+    def safe_side_effect(_client, params):
+        if params.get("type") == "MARKET":
+            return {"orderId": 1, "avgPrice": "0.083"}
+        raise Exception("APIError(code=-4130): An open stop or take profit order with GTE and closePosition in the direction is existing.")
+
+    with patch.object(broker, "get_positions", return_value=[
+        {"symbol": "DOGEUSDT", "side": "SELL", "quantity": 298.0},
+    ]), patch.object(broker, "_get_client", return_value=client), \
+         patch.object(broker, "_setup_symbol"), \
+         patch.object(broker, "_round_qty", side_effect=lambda s, q: q), \
+         patch.object(broker, "_round_price", side_effect=lambda s, p: p), \
+         patch.object(broker, "_has_exchange_stop", side_effect=[False, True]), \
+         patch.object(broker, "_has_exchange_take_profit", return_value=True), \
+         patch.object(broker, "_safe_create_order", side_effect=safe_side_effect), \
+         patch.object(broker, "_native_trailing_enabled", return_value=False):
+        result = broker.place_order(
+            symbol="DOGEUSDT", direction="SELL", quantity=298,
+            price=0.083, stop_loss=0.085,
+        )
+
+    assert result.get("status") == "sent"
+    client.futures_create_order.assert_not_called()
 
 
 def test_sl_fail_emergency_close_uses_full_position_qty():
@@ -67,6 +90,7 @@ def test_sl_fail_emergency_close_uses_full_position_qty():
          patch.object(broker, "_round_qty", side_effect=lambda s, q: q), \
          patch.object(broker, "_round_price", side_effect=lambda s, p: p), \
          patch.object(broker, "_live_position_qty", return_value=17.5), \
+         patch.object(broker, "_has_exchange_stop", return_value=False), \
          patch.object(broker, "_safe_create_order", side_effect=safe_side_effect), \
          patch.object(broker, "_native_trailing_enabled", return_value=False):
         result = broker.place_order(
