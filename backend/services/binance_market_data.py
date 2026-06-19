@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 BINANCE_FAPI_BASE = "https://fapi.binance.com"
-CACHE_TTL = 300  # 5 minutes
+CACHE_TTL = 600  # 10 minutes — covers full 15-min cycle; reduces cold-start burst
 
 DEFAULT_SYMBOLS = [
     'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT',
@@ -46,6 +46,8 @@ class BinanceMarketDataService:
             self.symbols = [s.strip().upper() for s in env_symbols.split(',') if s.strip()]
         else:
             self.symbols = DEFAULT_SYMBOLS
+        # Rate-limit guard: max 5 concurrent Binance REST calls to avoid -1003
+        self._semaphore = asyncio.Semaphore(5)
 
     # ── Cache helpers ─────────────────────────────────────────────────────
     def _get_cached(self, key: str) -> Optional[any]:
@@ -70,20 +72,21 @@ class BinanceMarketDataService:
         headers = {}
         if use_api_key and self._api_key:
             headers['X-MBX-APIKEY'] = self._api_key
-        try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                resp = await client.get(url, params=params, headers=headers)
-                resp.raise_for_status()
-                return resp.json()
-        except httpx.TimeoutException:
-            logger.error(f"Binance API timeout: {endpoint}")
-            return None
-        except httpx.HTTPStatusError as e:
-            logger.error(f"Binance API HTTP {e.response.status_code}: {endpoint} - {e.response.text[:200]}")
-            return None
-        except Exception as e:
-            logger.error(f"Binance API error: {endpoint} - {e}")
-            return None
+        async with self._semaphore:  # cap concurrent requests → avoid -1003 rate limit
+            try:
+                async with httpx.AsyncClient(timeout=timeout) as client:
+                    resp = await client.get(url, params=params, headers=headers)
+                    resp.raise_for_status()
+                    return resp.json()
+            except httpx.TimeoutException:
+                logger.error(f"Binance API timeout: {endpoint}")
+                return None
+            except httpx.HTTPStatusError as e:
+                logger.error(f"Binance API HTTP {e.response.status_code}: {endpoint} - {e.response.text[:200]}")
+                return None
+            except Exception as e:
+                logger.error(f"Binance API error: {endpoint} - {e}")
+                return None
 
     # ══════════════════════════════════════════════════════════════════════
     # 1. OHLCV Klines

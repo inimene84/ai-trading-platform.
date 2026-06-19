@@ -141,8 +141,13 @@ async def get_portfolio():
                 "stop_loss": t.stop_loss,
                 "take_profit": t.take_profit,
                 "strategy": t.strategy,
+                "layer": t.notes or None,
                 "opened_at": t.timestamp.isoformat() if t.timestamp else None,
             })
+
+        # Count distinct positions (symbol + direction), not raw layers/trade rows.
+        distinct_positions = {(t.symbol, t.direction) for t in open_trades}
+        open_positions_count = len(distinct_positions)
 
         # Prefer live broker balance over stale DB snapshot
         balance = 0.0
@@ -183,7 +188,7 @@ async def get_portfolio():
             "total_pnl": total_pnl,
             "total_pnl_pct": pnl_pct,
             "positions_value": round(positions_value, 6),
-            "open_positions_count": len(positions),
+            "open_positions_count": open_positions_count,
             "last_updated": datetime.now().isoformat(),
         }
     finally:

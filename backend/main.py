@@ -151,10 +151,16 @@ async def startup_event():
     
     # Auto-start trading loop
     try:
-        # Start trading loop automatically (Safe in both Paper and Live as per user request)
-        asyncio.create_task(trading_loop.start())
-        paper_trading = os.getenv("PAPER_TRADING", "false").lower() == "true"
-        mode_str = "PAPER" if paper_trading else "LIVE"
-        logger.info(f"✓ Trading loop auto-started ({mode_str} MODE)")
+        # Auto-start is gated so the container can come up healthy and idle for
+        # controlled position reconciliation. Defaults to enabled to preserve
+        # prior behavior; set AUTO_START_LOOP=false to bring up idle.
+        if os.getenv("AUTO_START_LOOP", "true").lower() == "true":
+            # Start trading loop automatically (Safe in both Paper and Live as per user request)
+            asyncio.create_task(trading_loop.start())
+            paper_trading = os.getenv("PAPER_TRADING", "false").lower() == "true"
+            mode_str = "PAPER" if paper_trading else "LIVE"
+            logger.info(f"✓ Trading loop auto-started ({mode_str} MODE)")
+        else:
+            logger.info("⏸ Trading loop auto-start DISABLED (AUTO_START_LOOP=false) — start manually via /trading/loop/start")
     except Exception as e:
         logger.warning(f"⚠ Trading loop auto-start failed: {e}")

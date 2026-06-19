@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
-_POLL_INTERVAL = 30  # seconds
+_POLL_INTERVAL = 90  # seconds (was 30 — reduced API pressure; 2 REST calls per cycle)
 _task = None
 
 

@@ -6,8 +6,11 @@ Supports LONG/SHORT positions with configurable leverage (default 10x).
 Interface compatible with ctrader_service for drop-in integration with trading_loop.py.
 """
 
+import functools
 import logging
 import os
+import random
+import threading
 import time
 from pathlib import Path
 from typing import Dict, Optional
@@ -17,6 +20,99 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).resolve().parents[2] / '.env', override=True)
 
 logger = logging.getLogger(__name__)
+
+# Global rate limiter for the synchronous python-binance client.
+# The async market-data path has its own semaphore; this guard prevents
+# sync calls (wallet poller, orders, position queries) from triggering -1003.
+#
+# IMPORTANT design notes (a previous version of this deadlocked uvicorn):
+#   * The throttle lock is held ONLY to read/update the pacing timestamp — never
+#     while the actual API call or a backoff sleep runs. Holding it across the
+#     network call serialized every thread and, worse, deadlocked when a wrapped
+#     public method internally called another wrapped public method on the same
+#     thread (non-reentrant lock).
+#   * We wrap only the public REST request methods that actually hit the network
+#     (futures_*, get_*, create/cancel order, etc.) — NOT every public attribute.
+#   * A per-thread re-entrancy guard makes nested wrapped calls pass straight
+#     through, so internal helper calls can never self-deadlock.
+_BINANCE_API_LOCK = threading.Lock()
+_BINANCE_API_MIN_INTERVAL = 0.25  # max ~4 sync calls/sec sustained
+_BINANCE_LAST_CALL = 0.0
+_BINANCE_TLS = threading.local()  # per-thread re-entrancy flag
+
+
+def _throttle():
+    """Block (without holding the lock during sleep) until the min interval has
+    elapsed since the last call. Lock is held only for the brief read/update."""
+    global _BINANCE_LAST_CALL
+    while True:
+        with _BINANCE_API_LOCK:
+            now = time.time()
+            elapsed = now - _BINANCE_LAST_CALL
+            if elapsed >= _BINANCE_API_MIN_INTERVAL:
+                _BINANCE_LAST_CALL = now
+                return
+            wait = _BINANCE_API_MIN_INTERVAL - elapsed
+        time.sleep(wait)  # sleep OUTSIDE the lock
+
+
+def _install_binance_rate_limit():
+    """Throttle and retry the python-binance REST methods that hit the network."""
+    try:
+        from binance.client import Client
+        from binance.exceptions import BinanceAPIException
+    except Exception as e:
+        logger.warning(f"python-binance not available, rate limit not installed: {e}")
+        return
+
+    def _rate_limited(fn, name):
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            # Re-entrancy guard: if a wrapped method internally calls another
+            # wrapped method on the SAME thread, pass straight through so we
+            # never re-acquire the throttle (which previously deadlocked).
+            if getattr(_BINANCE_TLS, "in_call", False):
+                return fn(*args, **kwargs)
+            _BINANCE_TLS.in_call = True
+            try:
+                for attempt in range(5):
+                    _throttle()  # paces calls; never holds lock during the call
+                    try:
+                        return fn(*args, **kwargs)
+                    except BinanceAPIException as e:
+                        if e.code in (-1003, -4188, 418, -418) and attempt < 4:
+                            sleep = min(2 ** attempt + random.random(), 30)
+                            logger.warning(
+                                f"Binance rate/weight limit {e.code} on {name}, "
+                                f"backing off {sleep:.1f}s (attempt {attempt + 1})"
+                            )
+                            time.sleep(sleep)  # outside the lock
+                            continue
+                        raise
+            finally:
+                _BINANCE_TLS.in_call = False
+        return wrapper
+
+    # Only wrap public methods that actually perform REST requests. Wrapping
+    # *every* public attribute (the old behavior) caught helpers/properties and
+    # vastly increased the chance of nested-call problems.
+    _WRAP_PREFIXES = ("futures_", "get_", "create_", "cancel_", "order_", "ping",
+                      "change_", "transfer_", "stream_")
+    wrapped = 0
+    for attr in dir(Client):
+        if attr.startswith("_"):
+            continue
+        if not attr.startswith(_WRAP_PREFIXES):
+            continue
+        fn = getattr(Client, attr)
+        if not callable(fn):
+            continue
+        setattr(Client, attr, _rate_limited(fn, attr))
+        wrapped += 1
+    logger.info(f"Installed global rate-limit wrapper on {wrapped} Binance Client methods")
+
+
+_install_binance_rate_limit()
 
 # ── Symbol Mapping ────────────────────────────────────────────────────────────
 SYMBOL_MAP = {

@@ -123,9 +123,25 @@ class TradingLoopService:
         mode = get_trading_mode()
         logger.info(f"TradingLoopService starting in mode={mode.value.upper()}")
         
-        # Reconstruct pyramid layers from DB
+        # Reconstruct pyramid layers and distinct open-position count from DB
+        self._open_count = 0
         self._reconstruct_pyramid_layers()
         self._reconstruct_cooldowns()
+        db = SessionLocal()
+        try:
+            open_trades = db.query(Trade).filter(
+                Trade.status.in_(["open", "filled"])
+            ).all()
+            distinct = {(t.symbol, t.direction) for t in open_trades}
+            self._open_count = len(distinct)
+            logger.info(
+                f"Open position state reconstructed: "
+                f"{self._open_count} distinct positions across {len(open_trades)} trade rows"
+            )
+        except Exception as e:
+            logger.warning(f"Failed to reconstruct open-position count: {e}")
+        finally:
+            db.close()
 
         self._task = asyncio.create_task(self._loop())
         logger.info(
@@ -321,6 +337,7 @@ class TradingLoopService:
             open_trades = db_risk.query(Trade).filter(Trade.status.in_(["open", "filled"])).all()
             latest_snapshot = (
                 db_risk.query(PortfolioSnapshot)
+                .filter(PortfolioSnapshot.total_value > 0)
                 .order_by(PortfolioSnapshot.timestamp.desc())
                 .first()
             )
@@ -537,9 +554,16 @@ class TradingLoopService:
             # Sync DB trades with actual broker positions
             await self._sync_positions_with_broker(db)
             
-            # Count unique symbols with open positions (including filled)
+            # Count distinct positions (symbol/direction) — layers on the same
+            # symbol/direction are one position, not independent positions.
             from sqlalchemy import func
-            self._open_count = db.query(func.count(func.distinct(Trade.symbol))).filter(Trade.status.in_(["open", "filled"])).scalar() or 0
+            distinct_pos = (
+                db.query(Trade.symbol, Trade.direction)
+                .filter(Trade.status.in_(["open", "filled"]))
+                .distinct()
+                .subquery()
+            )
+            self._open_count = db.query(func.count()).select_from(distinct_pos).scalar() or 0
         finally:
             db.close()
 
@@ -629,7 +653,13 @@ class TradingLoopService:
                     db_check.commit()
                     logger.info(f"  Position Manager: {_exits_triggered} positions closed this cycle.")
                     # Refresh open count after exits
-                    self._open_count = db_check.query(func.count(func.distinct(Trade.symbol))).filter(Trade.status.in_(["open", "filled"])).scalar() or 0
+                    distinct_pos = (
+                        db_check.query(Trade.symbol, Trade.direction)
+                        .filter(Trade.status.in_(["open", "filled"]))
+                        .distinct()
+                        .subquery()
+                    )
+                    self._open_count = db_check.query(func.count()).select_from(distinct_pos).scalar() or 0
             except Exception as e:
                 logger.error(f"Position Manager cycle error: {e}")
                 db_check.rollback()

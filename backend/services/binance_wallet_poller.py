@@ -9,7 +9,7 @@ import os
 
 logger = logging.getLogger(__name__)
 
-_POLL_INTERVAL = 30  # seconds
+_POLL_INTERVAL = 60  # seconds (was 30) — ease pressure on Binance sync API
 _task = None
 
 
@@ -19,7 +19,7 @@ async def start_wallet_poller():
     if _task and not _task.done():
         return
     _task = asyncio.create_task(_poll_loop())
-    logger.info("Binance wallet poller started (interval=30s)")
+    logger.info("Binance wallet poller started (interval=60s)")
 
 
 async def _poll_loop():
