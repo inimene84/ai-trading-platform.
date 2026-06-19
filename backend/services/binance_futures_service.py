@@ -463,6 +463,11 @@ class BinanceFuturesService:
             for o in self._collect_protective_orders(futures_sym, position_side)
         )
 
+    @staticmethod
+    def _is_existing_close_position_error(err: Exception) -> bool:
+        """Binance -4130: only one closePosition SL/TP allowed per position side."""
+        return '-4130' in str(err)
+
     def ensure_protective_orders(
         self,
         symbol: str,
@@ -755,12 +760,6 @@ class BinanceFuturesService:
                 price = filled_price
             logger.info(f"  ✓ Order {order_id} filled @ {filled_price}")
 
-            # Pyramid: snapshot existing protective orders BEFORE placing replacements.
-            # Never cancel first — place-new-then-cancel-old (same contract as replace_stop_loss).
-            old_protective: list = []
-            if is_pyramid:
-                old_protective = self._collect_protective_orders(futures_sym, position_side)
-
             # Treat 0 / negative as missing — manual API calls often send stop_loss=0
             if stop_loss is not None and stop_loss <= 0:
                 stop_loss = None
@@ -788,11 +787,22 @@ class BinanceFuturesService:
                     logger.warning(f"  [!] Failed to cancel open orders for {futures_sym}: {e}")
 
             # ── Stop-loss order (STOP_MARKET, reduceOnly) ─────────────────────
-            sl_placed = False
             if not reduce_only and stop_loss:
                 sl_valid = (side == 'BUY' and stop_loss < price) or (side == 'SELL' and stop_loss > price)
                 if not sl_valid:
                     logger.warning(f"  [SL] Invalid stop_loss={stop_loss} for {side} @ {price} — skipping")
+                elif is_pyramid and self._has_exchange_stop(futures_sym, position_side):
+                    # closePosition SL already covers the full pyramided size; Binance
+                    # rejects a second one (-4130). Tighten via replace_stop_loss only.
+                    rep = self.replace_stop_loss(
+                        symbol=symbol,
+                        direction=direction,
+                        new_stop_price=stop_loss,
+                    )
+                    logger.info(
+                        f"  [SL] Pyramid add on {futures_sym}: existing closePosition stop kept "
+                        f"(replace={rep.get('status')})"
+                    )
                 else:
                     try:
                         sl_side = 'SELL' if side == 'BUY' else 'BUY'
@@ -807,47 +817,58 @@ class BinanceFuturesService:
                         sl_order = self._safe_create_order(client, sl_params)
                         sl_algo_id = sl_order.get('algoId') or sl_order.get('orderId')
                         logger.info(f"  [SL] Placed for {futures_sym} @ {stop_loss} (id={sl_algo_id})")
-                        sl_placed = True
                     except Exception as sl_e:
-                        # C1 FIX: SL failed → position is naked → EMERGENCY CLOSE immediately.
-                        # Never silently continue; fail-closed is the only safe choice.
-                        logger.error(
-                            f"  [SL] FAILED to place stop-loss for {futures_sym}: {sl_e}"
-                            f" — initiating emergency close to prevent naked position"
-                        )
-                        try:
-                            emg_side = 'SELL' if side == 'BUY' else 'BUY'
-                            close_qty = self._live_position_qty(futures_sym, position_side) or quantity
-                            close_qty = self._round_qty(futures_sym, close_qty)
-                            client.futures_create_order(
-                                symbol=futures_sym,
-                                side=emg_side,
-                                type='MARKET',
-                                quantity=close_qty,
-                                positionSide=position_side,
+                        if self._is_existing_close_position_error(sl_e) and self._has_exchange_stop(
+                            futures_sym, position_side
+                        ):
+                            logger.info(
+                                f"  [SL] {futures_sym}: -4130 with live exchange stop — "
+                                f"position protected, skipping emergency close"
                             )
-                            logger.critical(
-                                f"  [SL-FAILSAFE] {futures_sym} closed at market due to SL failure"
+                        else:
+                            # SL failed with no live protection → EMERGENCY CLOSE
+                            logger.error(
+                                f"  [SL] FAILED to place stop-loss for {futures_sym}: {sl_e}"
+                                f" — initiating emergency close to prevent naked position"
                             )
-                        except Exception as close_e:
-                            logger.critical(
-                                f"  [SL-FAILSAFE] MARKET CLOSE ALSO FAILED for {futures_sym}: {close_e}"
-                                f" — MANUAL INTERVENTION REQUIRED"
-                            )
-                        return {
-                            'status': 'error',
-                            'broker': 'binance_futures',
-                            'message': f'SL placement failed ({sl_e}) — emergency close attempted',
-                            'order_id': order_id,
-                            'symbol': futures_sym,
-                            'sl_error': str(sl_e),
-                        }
+                            try:
+                                emg_side = 'SELL' if side == 'BUY' else 'BUY'
+                                close_qty = self._live_position_qty(futures_sym, position_side) or quantity
+                                close_qty = self._round_qty(futures_sym, close_qty)
+                                client.futures_create_order(
+                                    symbol=futures_sym,
+                                    side=emg_side,
+                                    type='MARKET',
+                                    quantity=close_qty,
+                                    positionSide=position_side,
+                                )
+                                logger.critical(
+                                    f"  [SL-FAILSAFE] {futures_sym} closed at market due to SL failure"
+                                )
+                            except Exception as close_e:
+                                logger.critical(
+                                    f"  [SL-FAILSAFE] MARKET CLOSE ALSO FAILED for {futures_sym}: {close_e}"
+                                    f" — MANUAL INTERVENTION REQUIRED"
+                                )
+                            return {
+                                'status': 'error',
+                                'broker': 'binance_futures',
+                                'message': f'SL placement failed ({sl_e}) — emergency close attempted',
+                                'order_id': order_id,
+                                'symbol': futures_sym,
+                                'sl_error': str(sl_e),
+                            }
 
             # ── Take-profit order (TAKE_PROFIT_MARKET, reduceOnly) ────────────
             if not reduce_only and take_profit:
                 tp_valid = (side == 'BUY' and take_profit > price) or (side == 'SELL' and take_profit < price)
                 if not tp_valid:
                     logger.warning(f"  [TP] Invalid take_profit={take_profit} for {side} @ {price} — skipping")
+                elif is_pyramid and self._has_exchange_take_profit(futures_sym, position_side):
+                    logger.info(
+                        f"  [TP] Pyramid add on {futures_sym}: existing closePosition TP covers "
+                        f"full size — skipping duplicate"
+                    )
                 else:
                     try:
                         tp_side = 'SELL' if side == 'BUY' else 'BUY'
@@ -863,14 +884,14 @@ class BinanceFuturesService:
                         tp_algo_id = tp_order.get('algoId') or tp_order.get('orderId')
                         logger.info(f"  [TP] Placed for {futures_sym} @ {take_profit} (id={tp_algo_id})")
                     except Exception as tp_e:
-                        logger.warning(f"  [TP] Failed: {tp_e}")
-
-            # Pyramid: cancel stale protective orders ONLY after new SL is live.
-            if is_pyramid and sl_placed and old_protective:
-                n = self._cancel_listed_orders(client, futures_sym, old_protective)
-                logger.info(
-                    f"  ✓ Cancelled {n} stale protective order(s) after pyramid SL refresh on {futures_sym}"
-                )
+                        if self._is_existing_close_position_error(tp_e) and self._has_exchange_take_profit(
+                            futures_sym, position_side
+                        ):
+                            logger.info(
+                                f"  [TP] {futures_sym}: -4130 with live exchange TP — skipping duplicate"
+                            )
+                        else:
+                            logger.warning(f"  [TP] Failed: {tp_e}")
 
             # ── Native trailing stop (TRAILING_STOP_MARKET, reduceOnly) ───────
             # Trails the market continuously on the exchange. The hard STOP_MARKET
