@@ -1287,10 +1287,40 @@ class TradingLoopService:
                 f"exchange stop unchanged): {e}"
             )
 
+    def _ensure_exchange_protection(self, db, symbol: str):
+        """Re-place missing Binance SL/TP from DB levels (fail-safe, never cancels first)."""
+        try:
+            if os.getenv("ACTIVE_BROKER", "ctrader") != "binance_futures":
+                return
+            from backend.services.trading_mode import get_trading_mode, TradingMode
+            if get_trading_mode() != TradingMode.LIVE:
+                return
+            trades = (
+                db.query(Trade)
+                .filter(Trade.symbol == symbol, Trade.status.in_(["open", "filled"]))
+                .all()
+            )
+            for trade in trades:
+                if not trade.stop_loss and not trade.take_profit:
+                    continue
+                res = binance_futures_broker.ensure_protective_orders(
+                    trade.symbol,
+                    trade.direction,
+                    trade.stop_loss,
+                    trade.take_profit,
+                )
+                if res.get("status") == "restored":
+                    logger.warning(
+                        f"  [ {symbol} ] Exchange protection restored: {res.get('restored')}"
+                    )
+        except Exception as e:
+            logger.warning(f"  [ {symbol} ] exchange protection check failed: {e}")
+
     def _check_sl_tp(self, db, symbol: str, bars: list[dict]):
         """Check stop-loss and take-profit for open positions."""
         if not bars:
             return
+        self._ensure_exchange_protection(db, symbol)
         # Ratchet the trailing stop up/down BEFORE evaluating the crossing,
         # so a profit-locked stop can fire in the same cycle.
         self._apply_trailing_stop(db, symbol, bars)
