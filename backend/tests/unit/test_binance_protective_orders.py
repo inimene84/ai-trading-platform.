@@ -1,4 +1,5 @@
 """Protective-order safety: pyramid reuse, restore missing SL, full-qty emergency close."""
+import os
 from unittest.mock import MagicMock, patch
 
 from backend.services.binance_futures_service import BinanceFuturesService
@@ -22,7 +23,8 @@ def test_pyramid_reuses_existing_close_position_sl():
     client = MagicMock()
     client.futures_account.return_value = {"availableBalance": "1000"}
 
-    with patch.object(broker, "get_positions", return_value=[
+    with patch.dict(os.environ, {"MAKER_ENTRY_ENABLED": "false"}), \
+         patch.object(broker, "get_positions", return_value=[
         {"symbol": "DOGEUSDT", "side": "SELL", "quantity": 298.0},
     ]), patch.object(broker, "_get_client", return_value=client), \
          patch.object(broker, "_setup_symbol"), \
@@ -53,7 +55,8 @@ def test_pyramid_4130_with_live_stop_no_emergency_close():
             return {"orderId": 1, "avgPrice": "0.083"}
         raise Exception("APIError(code=-4130): An open stop or take profit order with GTE and closePosition in the direction is existing.")
 
-    with patch.object(broker, "get_positions", return_value=[
+    with patch.dict(os.environ, {"MAKER_ENTRY_ENABLED": "false"}), \
+         patch.object(broker, "get_positions", return_value=[
         {"symbol": "DOGEUSDT", "side": "SELL", "quantity": 298.0},
     ]), patch.object(broker, "_get_client", return_value=client), \
          patch.object(broker, "_setup_symbol"), \
