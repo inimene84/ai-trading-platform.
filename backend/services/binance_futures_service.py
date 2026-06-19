@@ -409,6 +409,152 @@ class BinanceFuturesService:
         except Exception as e:
             logger.debug(f"[{fsym}] cancel algo orders: {e}")
 
+    _PROTECTIVE_ORDER_TYPES = frozenset({
+        "STOP_MARKET", "TAKE_PROFIT_MARKET", "TRAILING_STOP_MARKET", "STOP", "TAKE_PROFIT",
+    })
+
+    def _collect_protective_orders(self, futures_sym: str, position_side: str) -> list:
+        """Return open SL/TP/trailing orders for a symbol+positionSide (regular + algo)."""
+        sl_side = 'SELL' if position_side == 'LONG' else 'BUY'
+        return [
+            o for o in self.get_open_orders()
+            if o.get('symbol') == futures_sym
+            and o.get('type') in self._PROTECTIVE_ORDER_TYPES
+            and o.get('side') == sl_side
+        ]
+
+    def _cancel_listed_orders(self, client, futures_sym: str, orders: list) -> int:
+        cancelled = 0
+        for o in orders:
+            try:
+                if o.get('algo_id'):
+                    client.futures_cancel_algo_order(algoId=o['algo_id'])
+                elif o.get('order_id'):
+                    client.futures_cancel_order(symbol=futures_sym, orderId=int(o['order_id']))
+                cancelled += 1
+            except Exception as ce:
+                logger.warning(
+                    f"  [!] Could not cancel protective order {o.get('order_id') or o.get('algo_id')} "
+                    f"on {futures_sym}: {ce}"
+                )
+        return cancelled
+
+    def _live_position_qty(self, futures_sym: str, position_side: str) -> float:
+        """Exchange position size for emergency closes (full leg, not pyramid add qty)."""
+        for p in self.get_positions():
+            if p.get('symbol') != futures_sym:
+                continue
+            side = (p.get('side') or '').upper()
+            if position_side == 'LONG' and side in ('BUY', 'LONG'):
+                return float(p.get('quantity') or 0)
+            if position_side == 'SHORT' and side in ('SELL', 'SHORT'):
+                return float(p.get('quantity') or 0)
+        return 0.0
+
+    def _has_exchange_stop(self, futures_sym: str, position_side: str) -> bool:
+        return any(
+            'STOP' in (o.get('type') or '')
+            for o in self._collect_protective_orders(futures_sym, position_side)
+        )
+
+    def _has_exchange_take_profit(self, futures_sym: str, position_side: str) -> bool:
+        return any(
+            'TAKE_PROFIT' in (o.get('type') or '')
+            for o in self._collect_protective_orders(futures_sym, position_side)
+        )
+
+    def ensure_protective_orders(
+        self,
+        symbol: str,
+        direction: str,
+        stop_loss: Optional[float] = None,
+        take_profit: Optional[float] = None,
+    ) -> dict:
+        """Re-place missing exchange SL/TP from DB levels — never cancels existing protection first."""
+        futures_sym = self._to_futures_symbol(symbol)
+        if not futures_sym:
+            return {'status': 'skipped', 'reason': f'{symbol} unsupported'}
+        if self.dry_run:
+            return {'status': 'simulated', 'symbol': futures_sym}
+
+        position_side = 'LONG' if direction.upper() == 'BUY' else 'SHORT'
+        qty = self._live_position_qty(futures_sym, position_side)
+        if qty <= 0:
+            return {'status': 'skipped', 'reason': 'no open position'}
+
+        has_sl = self._has_exchange_stop(futures_sym, position_side)
+        needs_tp = bool(take_profit and take_profit > 0)
+        has_tp = self._has_exchange_take_profit(futures_sym, position_side) if needs_tp else True
+        if has_sl and has_tp:
+            return {'status': 'ok', 'symbol': futures_sym}
+
+        client = self._get_client()
+        sl_side = 'SELL' if direction.upper() == 'BUY' else 'BUY'
+        restored = []
+
+        try:
+            ticker = client.futures_symbol_ticker(symbol=futures_sym)
+            ref_price = float(ticker.get('price') or 0)
+        except Exception:
+            ref_price = 0.0
+
+        if stop_loss and stop_loss > 0 and not has_sl:
+            sl_valid = (
+                (direction.upper() == 'BUY' and stop_loss < ref_price)
+                or (direction.upper() == 'SELL' and stop_loss > ref_price)
+                or ref_price <= 0
+            )
+            if sl_valid:
+                try:
+                    sl_params = {
+                        "symbol": futures_sym,
+                        "side": sl_side,
+                        "type": 'STOP_MARKET',
+                        "stopPrice": self._round_price(futures_sym, stop_loss),
+                        "closePosition": "true",
+                        "positionSide": position_side,
+                    }
+                    sl_order = self._safe_create_order(client, sl_params)
+                    restored.append(f"SL@{stop_loss} id={sl_order.get('algoId') or sl_order.get('orderId')}")
+                    logger.warning(
+                        f"  [PROTECT-RESTORE] {futures_sym} replaced missing SL @ {stop_loss}"
+                    )
+                except Exception as sl_e:
+                    logger.error(
+                        f"  [PROTECT-RESTORE] {futures_sym} failed to restore SL @ {stop_loss}: {sl_e}"
+                    )
+                    return {'status': 'error', 'message': str(sl_e), 'symbol': futures_sym}
+
+        if take_profit and take_profit > 0 and needs_tp and not has_tp:
+            tp_valid = (
+                (direction.upper() == 'BUY' and take_profit > ref_price)
+                or (direction.upper() == 'SELL' and take_profit < ref_price)
+                or ref_price <= 0
+            )
+            if tp_valid:
+                try:
+                    tp_params = {
+                        "symbol": futures_sym,
+                        "side": sl_side,
+                        "type": 'TAKE_PROFIT_MARKET',
+                        "stopPrice": self._round_price(futures_sym, take_profit),
+                        "closePosition": "true",
+                        "positionSide": position_side,
+                    }
+                    tp_order = self._safe_create_order(client, tp_params)
+                    restored.append(f"TP@{take_profit} id={tp_order.get('algoId') or tp_order.get('orderId')}")
+                    logger.warning(
+                        f"  [PROTECT-RESTORE] {futures_sym} replaced missing TP @ {take_profit}"
+                    )
+                except Exception as tp_e:
+                    logger.warning(
+                        f"  [PROTECT-RESTORE] {futures_sym} failed to restore TP @ {take_profit}: {tp_e}"
+                    )
+
+        if restored:
+            return {'status': 'restored', 'symbol': futures_sym, 'restored': restored}
+        return {'status': 'skipped', 'reason': 'no valid SL/TP to restore', 'symbol': futures_sym}
+
     def place_order(
         self,
         symbol: str,
@@ -609,20 +755,11 @@ class BinanceFuturesService:
                 price = filled_price
             logger.info(f"  ✓ Order {order_id} filled @ {filled_price}")
 
-            # If this was a successful pyramid addition, cancel old SL/TP orders NOW, 
-            # before we place the new ones covering the whole updated position.
+            # Pyramid: snapshot existing protective orders BEFORE placing replacements.
+            # Never cancel first — place-new-then-cancel-old (same contract as replace_stop_loss).
+            old_protective: list = []
             if is_pyramid:
-                try:
-                    client.futures_cancel_all_open_orders(symbol=futures_sym)
-                    _algo = client.futures_get_open_algo_orders()
-                    _algo_list = _algo if isinstance(_algo, list) else _algo.get('orders', [])
-                    for _o in _algo_list:
-                        if _o.get('symbol') == futures_sym and _o.get('algoId'):
-                            client.futures_cancel_algo_order(algoId=_o['algoId'])
-                    logger.info(f"  ✓ Cancelled old SL/TP after successful pyramid add on {futures_sym}")
-                except Exception as ce:
-                    logger.warning(f"  [!] Could not cancel old orders after pyramid {futures_sym}: {ce}")
-
+                old_protective = self._collect_protective_orders(futures_sym, position_side)
 
             # Treat 0 / negative as missing — manual API calls often send stop_loss=0
             if stop_loss is not None and stop_loss <= 0:
@@ -651,6 +788,7 @@ class BinanceFuturesService:
                     logger.warning(f"  [!] Failed to cancel open orders for {futures_sym}: {e}")
 
             # ── Stop-loss order (STOP_MARKET, reduceOnly) ─────────────────────
+            sl_placed = False
             if not reduce_only and stop_loss:
                 sl_valid = (side == 'BUY' and stop_loss < price) or (side == 'SELL' and stop_loss > price)
                 if not sl_valid:
@@ -669,6 +807,7 @@ class BinanceFuturesService:
                         sl_order = self._safe_create_order(client, sl_params)
                         sl_algo_id = sl_order.get('algoId') or sl_order.get('orderId')
                         logger.info(f"  [SL] Placed for {futures_sym} @ {stop_loss} (id={sl_algo_id})")
+                        sl_placed = True
                     except Exception as sl_e:
                         # C1 FIX: SL failed → position is naked → EMERGENCY CLOSE immediately.
                         # Never silently continue; fail-closed is the only safe choice.
@@ -678,11 +817,13 @@ class BinanceFuturesService:
                         )
                         try:
                             emg_side = 'SELL' if side == 'BUY' else 'BUY'
+                            close_qty = self._live_position_qty(futures_sym, position_side) or quantity
+                            close_qty = self._round_qty(futures_sym, close_qty)
                             client.futures_create_order(
                                 symbol=futures_sym,
                                 side=emg_side,
                                 type='MARKET',
-                                quantity=quantity,
+                                quantity=close_qty,
                                 positionSide=position_side,
                             )
                             logger.critical(
@@ -723,6 +864,13 @@ class BinanceFuturesService:
                         logger.info(f"  [TP] Placed for {futures_sym} @ {take_profit} (id={tp_algo_id})")
                     except Exception as tp_e:
                         logger.warning(f"  [TP] Failed: {tp_e}")
+
+            # Pyramid: cancel stale protective orders ONLY after new SL is live.
+            if is_pyramid and sl_placed and old_protective:
+                n = self._cancel_listed_orders(client, futures_sym, old_protective)
+                logger.info(
+                    f"  ✓ Cancelled {n} stale protective order(s) after pyramid SL refresh on {futures_sym}"
+                )
 
             # ── Native trailing stop (TRAILING_STOP_MARKET, reduceOnly) ───────
             # Trails the market continuously on the exchange. The hard STOP_MARKET
@@ -999,18 +1147,15 @@ class BinanceFuturesService:
                     return {'status': 'skipped',
                             'reason': f'new stop {rounded_new} <= price {current_price} (would trigger now)'}
 
-            # Find the existing reduce-only STOP_MARKET for this symbol+side
-            open_orders = client.futures_get_open_orders(symbol=futures_sym)
+            # Find the existing reduce-only STOP_MARKET for this symbol+side (regular + algo)
             existing = [
-                o for o in open_orders
-                if o.get('type') == 'STOP_MARKET'
-                and o.get('side') == sl_side
-                and o.get('positionSide', position_side) == position_side
+                o for o in self._collect_protective_orders(futures_sym, position_side)
+                if 'STOP' in (o.get('type') or '') and 'TAKE_PROFIT' not in (o.get('type') or '')
             ]
 
             # Only tighten: compare against the current exchange stop level
             if existing:
-                cur_levels = [float(o.get('stopPrice', 0) or 0) for o in existing]
+                cur_levels = [float(o.get('price') or 0) for o in existing if float(o.get('price') or 0) > 0]
                 if direction.upper() == 'BUY':
                     cur_stop = max(cur_levels)  # highest = least loose for a long
                     if rounded_new <= cur_stop:
@@ -1057,12 +1202,18 @@ class BinanceFuturesService:
             cancelled = []
             for o in existing:
                 try:
-                    client.futures_cancel_order(symbol=futures_sym, orderId=o['orderId'])
-                    cancelled.append(str(o['orderId']))
+                    if o.get('algo_id'):
+                        client.futures_cancel_algo_order(algoId=o['algo_id'])
+                    else:
+                        client.futures_cancel_order(symbol=futures_sym, orderId=int(o['order_id']))
+                    cancelled.append(str(o.get('order_id') or o.get('algo_id')))
                 except Exception as ce:
                     # New stop is already live; a lingering looser stop is harmless
                     # (reduce-only, same direction) — log and move on.
-                    logger.warning(f"  [TRAIL-SL] {futures_sym} could not cancel old stop {o.get('orderId')}: {ce}")
+                    logger.warning(
+                        f"  [TRAIL-SL] {futures_sym} could not cancel old stop "
+                        f"{o.get('order_id') or o.get('algo_id')}: {ce}"
+                    )
 
             logger.info(
                 f"  [TRAIL-SL] {futures_sym} exchange stop -> {rounded_new} "
