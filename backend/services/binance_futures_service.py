@@ -505,16 +505,6 @@ class BinanceFuturesService:
                             f"(existing qty={[p.get('quantity') for p in live_on_symbol]}, "
                             f"add={quantity})"
                         )
-                        try:
-                            client.futures_cancel_all_open_orders(symbol=futures_sym)
-                            _algo = client.futures_get_open_algo_orders()
-                            _algo_list = _algo if isinstance(_algo, list) else _algo.get('orders', [])
-                            for _o in _algo_list:
-                                if _o.get('symbol') == futures_sym and _o.get('algoId'):
-                                    client.futures_cancel_algo_order(algoId=_o['algoId'])
-                            logger.info(f"  ✓ Cancelled old SL/TP before pyramid add on {futures_sym}")
-                        except Exception as ce:
-                            logger.warning(f"  [!] Could not cancel old orders before pyramid {futures_sym}: {ce}")
                     else:
                         logger.warning(
                             f"[Binance Futures] SKIP {futures_sym}: open position(s) already "
@@ -618,6 +608,21 @@ class BinanceFuturesService:
             if filled_price > 0:
                 price = filled_price
             logger.info(f"  ✓ Order {order_id} filled @ {filled_price}")
+
+            # If this was a successful pyramid addition, cancel old SL/TP orders NOW, 
+            # before we place the new ones covering the whole updated position.
+            if is_pyramid:
+                try:
+                    client.futures_cancel_all_open_orders(symbol=futures_sym)
+                    _algo = client.futures_get_open_algo_orders()
+                    _algo_list = _algo if isinstance(_algo, list) else _algo.get('orders', [])
+                    for _o in _algo_list:
+                        if _o.get('symbol') == futures_sym and _o.get('algoId'):
+                            client.futures_cancel_algo_order(algoId=_o['algoId'])
+                    logger.info(f"  ✓ Cancelled old SL/TP after successful pyramid add on {futures_sym}")
+                except Exception as ce:
+                    logger.warning(f"  [!] Could not cancel old orders after pyramid {futures_sym}: {ce}")
+
 
             # Treat 0 / negative as missing — manual API calls often send stop_loss=0
             if stop_loss is not None and stop_loss <= 0:
