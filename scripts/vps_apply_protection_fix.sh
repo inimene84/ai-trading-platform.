@@ -5,7 +5,7 @@ docker cp backend/services/binance_futures_service.py ai-trading-backend:/app/ba
 docker cp backend/services/trading_loop.py ai-trading-backend:/app/backend/services/trading_loop.py
 docker restart ai-trading-backend
 echo "Waiting for backend..."
-sleep 12
+sleep 15
 docker exec ai-trading-backend curl -sf http://127.0.0.1:8000/health
 echo
 docker cp scripts/vps_restore_protection.py ai-trading-backend:/tmp/vps_restore_protection.py
