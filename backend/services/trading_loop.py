@@ -321,6 +321,7 @@ class TradingLoopService:
             open_trades = db_risk.query(Trade).filter(Trade.status.in_(["open", "filled"])).all()
             latest_snapshot = (
                 db_risk.query(PortfolioSnapshot)
+                .filter(PortfolioSnapshot.total_value > 0)  # skip zero-value race condition snapshots
                 .order_by(PortfolioSnapshot.timestamp.desc())
                 .first()
             )
