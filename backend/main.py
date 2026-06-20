@@ -183,3 +183,15 @@ async def startup_event():
             logger.info("ℹ Trade memory disabled (TRADE_MEMORY_ENABLED=false)")
     except Exception as e:
         logger.warning(f"⚠ Trade-memory recorder auto-start failed: {e}")
+
+    # Auto-start skill-miner loop: periodically distil trade history into named
+    # StrategySkill rows for the learned_skill opinion. Toggle SKILL_MINER_ENABLED.
+    try:
+        if os.getenv("SKILL_MINER_ENABLED", "true").lower() == "true":
+            from backend.services.skill_miner import skill_miner
+            asyncio.create_task(skill_miner.run_miner_loop())
+            logger.info("✓ Skill-miner loop auto-started")
+        else:
+            logger.info("ℹ Skill miner disabled (SKILL_MINER_ENABLED=false)")
+    except Exception as e:
+        logger.warning(f"⚠ Skill-miner auto-start failed: {e}")

@@ -226,3 +226,39 @@ class PaperTrade(Base):
     fee = Column(Float, default=0.0)
     pnl = Column(Float, default=0.0)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+# ═══ Track C+ : Learned Strategy Skills (skill miner) ═══
+
+class StrategySkill(Base):
+    """A learned, named trading 'skill' mined from the agent's own trade history.
+
+    Each row is a recurring market-setup archetype (a cluster of similar trades)
+    together with its realised edge. The opinion layer matches the live setup to
+    the best-fitting skill and votes with the skill's historical bias/confidence.
+    """
+    __tablename__ = "strategy_skills"
+
+    id = Column(Integer, primary_key=True, index=True)
+    skill_key = Column(String(64), unique=True, nullable=False, index=True)  # stable hash of the centroid
+    name = Column(String(120), nullable=False)        # human-readable, e.g. "Trending + bullish momentum (BTC)"
+    description = Column(Text, nullable=True)
+
+    # Centroid of the cluster in feature space (the "what the market looks like").
+    centroid = Column(JSON, nullable=False)            # list[float], normalised feature vector
+    feature_summary = Column(JSON, nullable=True)      # human-readable feature dict at the centroid
+
+    # Realised edge
+    direction = Column(String(10), nullable=False, default="neutral")  # bullish | bearish | neutral
+    sample_count = Column(Integer, nullable=False, default=0)
+    win_rate = Column(Float, nullable=False, default=0.0)
+    avg_pnl = Column(Float, nullable=False, default=0.0)
+    total_pnl = Column(Float, nullable=False, default=0.0)
+    sharpe = Column(Float, nullable=True)              # avg_pnl / std(pnl), consistency proxy
+    edge_score = Column(Float, nullable=False, default=0.0)   # composite 0..1 used for ranking/confidence
+
+    symbols = Column(JSON, nullable=True)              # symbols that contributed
+    active = Column(Boolean, nullable=False, default=True)
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    last_mined_at = Column(DateTime(timezone=True), nullable=True)

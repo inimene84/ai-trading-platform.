@@ -1522,3 +1522,60 @@ async def trade_memory_recall(request: Dict[str, Any]):
         same_symbol_only=bool(request.get("same_symbol_only", False)),
     )
     return result.to_dict()
+
+
+# ── Strategy Skills (skill miner): learned, named strategies ─────────────────
+
+@router.get("/skills/status")
+async def skills_status():
+    """Skill miner status: counts + config."""
+    from backend.services.skill_miner import skill_miner
+    return skill_miner.status()
+
+
+@router.get("/skills")
+async def skills_list(active_only: bool = Query(True), limit: int = Query(50, ge=1, le=500)):
+    """List learned strategy skills (the leaderboard)."""
+    from backend.services.skill_miner import skill_miner
+    skills = await asyncio.to_thread(skill_miner.list_skills, active_only, limit)
+    return {"count": len(skills), "skills": skills}
+
+
+@router.get("/skills/leaderboard")
+async def skills_leaderboard(limit: int = Query(10, ge=1, le=100)):
+    """Top skills by edge score — compact leaderboard view."""
+    from backend.services.skill_miner import skill_miner
+    skills = await asyncio.to_thread(skill_miner.list_skills, True, limit)
+    board = [
+        {
+            "rank": i + 1,
+            "name": s["name"],
+            "direction": s["direction"],
+            "edge_score": s["edge_score"],
+            "win_rate": s["win_rate"],
+            "avg_pnl": s["avg_pnl"],
+            "sample_count": s["sample_count"],
+            "symbols": s["symbols"],
+        }
+        for i, s in enumerate(skills)
+    ]
+    return {"count": len(board), "leaderboard": board}
+
+
+@router.post("/skills/mine")
+async def skills_mine(limit: Optional[int] = Query(None, ge=1, le=20000)):
+    """Trigger a skill-mining pass over closed-trade history (idempotent)."""
+    from backend.services.skill_miner import skill_miner
+    return await asyncio.to_thread(skill_miner.mine_and_store, limit)
+
+
+@router.post("/skills/match")
+async def skills_match(request: Dict[str, Any]):
+    """Debug: match an arbitrary market context to the best learned skill.
+
+    Body: {"context": {...feature keys...}}
+    """
+    from backend.services.skill_miner import skill_miner
+    ctx = request.get("context", {}) or {}
+    skill = await asyncio.to_thread(skill_miner.match_skill, ctx)
+    return {"matched": skill is not None, "skill": skill}

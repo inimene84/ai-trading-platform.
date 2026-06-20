@@ -27,6 +27,7 @@ from backend.services import kronos_service
 from backend.services.influxdb_sentiment_reader import sentiment_reader
 from backend.services.qdrant_client import qdrant
 from backend.services.trade_memory import trade_memory
+from backend.services.skill_miner import skill_miner
 from backend.services.persona_adapter import run_all_personas, get_persona_weights, set_persona_weight
 
 logger = logging.getLogger(__name__)
@@ -440,6 +441,9 @@ _AGENT_WEIGHTS = _LOADED_CONFIG.get("base_agents", {
     "market_alerts": 0.05,
     "macro_sentiment": 0.10,
     "news_archive": 0.12,
+    # Learning loop (Track C+) — modest weights; tune via /trading/opinion/weights.
+    "semantic_trade_memory": 0.10,
+    "learned_skill": 0.10,
 })
 _AGG_CFG = _LOADED_CONFIG.get("aggregation", {})
 _BUY_THRESHOLD = float(_AGG_CFG.get("buy_threshold", 0.15))
@@ -694,6 +698,35 @@ async def analyze_symbol(
             ))
     except Exception as e:
         logger.warning(f"Semantic trade memory failed for {symbol}: {e}")
+        recall_ctx = _build_market_context(symbol, opinions, kronos_result, metrics)
+
+    # Learned strategy skill (skill miner) — match the live setup to the best
+    # mined archetype and vote with its historical edge.
+    try:
+        skill = await asyncio.to_thread(skill_miner.match_skill, recall_ctx)
+        if skill:
+            metrics["learned_skill"] = {
+                k: skill.get(k) for k in (
+                    "name", "direction", "win_rate", "avg_pnl",
+                    "edge_score", "sample_count", "similarity", "skill_key",
+                )
+            }
+            # Confidence = edge_score scaled by match similarity, capped 0.5.
+            conf = min(0.5, float(skill.get("edge_score", 0.0)) * float(skill.get("similarity", 0.0)))
+            if conf > 0 and skill.get("direction") in ("bullish", "bearish"):
+                opinions.append(AgentOpinion(
+                    agent="learned_skill",
+                    signal=skill["direction"],
+                    confidence=round(conf, 4),
+                    reasoning=(
+                        f"Matched skill '{skill.get('name')}' "
+                        f"(sim {skill.get('similarity')}, edge {skill.get('edge_score')}, "
+                        f"{skill.get('sample_count')} trades, win {skill.get('win_rate')})"
+                    ),
+                    metadata=metrics["learned_skill"],
+                ))
+    except Exception as e:
+        logger.warning(f"Learned skill match failed for {symbol}: {e}")
 
     if include_personas:
         try:
