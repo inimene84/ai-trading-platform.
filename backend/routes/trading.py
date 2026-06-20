@@ -1488,3 +1488,37 @@ async def get_opinion_weights():
     return {"weights": ol._AGENT_WEIGHTS}
 
 
+
+
+# ── Trade Memory (Track C): semantic recall of past trades ───────────────────
+
+@router.get("/trade-memory/status")
+async def trade_memory_status():
+    """Status of the semantic trade-memory Qdrant collection."""
+    from backend.services.trade_memory import trade_memory
+    return await trade_memory.status()
+
+
+@router.post("/trade-memory/backfill")
+async def trade_memory_backfill(limit: int = Query(1000, ge=1, le=10000)):
+    """Vectorise existing closed trades from SQL into Qdrant (idempotent)."""
+    from backend.services.trade_memory import trade_memory
+    return await trade_memory.backfill_from_sql(limit=limit)
+
+
+@router.post("/trade-memory/recall")
+async def trade_memory_recall(request: Dict[str, Any]):
+    """Debug: recall similar past setups for an arbitrary market context.
+
+    Body: {"context": {...feature keys...}, "symbol": "BTCUSDT",
+           "same_symbol_only": false, "limit": 8}
+    """
+    from backend.services.trade_memory import trade_memory
+    ctx = request.get("context", {}) or {}
+    result = await trade_memory.recall_similar(
+        ctx,
+        symbol=request.get("symbol"),
+        limit=request.get("limit"),
+        same_symbol_only=bool(request.get("same_symbol_only", False)),
+    )
+    return result.to_dict()

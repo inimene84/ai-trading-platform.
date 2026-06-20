@@ -170,3 +170,16 @@ async def startup_event():
             logger.info("ℹ Native sentiment loop disabled (SENTIMENT_LOOP_ENABLED=false)")
     except Exception as e:
         logger.warning(f"⚠ Sentiment loop auto-start failed: {e}")
+
+    # Auto-start trade-memory recorder loop (Track C): periodically vectorise
+    # newly-closed trades into Qdrant for semantic recall. Toggle via
+    # TRADE_MEMORY_ENABLED.
+    try:
+        if os.getenv("TRADE_MEMORY_ENABLED", "true").lower() == "true":
+            from backend.services.trade_memory import trade_memory
+            asyncio.create_task(trade_memory.run_recorder_loop())
+            logger.info("✓ Trade-memory recorder loop auto-started")
+        else:
+            logger.info("ℹ Trade memory disabled (TRADE_MEMORY_ENABLED=false)")
+    except Exception as e:
+        logger.warning(f"⚠ Trade-memory recorder auto-start failed: {e}")

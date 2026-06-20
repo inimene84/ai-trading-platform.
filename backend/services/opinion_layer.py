@@ -26,6 +26,7 @@ import numpy as np
 from backend.services import kronos_service
 from backend.services.influxdb_sentiment_reader import sentiment_reader
 from backend.services.qdrant_client import qdrant
+from backend.services.trade_memory import trade_memory
 from backend.services.persona_adapter import run_all_personas, get_persona_weights, set_persona_weight
 
 logger = logging.getLogger(__name__)
@@ -54,6 +55,52 @@ def _get_trade_memory(symbol: str, limit: int = 5) -> dict:
     except Exception as e:
         logging.getLogger(__name__).warning(f"Trade memory query failed for {symbol}: {e}")
         return {"count": 0, "summary": f"Error: {e}"}
+
+
+def _build_market_context(
+    symbol: str,
+    opinions: list,
+    kronos_result: dict,
+    metrics: Optional[dict],
+) -> dict:
+    """Assemble the market-context dict consumed by trade_memory.recall_similar
+    from the opinions already computed this cycle. Best-effort: every field is
+    optional and defaults to neutral inside the feature extractor."""
+    metrics = metrics or {}
+    ctx: dict = {"symbol": symbol}
+
+    by_agent = {o.agent: o for o in opinions}
+
+    tech = by_agent.get("technical_analyst")
+    if tech is not None:
+        md = tech.metadata or {}
+        # Sub-signal dicts look like {"signal": "bullish", "confidence": 0.7}
+        for key in ("trend", "momentum", "mean_reversion"):
+            sub = md.get(key) or {}
+            if isinstance(sub, dict) and sub.get("signal"):
+                ctx[f"{key}_signal"] = sub["signal"]
+        vol = md.get("volatility") or {}
+        if isinstance(vol, dict) and isinstance(vol.get("confidence"), (int, float)):
+            ctx["volatility"] = vol["confidence"]
+        ctx["confidence"] = tech.confidence
+
+    if kronos_result:
+        ctx["kronos_change_pct"] = kronos_result.get("predicted_change_pct", 0.0)
+
+    social = by_agent.get("social_sentiment")
+    if social is not None:
+        s = social.signal
+        ctx["sentiment_score"] = 1.0 if s == "bullish" else (-1.0 if s == "bearish" else 0.0)
+
+    # From metrics (set by the decision engine / loop)
+    if "funding_rate" in metrics:
+        ctx["funding_rate"] = metrics["funding_rate"]
+    if "regime" in metrics:
+        ctx["regime"] = metrics["regime"]
+    if "rsi" in metrics:
+        ctx["rsi"] = metrics["rsi"]
+
+    return ctx
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -629,6 +676,25 @@ async def analyze_symbol(
             reasoning=trade_mem.get("summary", ""),
             metadata=trade_mem,
         ))
+
+    # Semantic trade memory (Track C) — "what happened last time the market
+    # looked like this?". Recall the most similar historical setups from Qdrant
+    # and turn their realised outcomes into a directional bias.
+    try:
+        recall_ctx = _build_market_context(symbol, opinions, kronos_result, metrics)
+        recall = await trade_memory.recall_similar(recall_ctx, symbol=symbol)
+        metrics["semantic_trade_memory"] = recall.to_dict()
+        if recall.samples >= trade_memory.min_samples and recall.confidence > 0:
+            opinions.append(AgentOpinion(
+                agent="semantic_trade_memory",
+                signal=recall.signal,
+                confidence=recall.confidence,
+                reasoning=recall.reasoning,
+                metadata=recall.to_dict(),
+            ))
+    except Exception as e:
+        logger.warning(f"Semantic trade memory failed for {symbol}: {e}")
+
     if include_personas:
         try:
             persona_results = await run_all_personas(symbol, bars, metrics)
