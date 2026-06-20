@@ -1520,7 +1520,9 @@ class TradingLoopService:
         return passed
 
     async def _fetch_bars(self, symbol: str) -> list[dict]:
-        """Fetch OHLCV bars. Try Binance Futures API first, fallback to yfinance."""
+        """Fetch OHLCV bars. Try Binance Futures API first, fallback to yfinance.
+        Also writes the most recent bar to InfluxDB trading-raw for Grafana."""
+        bars = None
         # Try Binance klines first (native format, no conversion needed)
         try:
             bars = await binance_market_data.get_klines(
@@ -1528,14 +1530,33 @@ class TradingLoopService:
             )
             if bars and len(bars) >= 50:
                 logger.info(f"  [{symbol}] Binance klines: {len(bars)} bars")
-                return bars
             else:
                 logger.warning(f"  [{symbol}] Binance klines insufficient ({len(bars) if bars else 0}), trying yfinance")
+                bars = None
         except Exception as e:
             logger.warning(f"  [{symbol}] Binance klines failed: {e}, trying yfinance")
 
         # Fallback to yfinance
-        return await asyncio.to_thread(self._fetch_bars_yfinance, symbol)
+        if bars is None:
+            bars = await asyncio.to_thread(self._fetch_bars_yfinance, symbol)
+
+        # ── Write last bar to InfluxDB for Grafana price charts ──────────────
+        if bars:
+            try:
+                last = bars[-1]
+                await influx.write_ohlcv(
+                    symbol=symbol,
+                    open_=float(last.get("open", 0)),
+                    high=float(last.get("high", 0)),
+                    low=float(last.get("low", 0)),
+                    close=float(last.get("close", 0)),
+                    volume=float(last.get("volume", 0)),
+                    timeframe="1h",
+                )
+            except Exception as _e:
+                logger.debug(f"  [{symbol}] OHLCV write skipped: {_e}")
+
+        return bars
 
     def _fetch_bars_yfinance(self, symbol: str) -> list[dict]:
         """Fallback: Fetch OHLCV bars via yfinance."""

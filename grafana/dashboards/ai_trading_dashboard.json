@@ -1,49 +1,28 @@
 {
-  "annotations": {
-    "list": [
-      {
-        "builtIn": 1,
-        "datasource": "-- Grafana --",
-        "enable": true,
-        "hide": true,
-        "iconColor": "rgba(0, 211, 255, 1)",
-        "name": "Annotations & Alerts",
-        "type": "dashboard"
-      }
-    ]
-  },
+  "annotations": { "list": [] },
   "editable": true,
   "fiscalYearStartMonth": 0,
-  "graphTooltip": 0,
+  "graphTooltip": 1,
   "id": null,
   "links": [],
-  "liveNow": false,
+  "liveNow": true,
   "panels": [
+
     {
       "datasource": "influxdb",
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "palette-classic" },
-          "custom": {
-            "axisCenteredZero": false,
-            "axisColorMode": "text",
-            "axisPlacement": "auto",
-            "drawStyle": "line",
-            "fillOpacity": 10,
-            "lineWidth": 2,
-            "pointSize": 4,
-            "showPoints": "never",
-            "spanNulls": true
-          },
+          "custom": { "drawStyle": "line", "fillOpacity": 15, "lineWidth": 2, "spanNulls": true },
           "unit": "currencyUSD"
         },
         "overrides": []
       },
-      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 0 },
-      "id": 2,
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "id": 1,
       "options": {
         "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
-        "tooltip": { "mode": "single", "sort": "none" }
+        "tooltip": { "mode": "single" }
       },
       "targets": [
         {
@@ -52,20 +31,263 @@
           "refId": "A"
         }
       ],
-      "title": "Account Equity (Binance)",
+      "title": "📈 Account Equity (USDT)",
       "type": "timeseries"
     },
+
+    {
+      "datasource": "influxdb",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "fixedColor": "green", "mode": "fixed" },
+          "unit": "currencyUSD",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "yellow", "value": 100 },
+              { "color": "green", "value": 200 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 0 },
+      "id": 2,
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "orientation": "auto", "textMode": "auto", "colorMode": "background", "graphMode": "area" },
+      "targets": [
+        {
+          "datasource": "influxdb",
+          "query": "from(bucket: \"trading-system\")\n  |> range(start: -1h)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"binance_wallet\")\n  |> filter(fn: (r) => r[\"_field\"] == \"equity\")\n  |> last()",
+          "refId": "A"
+        }
+      ],
+      "title": "💰 Current Equity",
+      "type": "stat"
+    },
+
+    {
+      "datasource": "influxdb",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 3 },
+              { "color": "red", "value": 8 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 0 },
+      "id": 3,
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "none" },
+      "targets": [
+        {
+          "datasource": "influxdb",
+          "query": "from(bucket: \"trading-system\")\n  |> range(start: -1h)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"binance_position\")\n  |> filter(fn: (r) => r[\"_field\"] == \"size\")\n  |> distinct(column: \"symbol\")\n  |> count()",
+          "refId": "A"
+        }
+      ],
+      "title": "📊 Open Positions",
+      "type": "stat"
+    },
+
+    {
+      "datasource": "influxdb",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "unit": "currencyUSD",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "yellow", "value": -10 },
+              { "color": "green", "value": 0 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 0 },
+      "id": 4,
+      "options": { "reduceOptions": { "calcs": ["sum"] }, "colorMode": "background", "graphMode": "area" },
+      "targets": [
+        {
+          "datasource": "influxdb",
+          "query": "from(bucket: \"trading-orders\")\n  |> range(start: -24h)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"trade\")\n  |> filter(fn: (r) => r[\"_field\"] == \"pnl\")\n  |> sum()",
+          "refId": "A"
+        }
+      ],
+      "title": "💵 Daily P&L",
+      "type": "stat"
+    },
+
+    {
+      "datasource": "influxdb",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 5, "lineWidth": 1, "pointSize": 5, "showPoints": "auto", "spanNulls": false },
+          "unit": "currencyUSD"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 4, "w": 12, "x": 12, "y": 4 },
+      "id": 5,
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        {
+          "datasource": "influxdb",
+          "query": "from(bucket: \"trading-orders\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"trade\")\n  |> filter(fn: (r) => r[\"_field\"] == \"pnl\")\n  |> cumulativeSum()\n  |> yield(name: \"cumulative_pnl\")",
+          "refId": "A"
+        }
+      ],
+      "title": "📊 Cumulative P&L",
+      "type": "timeseries"
+    },
+
     {
       "datasource": "influxdb",
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "palette-classic" },
           "custom": {
-            "axisCenteredZero": false,
+            "drawStyle": "line",
+            "fillOpacity": 8,
+            "lineWidth": 2,
+            "pointSize": 4,
+            "showPoints": "never",
+            "spanNulls": true
+          },
+          "unit": "currencyUSD"
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "close" },
+            "properties": [{ "id": "custom.lineWidth", "value": 2 }]
+          }
+        ]
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "id": 10,
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "single" }
+      },
+      "targets": [
+        {
+          "datasource": "influxdb",
+          "query": "from(bucket: \"trading-raw\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"ohlcv\")\n  |> filter(fn: (r) => r[\"_field\"] == \"close\")\n  |> filter(fn: (r) => r[\"symbol\"] == \"BTCUSDT\")\n  |> aggregateWindow(every: v.windowPeriod, fn: last, createEmpty: false)\n  |> yield(name: \"BTC Price\")",
+          "refId": "A"
+        },
+        {
+          "datasource": "influxdb",
+          "query": "from(bucket: \"trading-raw\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"ohlcv\")\n  |> filter(fn: (r) => r[\"_field\"] == \"close\")\n  |> filter(fn: (r) => r[\"symbol\"] == \"ETHUSDT\")\n  |> aggregateWindow(every: v.windowPeriod, fn: last, createEmpty: false)\n  |> yield(name: \"ETH Price\")",
+          "refId": "B"
+        }
+      ],
+      "title": "🕯️ BTC & ETH Price (1h OHLCV)",
+      "type": "timeseries"
+    },
+
+    {
+      "datasource": "influxdb",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 20,
+            "lineWidth": 2,
+            "spanNulls": true,
+            "thresholdsStyle": { "mode": "line+area" }
+          },
+          "min": -1,
+          "max": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "yellow", "value": -0.1 },
+              { "color": "green", "value": 0.1 }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "id": 20,
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        {
+          "datasource": "influxdb",
+          "query": "from(bucket: \"news-sentiment\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"news_sentiment\")\n  |> filter(fn: (r) => r[\"_field\"] == \"sentiment_score\")\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> yield(name: \"sentiment\")",
+          "refId": "A"
+        }
+      ],
+      "title": "🧠 Sentiment Score per Coin (n8n pipeline)",
+      "type": "timeseries"
+    },
+
+    {
+      "datasource": "influxdb",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 5,
+            "lineWidth": 1,
+            "pointSize": 5,
+            "showPoints": "auto",
+            "spanNulls": false
+          },
+          "unit": "short",
+          "min": 0,
+          "max": 1
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 16 },
+      "id": 30,
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        {
+          "datasource": "influxdb",
+          "query": "from(bucket: \"trading-signals\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"signal\")\n  |> filter(fn: (r) => r[\"_field\"] == \"confidence\")\n  |> aggregateWindow(every: v.windowPeriod, fn: last, createEmpty: false)\n  |> yield(name: \"confidence\")",
+          "refId": "A"
+        }
+      ],
+      "title": "🎯 Signal Confidence per Symbol",
+      "type": "timeseries"
+    },
+
+    {
+      "datasource": "influxdb",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
             "drawStyle": "line",
             "fillOpacity": 0,
             "lineWidth": 1,
-            "pointSize": 6,
+            "pointSize": 8,
             "showPoints": "always",
             "spanNulls": false
           },
@@ -73,43 +295,130 @@
         },
         "overrides": []
       },
-      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 0 },
-      "id": 4,
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 16 },
+      "id": 31,
       "options": {
         "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
-        "tooltip": { "mode": "multi", "sort": "none" }
+        "tooltip": { "mode": "multi" }
       },
       "targets": [
         {
           "datasource": "influxdb",
-          "query": "from(bucket: \"trading-orders\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"trade\")\n  |> filter(fn: (r) => r[\"status\"] == \"filled\" or r[\"status\"] == \"open\")\n  |> filter(fn: (r) => r[\"_field\"] == \"entry_price\")\n  |> yield(name: \"trades\")",
+          "query": "from(bucket: \"trading-orders\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"trade\")\n  |> filter(fn: (r) => r[\"_field\"] == \"entry_price\")\n  |> yield(name: \"entries\")",
           "refId": "A"
         }
       ],
-      "title": "Trade Entry Prices",
+      "title": "💹 Trade Entry Prices",
       "type": "timeseries"
     },
+
+    {
+      "datasource": "influxdb",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 80,
+            "lineWidth": 1
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "green", "value": 0.01 }
+            ]
+          },
+          "unit": "currencyUSD"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 23 },
+      "id": 40,
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        {
+          "datasource": "influxdb",
+          "query": "from(bucket: \"trading-orders\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"trade\")\n  |> filter(fn: (r) => r[\"_field\"] == \"pnl\")\n  |> yield(name: \"pnl_per_trade\")",
+          "refId": "A"
+        }
+      ],
+      "title": "💰 P&L per Trade (bar)",
+      "type": "timeseries"
+    },
+
     {
       "datasource": "influxdb",
       "fieldConfig": {
         "defaults": {
           "color": { "mode": "palette-classic" },
-          "custom": {
-            "drawStyle": "line",
-            "fillOpacity": 10,
-            "lineWidth": 2,
-            "showPoints": "never",
-            "spanNulls": true
-          },
-          "unit": "ms"
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 1, "spanNulls": true },
+          "unit": "currencyUSD"
         },
         "overrides": []
       },
-      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 9 },
-      "id": 6,
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 23 },
+      "id": 41,
       "options": {
         "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
-        "tooltip": { "mode": "single", "sort": "none" }
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        {
+          "datasource": "influxdb",
+          "query": "from(bucket: \"trading-raw\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"ohlcv\")\n  |> filter(fn: (r) => r[\"_field\"] == \"volume\")\n  |> group(columns: [\"symbol\"])\n  |> aggregateWindow(every: v.windowPeriod, fn: sum, createEmpty: false)\n  |> yield(name: \"volume\")",
+          "refId": "A"
+        }
+      ],
+      "title": "📦 Volume per Symbol",
+      "type": "timeseries"
+    },
+
+    {
+      "datasource": "influxdb",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 10, "lineWidth": 1, "spanNulls": true },
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 30 },
+      "id": 50,
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "single" }
+      },
+      "targets": [
+        {
+          "datasource": "influxdb",
+          "query": "from(bucket: \"trading-system\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"binance_wallet\")\n  |> filter(fn: (r) => r[\"_field\"] == \"margin_ratio\")\n  |> aggregateWindow(every: v.windowPeriod, fn: last, createEmpty: false)\n  |> yield(name: \"margin_ratio\")",
+          "refId": "A"
+        }
+      ],
+      "title": "⚠️ Margin Ratio %",
+      "type": "timeseries"
+    },
+
+    {
+      "datasource": "influxdb",
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "drawStyle": "line", "fillOpacity": 5, "lineWidth": 1, "spanNulls": true },
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 30 },
+      "id": 51,
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi" }
       },
       "targets": [
         {
@@ -118,50 +427,20 @@
           "refId": "A"
         }
       ],
-      "title": "Trading Loop Cycle Duration",
-      "type": "timeseries"
-    },
-    {
-      "datasource": "influxdb",
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "palette-classic" },
-          "custom": {
-            "drawStyle": "line",
-            "fillOpacity": 10,
-            "lineWidth": 2,
-            "showPoints": "never",
-            "spanNulls": true
-          },
-          "unit": "percentunit"
-        },
-        "overrides": []
-      },
-      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 9 },
-      "id": 8,
-      "options": {
-        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
-        "tooltip": { "mode": "single", "sort": "none" }
-      },
-      "targets": [
-        {
-          "datasource": "influxdb",
-          "query": "from(bucket: \"trading-system\")\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r[\"_measurement\"] == \"performance\")\n  |> filter(fn: (r) => r[\"_field\"] == \"win_rate\")\n  |> aggregateWindow(every: v.windowPeriod, fn: last, createEmpty: false)\n  |> yield(name: \"win_rate\")",
-          "refId": "A"
-        }
-      ],
-      "title": "Win Rate",
+      "title": "⚙️ Bot Cycle Duration (ms)",
       "type": "timeseries"
     }
+
   ],
+  "refresh": "30s",
   "schemaVersion": 38,
   "style": "dark",
-  "tags": ["trading", "ai-hedge-fund"],
+  "tags": ["trading", "crypto", "binance", "sentiment"],
   "templating": { "list": [] },
   "time": { "from": "now-24h", "to": "now" },
   "timepicker": {},
-  "timezone": "",
-  "title": "AI Trading Platform",
-  "uid": "ai_trading_v1",
+  "timezone": "browser",
+  "title": "🤖 AI Trading Platform — Live",
+  "uid": "ai-trading-v3",
   "version": 2
 }
