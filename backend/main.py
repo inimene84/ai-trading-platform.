@@ -158,3 +158,15 @@ async def startup_event():
         logger.info(f"✓ Trading loop auto-started ({mode_str} MODE)")
     except Exception as e:
         logger.warning(f"⚠ Trading loop auto-start failed: {e}")
+
+    # Auto-start native sentiment loop (repo-side replacement for the n8n
+    # crypto-news → InfluxDB sentiment pipeline). Toggle via SENTIMENT_LOOP_ENABLED.
+    try:
+        if os.getenv("SENTIMENT_LOOP_ENABLED", "true").lower() == "true":
+            from backend.services.sentiment_loop import sentiment_loop
+            asyncio.create_task(sentiment_loop.start())
+            logger.info("✓ Native sentiment loop auto-started")
+        else:
+            logger.info("ℹ Native sentiment loop disabled (SENTIMENT_LOOP_ENABLED=false)")
+    except Exception as e:
+        logger.warning(f"⚠ Sentiment loop auto-start failed: {e}")

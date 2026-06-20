@@ -1,0 +1,1496 @@
+{
+  "name": "9.-Crypto News & Sentiment Feed (HARDENED)",
+  "nodes": [
+    {
+      "parameters": {
+        "url": "https://cointelegraph.com/rss",
+        "options": {}
+      },
+      "name": "Fetch CryptoPanic RSS1",
+      "type": "n8n-nodes-base.rssFeedRead",
+      "typeVersion": 1.1,
+      "position": [
+        3312,
+        6000
+      ],
+      "id": "48126f86-114a-4efd-ae07-eea8aa15c673",
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "url": "https://fapi.binance.com/fapi/v1/premiumIndex",
+        "options": {}
+      },
+      "name": "Fetch Funding Rates1",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3312,
+        6144
+      ],
+      "id": "ca0faf3b-632b-48e7-ba2a-16a991d67446"
+    },
+    {
+      "parameters": {
+        "url": "https://fapi.binance.com/futures/data/globalLongShortAccountRatio?symbol=BTCUSDT&period=1h&limit=1",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "limit",
+              "value": "50"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Fetch Liquidations1",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3312,
+        6336
+      ],
+      "id": "28ea71f5-4c78-4573-8940-24bf4e9406d1"
+    },
+    {
+      "parameters": {
+        "jsCode": "\n// ─── Trading symbols we care about ───────────────────────────────────────────\nconst SYMBOLS = [\n  {sym:'BTC',  keywords:['bitcoin','btc']},\n  {sym:'ETH',  keywords:['ethereum','eth']},\n  {sym:'BNB',  keywords:['bnb','binance coin']},\n  {sym:'SOL',  keywords:['solana','sol']},\n  {sym:'XRP',  keywords:['ripple','xrp']},\n  {sym:'DOGE', keywords:['doge','dogecoin']},\n  {sym:'ADA',  keywords:['cardano','ada']},\n  {sym:'AVAX', keywords:['avalanche','avax']},\n  {sym:'DOT',  keywords:['polkadot','dot']},\n  {sym:'LINK', keywords:['chainlink','link']},\n  {sym:'LTC',  keywords:['litecoin','ltc']},\n  {sym:'ATOM', keywords:['cosmos','atom']},\n  {sym:'UNI',  keywords:['uniswap','uni']},\n  {sym:'INJ',  keywords:['injective','inj']},\n  {sym:'APT',  keywords:['aptos','apt']},\n  {sym:'ARB',  keywords:['arbitrum','arb']},\n  {sym:'OP',   keywords:['optimism',' op ','optimistic']},\n  {sym:'NEAR', keywords:['near protocol','near']},\n  {sym:'FIL',  keywords:['filecoin','fil']},\n  {sym:'ICP',  keywords:['internet computer','icp']},\n];\n\n// ─── Fetch news data ──────────────────────────────────────────────────────────\nconst cgNews = $('Fetch CoinGecko News1').isExecuted\n  ? ($('Fetch CoinGecko News1').first()?.json?.articles || [])\n  : [];\nconst rssItems = $('Fetch CryptoPanic RSS1').isExecuted\n  ? $('Fetch CryptoPanic RSS1').all().map(i => i.json)\n  : [];\nconst fundingData = $('Fetch Funding Rates1').isExecuted\n  ? $('Fetch Funding Rates1').all().map(d => d.json)\n  : [];\nconst liquidations = $('Fetch Liquidations1').isExecuted\n  ? $('Fetch Liquidations1').all().map(d => d.json)\n  : [];\n\nconst timestamp = new Date().toISOString();\n\n// ─── Build headline pool ──────────────────────────────────────────────────────\nconst allHeadlines = [\n  ...rssItems.slice(0,30).map(i => ({title: i.title||'', source:'CryptoPanic', pubDate: i.pubDate||''})),\n  ...cgNews.slice(0,30).map(a  => ({title: a.title||'', source:'CoinGecko',    pubDate: a.publishedAt||''})),\n];\n\n// ─── Funding rate lookup (symbol -> rate) ─────────────────────────────────────\nconst fundingMap = {};\nfundingData.forEach(d => {\n  if(d.symbol) {\n    const base = d.symbol.replace('USDT','').replace('USDC','');\n    fundingMap[base] = parseFloat(d.lastFundingRate || 0);\n  }\n});\n\n// ─── Global market sentiment from funding ────────────────────────────────────\nconst rates = Object.values(fundingMap);\nconst avgFunding = rates.length > 0 ? rates.reduce((s,r)=>s+r,0)/rates.length : 0;\nconst fundingSentiment = avgFunding > 0.001 ? 'BULLISH_EXTREME'\n  : avgFunding < -0.001 ? 'BEARISH_EXTREME'\n  : avgFunding > 0 ? 'BULLISH' : avgFunding < 0 ? 'BEARISH' : 'NEUTRAL';\n\n// ─── Liquidation bias ─────────────────────────────────────────────────────────\nconst longLiqs  = liquidations.filter(d => d.side === 'SELL').length;\nconst shortLiqs = liquidations.filter(d => d.side === 'BUY').length;\nconst liqBias   = longLiqs > shortLiqs ? 'LONGS_SQUEEZED'\n  : shortLiqs > longLiqs ? 'SHORTS_SQUEEZED' : 'BALANCED';\n\n// ─── Build one item per coin ──────────────────────────────────────────────────\nconst results = [];\nfor (const {sym, keywords} of SYMBOLS) {\n  // Filter headlines mentioning this coin\n  const coinHeadlines = allHeadlines.filter(h => {\n    const t = h.title.toLowerCase();\n    return keywords.some(kw => t.includes(kw));\n  });\n\n  // Simple keyword sentiment for pre-scoring\n  const bullWords = ['surge','pump','breakout','rally','ath','bull','gains','record','rise','moon','bullish','up','positive','launch','partnership','adoption','upgrade'];\n  const bearWords = ['crash','drop','dump','bear','correction','sell','fear','panic','decline','plunge','bearish','down','negative','hack','exploit','ban','lawsuit','sec'];\n  const coinText  = coinHeadlines.map(h=>h.title).join(' ').toLowerCase();\n  const bullScore = bullWords.filter(w => coinText.includes(w)).length;\n  const bearScore = bearWords.filter(w => coinText.includes(w)).length;\n\n  const coinFundingRate = fundingMap[sym] || 0;\n  const coinFundingBias = coinFundingRate > 0.001 ? 'BULLISH_EXTREME'\n    : coinFundingRate < -0.001 ? 'BEARISH_EXTREME'\n    : coinFundingRate > 0 ? 'BULLISH' : coinFundingRate < 0 ? 'BEARISH' : 'NEUTRAL';\n\n  results.push({\n    json: {\n      id:              `${sym}_${Date.now()}`,\n      symbol:          `${sym}USDT`,\n      symbols:         [sym],\n      source:          'n8n-sentiment-feed',\n      published_at:    Math.floor(Date.now()/1000),\n      title:           coinHeadlines.length > 0\n                         ? coinHeadlines.map(h=>h.title).join(' | ').slice(0,400)\n                         : `No specific ${sym} news. Market is ${fundingSentiment}.`,\n      headline_count:  coinHeadlines.length,\n      bull_score:      bullScore,\n      bear_score:      bearScore,\n      pre_direction:   bullScore > bearScore ? 'BULLISH'\n                         : bearScore > bullScore ? 'BEARISH' : 'NEUTRAL',\n      coin_funding_rate: coinFundingRate,\n      coin_funding_bias: coinFundingBias,\n      market_funding_sentiment: fundingSentiment,\n      liquidation_bias: liqBias,\n      avg_market_funding: Number(avgFunding.toFixed(6)),\n      skip: false\n    }\n  });\n}\n\nreturn results;\n"
+      },
+      "name": "Process News & Sentiment1",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3840,
+        6032
+      ],
+      "id": "d8ac4e1d-87ea-4044-8641-8c7d2ead52ea"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ JSON.stringify($json) }}",
+        "options": {
+          "systemMessage": "=You are a Crypto Coin Sentiment Analyst specializing in per-coin trading signals.\n\nYou receive data about a SPECIFIC CRYPTOCURRENCY including:\n- Recent news headlines mentioning this coin (in the 'title' field)\n- Pre-calculated bull/bear keyword scores (bull_score, bear_score)\n- This coin's funding rate and bias (coin_funding_rate, coin_funding_bias)\n- Market-wide context (market_funding_sentiment, liquidation_bias)\n\nYOUR TASK: Analyze and return ONLY a raw JSON object (no markdown fences, no explanation):\n\n{\"sentiment_score\": <float -1.0 to 1.0>, \"direction\": \"BULLISH|BEARISH|NEUTRAL\", \"confidence\": <float 0.0-1.0>, \"impact_score\": <float 0.0-1.0>, \"bias\": \"BUY|SELL|HOLD\", \"reasoning\": \"<1 sentence>\"}\n\nSCORING GUIDE:\n- sentiment_score: -1.0 = strongly bearish, 0 = neutral, 1.0 = strongly bullish\n- No coin-specific headlines (headline_count=0) = direction NEUTRAL, confidence 0.25, sentiment_score near 0\n- High positive funding + bullish news = 0.5 to 0.8\n- Strong negative news or hack/ban = -0.5 to -0.9\n- Conflicting signals = lower confidence (0.3-0.5)\n- impact_score: how market-moving the news is (0.1 = minor, 0.9 = major catalyst)",
+          "enableStreaming": false
+        }
+      },
+      "name": "AI Sentiment Analyst1",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3,
+      "position": [
+        4240,
+        6128
+      ],
+      "id": "ace07762-29c5-4112-a637-3e1d28637676",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://ai-trading-backend:8000/api/news/sentiment",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{\n  JSON.parse(\n    $json.output.replace(/^```json\\s*/i, '').replace(/\\s*```$/i, '').trim()\n  )\n}}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "name": "Save Sentiment to Memory1",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4848,
+        6304
+      ],
+      "id": "dbabd3e6-e08f-4d9e-a618-c57236a463c2",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const sentiment = $input.first().json;\nconst output = sentiment.output ? JSON.parse(sentiment.output) : sentiment;\n\nconst emoji = output.bias === 'BUY' ? '🟢' : output.bias === 'SELL' ? '🔴' : '🟡';\nconst moodEmoji = output.marketMood === 'RISK_ON' ? '🚀' : output.marketMood === 'RISK_OFF' ? '⚠️' : '😐';\n\nconst msg = `${emoji} <b>Market Sentiment Update</b> ${moodEmoji}\n\n` +\n  `📊 <b>Market Mood:</b> ${output.marketMood || 'N/A'}\n` +\n  `🎯 <b>Bias:</b> ${output.bias || 'N/A'} (${output.confidence || 0}% confidence)\n` +\n  `\n💡 <b>Recommendation:</b>\n${output.tradingRecommendation || 'No recommendation'}\n` +\n  `\n🔑 <b>Key Narratives:</b>\n${(output.keyNarratives || []).map(n => `• ${n}`).join('\\n')}\n` +\n  `\n⚠️ <b>Risks:</b>\n${(output.topRisks || []).map(r => `• ${r}`).join('\\n')}\n` +\n  `\n⏰ ${new Date().toISOString().replace('T', ' ').slice(0, 16)} UTC`;\n\nreturn [{ json: { message: msg, parse_mode: 'HTML' } }];"
+      },
+      "name": "Format Telegram Alert1",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        5072,
+        6320
+      ],
+      "id": "f2c6e4dd-76e7-46ca-98e5-65423426f0a1"
+    },
+    {
+      "parameters": {
+        "numberInputs": 5
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        3632,
+        5984
+      ],
+      "id": "f35ffd41-e796-42f7-b868-9d1fe194546a",
+      "name": "Merge2"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Parse AI output\nconst raw = String($json.output || $json.text || '{}');\nconst txt = raw.replace(/```json?/gi, '').replace(/```/g, '').trim();\n\nconst si = txt.indexOf('{');\nconst ei = txt.lastIndexOf('}');\nlet p = {};\ntry {\n  if (si > -1 && ei > si) p = JSON.parse(txt.slice(si, ei + 1));\n} catch (err) {\n  console.warn('[Sentiment] JSON parse failed:', err.message);\n}\n\nconst score  = Math.max(-1, Math.min(1, parseFloat(p.sentiment_score) || 0));\nconst impact = Math.max(0,  Math.min(1, parseFloat(p.impact_score)    || 0.5));\nconst conf   = Math.max(0,  Math.min(1, parseFloat(p.confidence)      || 0.5));\nconst dir    = (String(p.direction || 'NEUTRAL').replace(/[^A-Z]/g, '').toUpperCase() || 'NEUTRAL');\n\n// ✅ Pull the original coin item from BEFORE the AI node\nconst originalItem = $('Skip Empty').item.json;\n\n// ✅ Derive symbol from original item (e.g. \"BTCUSDT\" → \"BTC\")\nconst coinSym = String(\n  (originalItem.symbol || '').replace(/USDT|USDC/gi, '') ||\n  (Array.isArray(originalItem.symbols) ? originalItem.symbols[0] : '') ||\n  ''\n).toUpperCase().trim();\n\n// InfluxDB line protocol escaping\nconst BS = String.fromCharCode(92);\nconst escTag = function(v) {\n  let s = String(v == null ? '' : v);\n  s = s.split(BS).join(BS + BS);\n  s = s.split(',').join(BS + ',');\n  s = s.split('=').join(BS + '=');\n  s = s.split(' ').join(BS + ' ');\n  return s;\n};\nconst escField = function(v) {\n  let s = String(v == null ? '' : v);\n  s = s.split(BS).join(BS + BS);\n  s = s.split('\"').join(BS + '\"');\n  s = s.split('\\n').join(' ');\n  return s;\n};\n\nconst src   = escTag(originalItem.source || $json.source || 'news');\nconst aid   = escField(originalItem.id   || 'unknown');\nconst title = escField(originalItem.title || $json.headline || '');\nconst ts    = (parseInt(originalItem.published_at) || Math.floor(Date.now() / 1000)) * 1000000000;\n\n// Build symbol list — prefer coin sym, fallback to symbols array, then CRYPTO\nlet syms = [];\nif (coinSym && coinSym.length > 0 && coinSym !== 'UNDEFINED') {\n  syms = [coinSym];\n} else if (Array.isArray(originalItem.symbols) && originalItem.symbols.length > 0) {\n  syms = originalItem.symbols\n    .map(function(x) { return typeof x === 'object' ? String(x.symbol || x.name || 'CRYPTO') : String(x); })\n    .filter(function(x) { return x && x.trim().length > 0; });\n} else if (typeof originalItem.symbols === 'string' && originalItem.symbols.trim()) {\n  syms = [originalItem.symbols.trim()];\n} else {\n  syms = ['CRYPTO'];\n}\n\n// Build InfluxDB line protocol\nconst lp = syms.map(function(sym) {\n  return 'news_sentiment,symbol=' + escTag(sym) + ',source=' + src + ',direction=' + escTag(dir)\n    + ' sentiment_score=' + score + ',impact_score=' + impact + ',confidence=' + conf\n    + ',article_id=\"' + aid + '\",title=\"' + title + '\" ' + ts;\n}).join('\\n');\n\n// ✅ Return plain object (not an array) — required for \"Run Once for Each Item\" mode\nreturn {\n  json: {\n    lineProtocol: lp,\n    symbol: syms[0],\n    count: syms.length,\n    direction: dir,\n    sentiment_score: score,\n    confidence: conf\n  }\n};"
+      },
+      "id": "6df9cd48-b4ab-4374-99af-e2752c218bf4",
+      "name": "Parse & Build LineProtocol",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4768,
+        6048
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://vps-influxdb:8086/api/v2/write?org=819d45e061531bd6&bucket=news-sentiment&precision=ns",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Token Z8KfPNRUVDNY1o75uiRfrvWM66RQubgMa7gs1jZnuwmNugzugnGnt42pz0lcn3XHXWTNxMfYpPMzVhJn10wDow=="
+            },
+            {
+              "name": "Content-Type",
+              "value": "text/plain; charset=utf-8"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "text/plain; charset=utf-8",
+        "body": "={{ $json.lineProtocol }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text",
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "0f5cefa7-2bc0-40e8-9c9d-7e0a2c331ee8",
+      "name": "Write to InfluxDB",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4992,
+        6048
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconsole.log(`[Sentiment] InfluxDB write completed for ${items.length} item(s)`);\nreturn items.map(item => ({ json: { success: true, status: item.json?.status ?? 204 } }));"
+      },
+      "id": "27b6f226-9eaf-45d2-b5b4-85db3d20c957",
+      "name": "Log Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        5216,
+        6048
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.skip }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "notEquals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "563746f8-aa90-4354-a3cd-7a24c070bf6d",
+      "name": "Skip Empty",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2,
+      "position": [
+        4000,
+        6096
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://www.coindesk.com/arc/outboundfeeds/rss/",
+        "options": {}
+      },
+      "id": "56274c61-abe4-4e2c-8fbe-3e008d0beb20",
+      "name": "RSS Read - Coindesk1",
+      "type": "n8n-nodes-base.rssFeedRead",
+      "position": [
+        4144,
+        5056
+      ],
+      "executeOnce": true,
+      "typeVersion": 1.2,
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "url": "={{$json.url}}",
+        "options": {}
+      },
+      "id": "5e5f8932-b072-47a9-9db0-805e6e50007b",
+      "name": "RSS Read - Google news1",
+      "type": "n8n-nodes-base.rssFeedRead",
+      "position": [
+        4144,
+        5248
+      ],
+      "typeVersion": 1.2,
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.rssUrl }}",
+        "options": {
+          "customFields": ""
+        }
+      },
+      "id": "729c9617-5b95-4ee9-ab9b-cbf3eba5d957",
+      "name": "RSS Read - X Posts1",
+      "type": "n8n-nodes-base.rssFeedRead",
+      "position": [
+        4512,
+        5792
+      ],
+      "typeVersion": 1.2,
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "04f3aa10-f74d-48e6-bd8c-e63c017c5571",
+              "name": "source",
+              "type": "string",
+              "value": "CoinDesk"
+            },
+            {
+              "id": "39bd311b-dfa3-478f-beca-9e49012d9ffa",
+              "name": "kind",
+              "type": "string",
+              "value": "Article / News"
+            },
+            {
+              "id": "c22914b9-46fd-4de6-9f71-4b59a4fe93bc",
+              "name": "topic",
+              "type": "string",
+              "value": "={{$json.topic}}"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "fa126e7f-a958-4a6b-ac9f-d4deef8b192d",
+      "name": "Source set - Coindesk1",
+      "type": "n8n-nodes-base.set",
+      "position": [
+        4592,
+        5056
+      ],
+      "typeVersion": 3.4
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "04f3aa10-f74d-48e6-bd8c-e63c017c5571",
+              "name": "source",
+              "type": "string",
+              "value": "Google News"
+            },
+            {
+              "id": "39bd311b-dfa3-478f-beca-9e49012d9ffa",
+              "name": "kind",
+              "type": "string",
+              "value": "News"
+            },
+            {
+              "id": "55446164-5ddd-442c-be8d-5296569b2388",
+              "name": "topic",
+              "type": "string",
+              "value": "={{$json.topic}}"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "1bc6f728-fc2f-4f58-9cef-7ac813714284",
+      "name": "Source set - Google news1",
+      "type": "n8n-nodes-base.set",
+      "position": [
+        4592,
+        5248
+      ],
+      "typeVersion": 3.4
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "04f3aa10-f74d-48e6-bd8c-e63c017c5571",
+              "name": "source",
+              "type": "string",
+              "value": "CoinTelegraph"
+            },
+            {
+              "id": "39bd311b-dfa3-478f-beca-9e49012d9ffa",
+              "name": "kind",
+              "type": "string",
+              "value": "Article / News"
+            },
+            {
+              "id": "e6e7b215-75a3-4e01-9f27-59b8c833a881",
+              "name": "topic",
+              "type": "string",
+              "value": "={{$json.topic}}"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "d4a689d4-07fc-4a46-8229-b9f2d3240da2",
+      "name": "Source set - Cointelegraph1",
+      "type": "n8n-nodes-base.set",
+      "position": [
+        4368,
+        5408
+      ],
+      "typeVersion": 3.4
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "04f3aa10-f74d-48e6-bd8c-e63c017c5571",
+              "name": "source",
+              "type": "string",
+              "value": "X"
+            },
+            {
+              "id": "39bd311b-dfa3-478f-beca-9e49012d9ffa",
+              "name": "kind",
+              "type": "string",
+              "value": "Tweet"
+            },
+            {
+              "id": "b3208846-d56e-4b3b-9f92-a0389d4fab77",
+              "name": "topic",
+              "type": "string",
+              "value": "={{$json.topic}}"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "09967f4c-cc11-45bf-ab93-7f279ed9385c",
+      "name": "Source set - X Posts1",
+      "type": "n8n-nodes-base.set",
+      "position": [
+        5200,
+        5536
+      ],
+      "typeVersion": 3.4
+    },
+    {
+      "parameters": {},
+      "id": "880adeac-1b58-427c-b9f2-96467af47599",
+      "name": "Merge - Coindesk + Google news1",
+      "type": "n8n-nodes-base.merge",
+      "position": [
+        4816,
+        5120
+      ],
+      "typeVersion": 3.2
+    },
+    {
+      "parameters": {},
+      "id": "24a30253-26d3-4d7f-946d-09819a67649b",
+      "name": "Merge - X posts + CoinTelegraph1",
+      "type": "n8n-nodes-base.merge",
+      "position": [
+        5392,
+        5536
+      ],
+      "typeVersion": 3.2
+    },
+    {
+      "parameters": {},
+      "id": "066abc18-0107-4092-bf13-cedf4acdf59b",
+      "name": "Merge - Merge previous two merges1",
+      "type": "n8n-nodes-base.merge",
+      "position": [
+        4944,
+        5344
+      ],
+      "typeVersion": 3.2
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "run-workflow",
+        "options": {}
+      },
+      "id": "1c8bed74-d75e-4ace-9858-b4e5d0344ef1",
+      "name": "Webhook1",
+      "type": "n8n-nodes-base.webhook",
+      "position": [
+        2832,
+        5408
+      ],
+      "webhookId": "1727e7fc-ddb3-4f7e-b8ba-1fe4d29418fd",
+      "typeVersion": 2.1
+    },
+    {
+      "parameters": {
+        "jsCode": "// Accept both schedule and webhook paths\nconst body = ($json.body ?? $json) || {}\n\n// ── TOPIC: hardcoded to crypto ─────────────────────────────────────────────\nconst topic = 'crypto'\n\n// ── PLATFORMS: remove any to disable ─────────────────────────────────────\n// 'coindesk' | 'cointelegraph' | 'google' | 'x'\nlet platforms = body.platforms\nif (!Array.isArray(platforms) || !platforms.length) {\n  platforms = ['coindesk', 'google', 'cointelegraph', 'x']\n}\nplatforms = platforms.map((s) => String(s).toLowerCase().trim())\n\n// ── SEARCH QUERIES ─────────────────────────────────────────────────────────\nconst queries = {\n  google: '(bitcoin OR ethereum OR crypto OR blockchain OR DeFi OR altcoin OR \"web3\" OR \"spot ETF\" OR stablecoin OR liquidation OR \"crypto market\" OR solana OR XRP OR BNB)',\n  x: '(bitcoin OR crypto OR BTC OR ETH OR solana OR SOL OR BNB OR XRP OR DOGE OR ADA OR AVAX OR DOT OR SUI OR TON OR \"spot ETF\" OR DeFi OR altcoin OR liquidation OR breakout OR \"crypto crash\" OR \"crypto rally\")'\n}\n\n// ── TRACKED COINS for sentiment pipeline ──────────────────────────────────\nconst trackedCoins = [\n  {sym:'BTC',  keywords:['bitcoin','btc']},\n  {sym:'ETH',  keywords:['ethereum','eth','ether']},\n  {sym:'BNB',  keywords:['bnb','binance coin']},\n  {sym:'SOL',  keywords:['solana','sol']},\n  {sym:'XRP',  keywords:['ripple','xrp']},\n  {sym:'DOGE', keywords:['doge','dogecoin']},\n  {sym:'ADA',  keywords:['cardano','ada']},\n  {sym:'AVAX', keywords:['avalanche','avax']},\n  {sym:'DOT',  keywords:['polkadot','dot']},\n  {sym:'LINK', keywords:['chainlink','link']},\n  {sym:'LTC',  keywords:['litecoin','ltc']},\n  {sym:'ATOM', keywords:['cosmos','atom']},\n  {sym:'UNI',  keywords:['uniswap','uni']},\n  {sym:'INJ',  keywords:['injective','inj']},\n  {sym:'APT',  keywords:['aptos','apt']},\n  {sym:'ARB',  keywords:['arbitrum','arb']},\n  {sym:'OP',   keywords:['optimism',' op ','optimistic ethereum']},\n  {sym:'NEAR', keywords:['near protocol','near']},\n  {sym:'FIL',  keywords:['filecoin','fil']},\n  {sym:'ICP',  keywords:['internet computer','icp']},\n  {sym:'SUI',  keywords:['sui network','sui']},\n  {sym:'TON',  keywords:['toncoin','the open network','ton']},\n  {sym:'TRX',  keywords:['tron','trx']},\n  {sym:'PEPE', keywords:['pepe','pepe coin']},\n  {sym:'WIF',  keywords:['dogwifhat','wif']},\n]\n\nreturn [{ json: { topic, platforms, queries, trackedCoins } }]\n"
+      },
+      "id": "8007cf26-c806-452d-bfe0-9f0728a2dd2c",
+      "name": "Init RunConfig1",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        3456,
+        5392
+      ],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "7e97ad2e-60ef-4798-851c-e8e082905444",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              },
+              "leftValue": "={{ Array.isArray($json.platforms) && $json.topic === 'crypto' && $json.platforms.includes('coindesk') }}",
+              "rightValue": ""
+            }
+          ]
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "3b428ede-1298-4fd7-a69f-2073db17d54d",
+      "name": "IF Gate - Coindesk1",
+      "type": "n8n-nodes-base.if",
+      "position": [
+        3920,
+        5056
+      ],
+      "typeVersion": 2.2
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "7e97ad2e-60ef-4798-851c-e8e082905444",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              },
+              "leftValue": "={{ Array.isArray($json.platforms) && $json.platforms.includes('google') }}",
+              "rightValue": ""
+            }
+          ]
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "00f4855c-b77f-46b6-a2b5-b82868c835c5",
+      "name": "IF Gate - Google news1",
+      "type": "n8n-nodes-base.if",
+      "position": [
+        3744,
+        5264
+      ],
+      "typeVersion": 2.2
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "7e97ad2e-60ef-4798-851c-e8e082905444",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              },
+              "leftValue": "={{ Array.isArray($json.platforms) && $json.topic === 'crypto' && $json.platforms.includes('cointelegraph') }}",
+              "rightValue": ""
+            }
+          ]
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "fb6902aa-8fb8-4640-a72d-bc32c7933d6a",
+      "name": "IF Gate - CoinTelegraph1",
+      "type": "n8n-nodes-base.if",
+      "position": [
+        3696,
+        5408
+      ],
+      "typeVersion": 2.2
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "7e97ad2e-60ef-4798-851c-e8e082905444",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              },
+              "leftValue": "={{ Array.isArray($json.platforms) && $json.platforms.includes('x') }}",
+              "rightValue": ""
+            }
+          ]
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "75589f46-5e3c-4e80-a81d-ee044109f681",
+      "name": "IF Gate - X1",
+      "type": "n8n-nodes-base.if",
+      "position": [
+        3680,
+        5584
+      ],
+      "typeVersion": 2.2
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "f7e5bd0b-e0b0-44a2-99f4-36dbdc0e6adb",
+      "name": "X Batches1",
+      "type": "n8n-nodes-base.splitInBatches",
+      "position": [
+        4352,
+        5584
+      ],
+      "typeVersion": 3
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "8adddbbc-6b29-4cd6-a1c5-12b37e171b43",
+              "operator": {
+                "type": "boolean",
+                "operation": "false",
+                "singleValue": true
+              },
+              "leftValue": "=={{$json.hasMore}}",
+              "rightValue": "=={{$json.batchCount - 1}}"
+            }
+          ]
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "bd4edf9c-6d17-4635-8c1b-561aaade1140",
+      "name": "IF - More X batches?1",
+      "type": "n8n-nodes-base.if",
+      "position": [
+        4800,
+        5536
+      ],
+      "typeVersion": 2.2
+    },
+    {
+      "parameters": {
+        "jsCode": "// Finalize X batches (emit combined)\nconst mem = $getWorkflowStaticData('global')\nconst all = Array.isArray(mem.x_items) ? mem.x_items : []\n// Emit as normal n8n items:\nreturn all.map(j => ({ json: j }))\n"
+      },
+      "id": "45ac5c34-c7a9-4315-b17f-03cb3f6a55ad",
+      "name": "Code - Finalize X batches (emit combined)1",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        5024,
+        5536
+      ],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "jsCode": "const mem = $getWorkflowStaticData('global');\n\n// all RSS items produced for this batch\nconst batch = $input.all().map(i => i.json);\n\n// append to the accumulator\nmem.x_items = (mem.x_items ?? []).concat(batch);\n\n// read the metadata written by “Set batch metadata”\nconst batchIndex  = Number(mem.batchIndex ?? 0);\nconst batchCount  = Number(mem.batchCount ?? 0);\nconst hasMore     = batchIndex < (batchCount - 1);\n\n// emit a single control item that drives the IF node\nreturn [{\n  json: {\n    added: batch.length,\n    total: mem.x_items.length,\n    batchIndex,\n    batchCount,\n    hasMore,\n  },\n}];\n"
+      },
+      "id": "c81bee84-ff2c-4e71-b624-ac1c3d353670",
+      "name": "Code - Accumulate X items1",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        5024,
+        5712
+      ],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "jsCode": "// Start a fresh buffer for this execution.\nconst mem = $getWorkflowStaticData('global')  // ✅ valid contexts: 'global' | 'node'\nmem.x_items = []          // where we'll collect all RSS items from each batch\nmem.x_topic = $json.topic // optional: remember topic ('crypto' | 'stocks') from builder\n\nreturn $input.all()       // pass through\n"
+      },
+      "id": "79568db1-a7a9-46ba-92a5-4ccc84681aab",
+      "name": "Code - Reset X accumulator1",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        4128,
+        5584
+      ],
+      "retryOnFail": true,
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build XCancel RSS URLs – crypto only\nconst topic = String($json.topic ?? 'crypto').toLowerCase()\n\nconst MIN_FAVES = 10\nconst MIN_RTS   = 3\nconst MAX_PER_BATCH = 5\n\nconst filters = `lang:en -is:retweet -is:reply -is:quote filter:links min_faves:${MIN_FAVES} min_retweets:${MIN_RTS}`\n\nconst toOR = (terms) =>\n  '(' +\n  terms.filter(Boolean)\n    .map((t) => (/[^\\w]/.test(t) ? `\"${t}\"` : t))\n    .join(' OR ') +\n  ')'\n\nconst toUrl = (q) =>\n  'https://xcancel.com/search/rss?f=tweets&q=' +\n  encodeURIComponent(q.replace(/\\s+/g, ' ').trim())\n\nconst chunk = (arr, size) => {\n  const out = []\n  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size))\n  return out\n}\n\n// Grouped for relevance\nconst cryptoTerms = [\n  'bitcoin', 'BTC', 'ethereum', 'ETH', 'solana', 'SOL',\n  'BNB', 'XRP', 'DOGE', 'ADA', 'AVAX', 'DOT', 'LINK',\n  'SUI', 'TON', 'TRX', 'PEPE', 'ARB', 'OP', 'NEAR',\n  'liquidation', 'breakout', 'flash crash', 'crypto rally',\n  'spot ETF', 'DeFi', 'altcoin season', 'rug pull',\n  'hack', 'exploit', 'bullish crypto', 'bearish crypto',\n]\n\nlet batches = []\nfor (const group of chunk(cryptoTerms, MAX_PER_BATCH)) {\n  const q = `${toOR(group)} ${filters}`\n  batches.push({ rssUrl: toUrl(q), queryReadable: q })\n}\n\nbatches = batches.map((b, i) => ({\n  ...b,\n  batchIndex: i,\n  batchCount: batches.length,\n  topic,\n}))\n\nreturn batches.map((b) => ({ json: b }))\n"
+      },
+      "id": "a0b328af-7601-4206-a1aa-2460f4b2e40d",
+      "name": "Code - URL Build - XCancel1",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        3904,
+        5584
+      ],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "jsCode": "// Code - Tag topic (place right after RSS Read)\nconst topic = String(\n  $json.topic                                   // if present\n  ?? $item(0).$node[\"Init RunConfig1\"].json.topic // from the config node\n  ?? 'crypto'\n).toLowerCase();\n\nreturn $input.all().map(i => ({ json: { ...i.json, topic } }));\n"
+      },
+      "id": "ebebed95-0956-421f-9a53-a03d8f4ecf12",
+      "name": "Code - Tag topic - Google news1",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        4368,
+        5248
+      ],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "jsCode": "// Code - Tag topic (place right after RSS Read)\nconst topic = String(\n  $json.topic                                   // if present\n  ?? $item(0).$node[\"Init RunConfig1\"].json.topic // from the config node\n  ?? 'crypto'\n).toLowerCase();\n\nreturn $input.all().map(i => ({ json: { ...i.json, topic } }));\n"
+      },
+      "id": "5a6f148e-9374-4f57-ba06-c6a88a53c0ac",
+      "name": "Code - Tag topic - Coin desk1",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        4368,
+        5056
+      ],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "jsCode": "// Code - Tag topic (place right after RSS Read)\nconst topic = String(\n  $json.topic                                   // if present\n  ?? $item(0).$node[\"Init RunConfig1\"].json.topic // from the config node\n  ?? 'crypto'\n).toLowerCase();\n\nreturn $input.all().map(i => ({ json: { ...i.json, topic } }));\n"
+      },
+      "id": "d1b96721-8fd9-46a8-a6eb-cd3f9f27f329",
+      "name": "Code - Tag topic - X1",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        4800,
+        5712
+      ],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "jsCode": "const q = $json.queries?.google ?? '(bitcoin OR crypto)'\nconst url = `https://news.google.com/rss/search?q=${encodeURIComponent(q)}&hl=en-US&gl=US&ceid=US:en`\nreturn [{ json: { ...$json, url } }]\n"
+      },
+      "id": "87459469-dab0-4dc4-a17c-2dc38d3351d9",
+      "name": "Code - URL build - Google news1",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        3920,
+        5248
+      ],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {},
+      "id": "97730c1c-5a15-444f-aff4-4df079dbd323",
+      "name": "Loop back – X Batches1",
+      "type": "n8n-nodes-base.noOp",
+      "position": [
+        4576,
+        5504
+      ],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "jsCode": "// Code - Tag topic (place right after RSS Read)\nconst topic = String(\n  $json.topic                                   // if present\n  ?? $item(0).$node[\"Init RunConfig1\"].json.topic // from the config node\n  ?? 'crypto'\n).toLowerCase();\n\nreturn $input.all().map(i => ({ json: { ...i.json, topic } }));\n"
+      },
+      "id": "a07ba63d-21a8-4f34-9754-71f75da29d61",
+      "name": "Code - Tag topic - Coin telegraph1",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        4144,
+        5408
+      ],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "url": "https://cointelegraph.com/rss",
+        "options": {}
+      },
+      "id": "732b5fcb-0f2d-4b30-9214-59d971b73884",
+      "name": "RSS Read - CoinTelegraph1",
+      "type": "n8n-nodes-base.rssFeedRead",
+      "position": [
+        3920,
+        5408
+      ],
+      "typeVersion": 1.2,
+      "continueOnFail": true
+    },
+    {
+      "parameters": {},
+      "id": "968f8889-4c62-4432-9615-6305f0046dff",
+      "name": "Merge3",
+      "type": "n8n-nodes-base.merge",
+      "position": [
+        3232,
+        5392
+      ],
+      "typeVersion": 3.2
+    },
+    {
+      "parameters": {
+        "model": "deepseek/deepseek-v4-flash",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenRouter",
+      "typeVersion": 1,
+      "position": [
+        4320,
+        6352
+      ],
+      "id": "f9ac4776-fed4-4a4e-b438-3adfda4fa9bb",
+      "name": "OpenRouter Chat Model1",
+      "credentials": {
+        "openRouterApi": {
+          "id": "qQi8XDmwL3UdHNax",
+          "name": "OpenRouter account 3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Sanitize raw XML — fixes \"Invalid character in entity name\" from unescaped & in URLs\n// Use this node between an HTTP Request (raw fetch) and an XML parser.\n// Wire: HTTP Request (responseFormat: text) → this node → XML node\nconst raw = String($json.data || $json.body || $json.content || '')\nif (!raw) return $input.all()\n\n// Escape bare & that are not already valid XML entities\nconst sanitized = raw.replace(\n  /&(?!(?:amp|lt|gt|quot|apos|#\\d+|#x[\\da-fA-F]+);)/g,\n  '&amp;'\n)\nreturn [{ json: { ...$json, sanitizedXml: sanitized } }]\n"
+      },
+      "id": "3537a4c4-9054-4742-8831-376e03f8ccb7",
+      "name": "Code - Sanitize XML1",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        4320,
+        5792
+      ],
+      "typeVersion": 2,
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "url": "https://api.coingecko.com/api/v3/news",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "per_page",
+              "value": "30"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "c0857ba9-6599-4e58-944d-46981a4a4974",
+      "name": "Fetch CoinGecko News1",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3312,
+        5856
+      ],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 2
+            }
+          ]
+        }
+      },
+      "name": "Every 2 h",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        3008,
+        6112
+      ],
+      "id": "8cc5ddc3-d2cb-4168-97a4-208c2b4e5a0e"
+    }
+  ],
+  "pinData": {
+    "Every 2 h": [
+      {
+        "json": {
+          "timestamp": "2026-06-05T20:00:13.006+00:00",
+          "Readable date": "June 5th 2026, 8:00:13 pm",
+          "Readable time": "8:00:13 pm",
+          "Day of week": "Friday",
+          "Year": "2026",
+          "Month": "June",
+          "Day of month": "05",
+          "Hour": "20",
+          "Minute": "00",
+          "Second": "13",
+          "Timezone": "UTC (UTC+00:00)"
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      }
+    ]
+  },
+  "connections": {
+    "Fetch CryptoPanic RSS1": {
+      "main": [
+        [
+          {
+            "node": "Merge2",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "Fetch Funding Rates1": {
+      "main": [
+        [
+          {
+            "node": "Merge2",
+            "type": "main",
+            "index": 3
+          }
+        ]
+      ]
+    },
+    "Fetch Liquidations1": {
+      "main": [
+        [
+          {
+            "node": "Merge2",
+            "type": "main",
+            "index": 4
+          }
+        ]
+      ]
+    },
+    "Process News & Sentiment1": {
+      "main": [
+        [
+          {
+            "node": "Skip Empty",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Sentiment Analyst1": {
+      "main": [
+        [
+          {
+            "node": "Save Sentiment to Memory1",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Parse & Build LineProtocol",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Sentiment to Memory1": {
+      "main": [
+        [
+          {
+            "node": "Format Telegram Alert1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge2": {
+      "main": [
+        [
+          {
+            "node": "Process News & Sentiment1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse & Build LineProtocol": {
+      "main": [
+        [
+          {
+            "node": "Write to InfluxDB",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Write to InfluxDB": {
+      "main": [
+        [
+          {
+            "node": "Log Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Skip Empty": {
+      "main": [
+        [
+          {
+            "node": "AI Sentiment Analyst1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "RSS Read - Coindesk1": {
+      "main": [
+        [
+          {
+            "node": "Code - Tag topic - Coin desk1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "RSS Read - Google news1": {
+      "main": [
+        [
+          {
+            "node": "Code - Tag topic - Google news1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "RSS Read - X Posts1": {
+      "main": [
+        [
+          {
+            "node": "Code - Tag topic - X1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Source set - Coindesk1": {
+      "main": [
+        [
+          {
+            "node": "Merge - Coindesk + Google news1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Source set - Google news1": {
+      "main": [
+        [
+          {
+            "node": "Merge - Coindesk + Google news1",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Source set - Cointelegraph1": {
+      "main": [
+        [
+          {
+            "node": "Merge - X posts + CoinTelegraph1",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Source set - X Posts1": {
+      "main": [
+        [
+          {
+            "node": "Merge - X posts + CoinTelegraph1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge - Coindesk + Google news1": {
+      "main": [
+        [
+          {
+            "node": "Merge - Merge previous two merges1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge - X posts + CoinTelegraph1": {
+      "main": [
+        [
+          {
+            "node": "Merge - Merge previous two merges1",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge - Merge previous two merges1": {
+      "main": [
+        [
+          {
+            "node": "Merge2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook1": {
+      "main": [
+        [
+          {
+            "node": "Merge3",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Init RunConfig1": {
+      "main": [
+        [
+          {
+            "node": "IF Gate - Coindesk1",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "IF Gate - Google news1",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "IF Gate - CoinTelegraph1",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "IF Gate - X1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Gate - Coindesk1": {
+      "main": [
+        [
+          {
+            "node": "RSS Read - Coindesk1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Gate - Google news1": {
+      "main": [
+        [
+          {
+            "node": "Code - URL build - Google news1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Gate - CoinTelegraph1": {
+      "main": [
+        [
+          {
+            "node": "RSS Read - CoinTelegraph1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Gate - X1": {
+      "main": [
+        [
+          {
+            "node": "Code - URL Build - XCancel1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "X Batches1": {
+      "main": [
+        [
+          {
+            "node": "Code - Sanitize XML1",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Loop back – X Batches1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF - More X batches?1": {
+      "main": [
+        [
+          {
+            "node": "X Batches1",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Code - Finalize X batches (emit combined)1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Finalize X batches (emit combined)1": {
+      "main": [
+        [
+          {
+            "node": "Source set - X Posts1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Accumulate X items1": {
+      "main": [
+        [
+          {
+            "node": "IF - More X batches?1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Reset X accumulator1": {
+      "main": [
+        [
+          {
+            "node": "X Batches1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - URL Build - XCancel1": {
+      "main": [
+        [
+          {
+            "node": "Code - Reset X accumulator1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Tag topic - Google news1": {
+      "main": [
+        [
+          {
+            "node": "Source set - Google news1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Tag topic - Coin desk1": {
+      "main": [
+        [
+          {
+            "node": "Source set - Coindesk1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Tag topic - X1": {
+      "main": [
+        [
+          {
+            "node": "Code - Accumulate X items1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - URL build - Google news1": {
+      "main": [
+        [
+          {
+            "node": "RSS Read - Google news1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop back – X Batches1": {
+      "main": [
+        [
+          {
+            "node": "X Batches1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Tag topic - Coin telegraph1": {
+      "main": [
+        [
+          {
+            "node": "Source set - Cointelegraph1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "RSS Read - CoinTelegraph1": {
+      "main": [
+        [
+          {
+            "node": "Code - Tag topic - Coin telegraph1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge3": {
+      "main": [
+        [
+          {
+            "node": "Init RunConfig1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenRouter Chat Model1": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Sentiment Analyst1",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code - Sanitize XML1": {
+      "main": [
+        [
+          {
+            "node": "RSS Read - X Posts1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch CoinGecko News1": {
+      "main": [
+        [
+          {
+            "node": "Merge2",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Every 2 h": {
+      "main": [
+        [
+          {
+            "node": "Fetch CryptoPanic RSS1",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Fetch Funding Rates1",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Fetch Liquidations1",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge3",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Fetch CoinGecko News1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": true,
+    "timeSavedMode": "fixed",
+    "errorWorkflow": "p8vhXj53RK8MUxb7",
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "versionId": "ece3d4c1-97f2-4076-b8c3-03a0731ad886",
+  "meta": {
+    "aiBuilderAssisted": true,
+    "builderVariant": "mcp",
+    "templateCredsSetupCompleted": true,
+    "instanceId": "3ba1516368a49022d9762f125400c9a1fdcc0883879c1418b731722ef8bbc6db"
+  },
+  "nodeGroups": [],
+  "id": "X9dU5Pv1dLfqbqXA",
+  "tags": []
+}

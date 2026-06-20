@@ -591,6 +591,33 @@ async def archive_google_drive_news(payload: GoogleDriveArchivePayload):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ─── Native sentiment loop: status + manual trigger ───────────────────────────
+@router.get("/sentiment-loop/status")
+async def sentiment_loop_status():
+    """Status of the repo-side native sentiment loop (replaces n8n pipeline)."""
+    try:
+        from backend.services.sentiment_loop import sentiment_loop
+        return sentiment_loop.status()
+    except Exception as e:
+        return {"state": "unavailable", "error": str(e)}
+
+
+@router.post("/sentiment-loop/run")
+async def sentiment_loop_run(dry_run: bool = False):
+    """Trigger one sentiment pass on demand.
+
+    dry_run=true computes per-coin sentiment WITHOUT writing to InfluxDB —
+    handy for verifying the pipeline produces all symbols before going live.
+    """
+    try:
+        from backend.services.sentiment_loop import sentiment_loop
+        summary = await sentiment_loop.run_once(dry_run=dry_run)
+        return {"status": "ok", "summary": summary}
+    except Exception as e:
+        logger.error(f"Sentiment loop manual run failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/gdrive/status")
 async def gdrive_archive_status():
     """Check Google Drive archive integration status."""
