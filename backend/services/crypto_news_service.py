@@ -119,65 +119,106 @@ class CryptoNewsService:
             return []
 
     # ══════════════════════════════════════════════════════════════════════
-    # 2. CryptoCompare News
+    # 2. RSS-based Crypto News (replaces CryptoCompare which now requires key)
     # ══════════════════════════════════════════════════════════════════════
+    _RSS_FEEDS = [
+        ("Cointelegraph",   "https://cointelegraph.com/rss"),
+        ("CoinDesk",        "https://www.coindesk.com/arc/outboundfeeds/rss/"),
+        ("Decrypt",         "https://decrypt.co/feed"),
+        ("BeInCrypto",      "https://beincrypto.com/feed/"),
+        ("CryptoSlate",     "https://cryptoslate.com/feed/"),
+    ]
+
+    async def _fetch_rss_articles(self, client: httpx.AsyncClient, name: str, url: str) -> list[dict]:
+        """Fetch and parse one RSS feed, return list of article dicts."""
+        import re, html as html_mod, time as time_mod
+        try:
+            resp = await client.get(url, timeout=12.0, follow_redirects=True)
+            resp.raise_for_status()
+            content = resp.text
+            # Extract <item> blocks
+            item_blocks = re.findall(r'<item>(.*?)</item>', content, re.DOTALL)
+            articles = []
+            for block in item_blocks[:20]:
+                title_m = re.search(r'<title>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?</title>', block, re.DOTALL)
+                desc_m  = re.search(r'<description>(?:<!\[CDATA\[)?(.*?)(?:\]\]>)?</description>', block, re.DOTALL)
+                link_m  = re.search(r'<link>(.*?)</link>', block, re.DOTALL)
+                title = html_mod.unescape((title_m.group(1) if title_m else '').strip())
+                body  = html_mod.unescape((desc_m.group(1)  if desc_m  else '').strip())
+                # Strip HTML tags from body
+                body = re.sub(r'<[^>]+>', ' ', body)[:400]
+                link = (link_m.group(1) if link_m else '').strip()
+                if not title:
+                    continue
+                articles.append({
+                    'title': title,
+                    'body': body,
+                    'source': name,
+                    'url': link,
+                    'published_at': int(time_mod.time()),
+                    'categories': 'crypto',
+                    'sentiment': self._classify_sentiment(f"{title} {body}"),
+                })
+            return articles
+        except Exception as e:
+            logger.warning(f"RSS feed {name} error: {e}")
+            return []
+
     async def get_crypto_news(self, symbols: list[str] = None) -> list[dict]:
-        """Get crypto news from CryptoCompare with sentiment classification."""
-        cache_key = f"news:{','.join(symbols) if symbols else 'all'}"
+        """Get crypto news from free RSS feeds with sentiment classification."""
+        cache_key = f"rss_news:{','.join(symbols) if symbols else 'all'}"
         cached = self._get_cached(cache_key)
         if cached is not None:
             return cached
 
         try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                resp = await client.get(
-                    'https://min-api.cryptocompare.com/data/v2/news/',
-                    params={'lang': 'EN', 'sortOrder': 'latest'},
-                )
-                resp.raise_for_status()
-                data = resp.json()
+            import asyncio
+            async with httpx.AsyncClient(
+                timeout=15.0,
+                headers={"User-Agent": "Mozilla/5.0 (compatible; crypto-bot/1.0)"},
+            ) as client:
+                tasks = [self._fetch_rss_articles(client, name, url)
+                         for name, url in self._RSS_FEEDS]
+                results = await asyncio.gather(*tasks, return_exceptions=True)
 
-            articles = []
-            for item in data.get('Data', []):
-                title = item.get('title', '')
-                body = item.get('body', '')
-                sentiment = self._classify_sentiment(f"{title} {body}")
+            all_articles: list[dict] = []
+            for r in results:
+                if isinstance(r, list):
+                    all_articles.extend(r)
 
-                article = {
-                    'title': title,
-                    'body': body[:300],
-                    'source': item.get('source', ''),
-                    'url': item.get('url', ''),
-                    'published_at': item.get('published_on', 0),
-                    'categories': item.get('categories', ''),
-                    'sentiment': sentiment,
-                }
+            # De-duplicate by title prefix
+            seen: set[str] = set()
+            unique: list[dict] = []
+            for a in all_articles:
+                key = a['title'][:60].lower()
+                if key not in seen:
+                    seen.add(key)
+                    unique.append(a)
 
-                # Filter by symbols if provided
-                if symbols:
-                    text_lower = f"{title} {body}".lower()
-                    matched = False
+            # Filter by symbol keywords if requested
+            if symbols:
+                filtered: list[dict] = []
+                for article in unique:
+                    text_lower = f"{article['title']} {article['body']}".lower()
                     for sym in symbols:
-                        # Normalize quote asset (USDC↔USDT) so the USDT-keyed
-                        # keyword map also serves USDC perpetuals (EEA/MiCA).
                         lookup = sym.upper()
                         if lookup.endswith('USDC'):
                             lookup = lookup[:-4] + 'USDT'
                         base = lookup.lower().replace('usdt', '')
                         keywords = SYMBOL_KEYWORDS.get(lookup, [base])
                         if any(kw in text_lower for kw in keywords):
-                            matched = True
                             article['related_symbol'] = sym
+                            filtered.append(article)
                             break
-                    if not matched:
-                        continue
+                articles = filtered
+            else:
+                articles = unique
 
-                articles.append(article)
-
+            logger.info(f"RSS news: fetched {len(all_articles)} raw → {len(articles)} matched")
             self._set_cache(cache_key, articles)
             return articles
         except Exception as e:
-            logger.error(f"CryptoCompare news error: {e}")
+            logger.error(f"RSS news aggregation error: {e}")
             return []
 
     # ══════════════════════════════════════════════════════════════════════

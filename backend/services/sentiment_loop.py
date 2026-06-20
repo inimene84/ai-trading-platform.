@@ -37,7 +37,7 @@ import time
 from datetime import datetime, timezone
 from typing import Optional
 
-from backend.services.crypto_news_service import crypto_news_service
+from backend.services.crypto_news_service import crypto_news_service, SYMBOL_KEYWORDS
 from backend.services.influxdb_writer import influx
 
 logger = logging.getLogger(__name__)
@@ -177,11 +177,27 @@ class SentimentLoopService:
         skipped = 0
         per_symbol = {}
 
+        # Fetch ALL news once (5 RSS feeds in parallel), then distribute per-symbol.
+        # Avoids 19 separate HTTP bursts and keeps each symbol's match in its own slice.
+        try:
+            all_articles = await crypto_news_service.get_crypto_news()  # no symbol filter
+        except Exception as e:
+            logger.warning(f"[sentiment] global news fetch failed: {e}")
+            all_articles = []
+
+        def _articles_for_symbol(sym: str, pool: list) -> list:
+            lookup = sym.upper()
+            if lookup.endswith('USDC'):
+                lookup = lookup[:-4] + 'USDT'
+            base = lookup.lower().replace('usdt', '')
+            keywords = SYMBOL_KEYWORDS.get(lookup, [base])
+            return [a for a in pool if any(kw in (a['title'] + ' ' + a['body']).lower() for kw in keywords)]
+
         for sym in self._symbols:
             try:
-                articles = await crypto_news_service.get_crypto_news([sym])
+                articles = _articles_for_symbol(sym, all_articles)
             except Exception as e:
-                logger.warning(f"[sentiment] news fetch failed for {sym}: {e}")
+                logger.warning(f"[sentiment] news filter failed for {sym}: {e}")
                 articles = []
 
             score, impact, direction, n = _aggregate_keyword_sentiment(articles)
