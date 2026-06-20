@@ -2,9 +2,11 @@
 # Get correct InfluxDB token and update .env
 
 echo "Fetching working InfluxDB token..."
+: "${INFLUXDB_ADMIN_USER:=admin}"
+: "${INFLUXDB_ADMIN_PASSWORD:?set INFLUXDB_ADMIN_PASSWORD in your environment}"
 TOKEN=$(curl -s -X POST "http://localhost:8086/api/v2/signin" \
   -H "Content-Type: application/json" \
-  -d '{"username":"admin","password":"hedgefund123"}' | jq -r '.token')
+  -d "{\"username\":\"$INFLUXDB_ADMIN_USER\",\"password\":\"$INFLUXDB_ADMIN_PASSWORD\"}" | jq -r '.token')
 
 if [ "$TOKEN" = "null" ] || [ -z "$TOKEN" ]; then
     echo "ERROR: Could not get token"

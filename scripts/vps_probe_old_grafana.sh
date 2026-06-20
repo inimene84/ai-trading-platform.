@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
-# Try common Grafana admin passwords on old stack
-for auth in admin:admin admin:hedgefund123 admin:grafana; do
+# Try Grafana admin credentials on old stack.
+# Provide candidates via GRAFANA_PROBE_AUTHS (space-separated user:pass), e.g.
+#   GRAFANA_PROBE_AUTHS="admin:admin admin:$GRAFANA_PASS" ./vps_probe_old_grafana.sh
+for auth in ${GRAFANA_PROBE_AUTHS:-admin:admin}; do
   code=$(curl -s -o /dev/null -w '%{http_code}' -u "$auth" http://127.0.0.1:3000/api/org)
   echo "auth=$auth -> HTTP $code"
   if [ "$code" = "200" ]; then

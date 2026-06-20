@@ -49,3 +49,12 @@ hedge_fund.db
 # ── Qdrant runtime storage (binary / auto-generated) ─────────────────────────
 qdrant-storage/
 FETCH_HEAD
+
+# Ad-hoc/experimental scripts — never commit (may contain live secrets)
+scratch/
+
+# Extra secret-bearing files
+*.pem
+*.key
+secrets.*
+.secrets
