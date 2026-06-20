@@ -5,7 +5,7 @@ echo "=============================================="
 echo "SETUP COMPLETE INFLUXDB FOR TRADING PLATFORM"
 echo "=============================================="
 
-TOKEN="Z8KfPNRUVDNY1o75uiRfrvWM66RQubgMa7gs1jZnuwmNugzugnGnt42pz0lcn3XHXWTNxMfYpPMzVhJn10wDow=="
+TOKEN="VGsJs1Ft4tLq1_kwcbodJy3kxNXs4KcbYv7kj4VLlDWsLtnPEwUNZ8vczuNnBT65iRObY4IlW5Ip7SJ04yHM3g=="
 ORG="hedge-fund"
 URL="http://localhost:8086"
 
