@@ -378,13 +378,15 @@ class DecisionEngine:
                 max_notional = self.account_equity * self.config.max_trade_notional_equity_mult
                 notional = max(trade_usdt, min(notional, max_notional))
         
-        # Halve the trade notional in RANGING regime
+        # Block NEW entries in RANGING regime (choppy = no new positions)
+        # Pyramid adds are already separately blocked by the pyramid RANGING check.
         regime = self.regime_detector.detect(bars).regime
-        if regime == "RANGING":
-            notional = notional * 0.5
-            logger.info(f"[{symbol}] RANGING regime detected: Trade notional halved to ${notional:.2f}")
+        if regime == "RANGING" and not is_pyramid:
+            logger.info(f"[{symbol}] RANGING regime: blocking new entry (flat $25 sizing preserved)")
+            return None
 
         # Floor at Binance MIN_NOTIONAL ($20 for most symbols, $100 for BTC)
+        # BTC uses $100 flat to match Binance min notional requirement.
         _bn_min = 100.0 if 'BTC' in symbol else 20.0
         notional = max(notional, _bn_min)
         quantity = notional / entry_price if entry_price > 0 else 0

@@ -401,13 +401,14 @@ class TradeMemoryService:
                     must=[FieldCondition(key="base", match=MatchValue(value=base))]
                 )
 
-            results = await self._client.search(
+            resp = await self._client.query_points(
                 collection_name=self.collection,
                 query_vector=vec,
                 limit=k,
                 query_filter=qfilter,
                 with_payload=True,
             )
+            results = getattr(resp, "points", resp) or []
             return self._summarise(results)
         except Exception as e:
             logger.warning(f"TradeMemory: recall_similar failed: {e}")

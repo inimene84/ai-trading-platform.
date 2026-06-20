@@ -152,7 +152,8 @@ async def startup_event():
     # Auto-start trading loop
     try:
         # Start trading loop automatically (Safe in both Paper and Live as per user request)
-        asyncio.create_task(trading_loop.start())
+        interval = int(os.getenv("TRADING_LOOP_INTERVAL_MIN", "15"))
+        asyncio.create_task(trading_loop.start(interval_minutes=interval))
         paper_trading = os.getenv("PAPER_TRADING", "false").lower() == "true"
         mode_str = "PAPER" if paper_trading else "LIVE"
         logger.info(f"✓ Trading loop auto-started ({mode_str} MODE)")
