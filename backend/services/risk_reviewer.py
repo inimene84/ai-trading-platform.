@@ -138,7 +138,7 @@ async def review_trade_decision(
     )
     
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        async with httpx.AsyncClient(timeout=45.0) as client:
             resp = await client.post(
                 f"{base_url.rstrip('/')}/chat/completions",
                 headers={
@@ -173,5 +173,5 @@ async def review_trade_decision(
             return _parse_reviewer_response(str(content))
                 
     except Exception as e:
-        logger.error(f"Error calling risk reviewer LLM: {e}")
-        return True, f"Approved (Error invoking reviewer: {str(e)})"
+        logger.error(f"Error calling risk reviewer LLM: {type(e).__name__}: {e}")
+        return True, f"Approved (Error invoking reviewer: {type(e).__name__}: {e})"
