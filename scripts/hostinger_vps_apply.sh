@@ -40,7 +40,7 @@ echo "=== 2. Env sanity (live trading + P0 gates) ==="
 if [ -f .env ]; then
   sed -i 's/BINANCE_TESTNET=true/BINANCE_TESTNET=false/g' .env
   sed -i 's/DRY_RUN_ALL=true/DRY_RUN_ALL=false/g' .env
-  sed -i 's/^PYRAMID_MIN_IMPROVEMENT=.*/PYRAMID_MIN_IMPROVEMENT=0/' .env
+  grep -q '^PYRAMID_MIN_IMPROVEMENT=' .env || echo 'PYRAMID_MIN_IMPROVEMENT=0.005' >> .env
   grep -q '^MIN_AVAILABLE_MARGIN_USDT=' .env || echo 'MIN_AVAILABLE_MARGIN_USDT=5' >> .env
   grep -q '^MAX_SAME_DIRECTION_POSITIONS=' .env || echo 'MAX_SAME_DIRECTION_POSITIONS=5' >> .env
   # Kill floor: never below $50 on a ~$128 account
@@ -61,7 +61,7 @@ if [ -f .env ]; then
   EXPANDED_SYMBOLS='BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT,ADAUSDT,DOGEUSDT,AVAXUSDT,DOTUSDT,LINKUSDT,POLUSDT,LTCUSDT,UNIUSDT,ATOMUSDT,NEARUSDT,OPUSDT,ARBUSDT,APTUSDT,INJUSDT,SUIUSDT'
   if grep -q '^TRADING_SYMBOLS=' .env; then
     sym_count=$(grep '^TRADING_SYMBOLS=' .env | cut -d= -f2- | tr ',' '\n' | grep -c . || echo 0)
-    if [ "$sym_count" -lt 15 ]; then
+    if [ "$sym_count" -lt 5 ]; then
       sed -i "s|^TRADING_SYMBOLS=.*|TRADING_SYMBOLS=${EXPANDED_SYMBOLS}|" .env
       echo "  Expanded TRADING_SYMBOLS to ${sym_count} -> 20 symbols"
     fi
