@@ -184,7 +184,7 @@ class TradingLoopService:
         try:
             from backend.services.binance_futures_service import BinanceFuturesService as _BFS_SYNC
             _bfs_sync = _BFS_SYNC()
-            broker_raw = await asyncio.get_event_loop().run_in_executor(None, _bfs_sync.get_positions)
+            broker_raw = await asyncio.get_event_loop().run_in_executor(None, lambda: _bfs_sync.get_positions(raise_on_error=True))
             # Only symbols with non-zero position amount
             broker_symbols = {
                 bp['symbol'] for bp in broker_raw
@@ -785,11 +785,13 @@ class TradingLoopService:
             try:
                 from backend.services.binance_futures_service import BinanceFuturesService
                 exchange_legs = [
-                    p for p in BinanceFuturesService().get_positions()
+                    p for p in BinanceFuturesService().get_positions(raise_on_error=True)
                     if p.get("symbol") == symbol and float(p.get("quantity") or 0) > 0
                 ]
             except Exception as ex_e:
-                logger.warning(f"  [ {symbol} ] Exchange position check failed: {ex_e}")
+                logger.error(f"  [ {symbol} ] Exchange position check failed: {ex_e}. Skipping symbol processing for this cycle.")
+                db.close()
+                return {"signals": 0, "trades": 0}
 
             if exchange_legs and not existing:
                 sides = [p.get("side") for p in exchange_legs]

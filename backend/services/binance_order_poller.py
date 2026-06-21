@@ -11,7 +11,6 @@ from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
-_POLL_INTERVAL = 30  # seconds
 _task = None
 
 
@@ -21,7 +20,8 @@ async def start_order_poller():
     if _task and not _task.done():
         return
     _task = asyncio.create_task(_poll_loop())
-    logger.info("Binance order poller started (interval=30s)")
+    interval = int(os.getenv("BINANCE_ORDER_POLL_INTERVAL", "60"))
+    logger.info(f"Binance order poller started (interval={interval}s)")
 
 
 async def _poll_loop():
@@ -43,7 +43,9 @@ async def _poll_loop():
                 await _cancel_orphaned_orders(svc)
         except Exception as e:
             logger.warning(f"Order poller cycle error: {e}")
-        await asyncio.sleep(_POLL_INTERVAL)
+        
+        interval = int(os.getenv("BINANCE_ORDER_POLL_INTERVAL", "60"))
+        await asyncio.sleep(interval)
 
 
 _PROTECTIVE_ORDER_TYPES = {
@@ -61,9 +63,9 @@ async def _cancel_orphaned_orders(svc):
     Pending entry orders (LIMIT/MARKET) are left untouched.
     """
     try:
-        positions = await asyncio.get_event_loop().run_in_executor(None, svc.get_positions)
+        positions = await asyncio.get_event_loop().run_in_executor(None, lambda: svc.get_positions(raise_on_error=True))
         pos_syms = {p["symbol"] for p in positions if abs(float(p.get("quantity", 0) or 0)) > 0}
-        orders = await asyncio.get_event_loop().run_in_executor(None, svc.get_open_orders)
+        orders = await asyncio.get_event_loop().run_in_executor(None, lambda: svc.get_open_orders(raise_on_error=True))
     except Exception as e:
         logger.warning(f"Orphan reconcile: failed to fetch state: {e}")
         return

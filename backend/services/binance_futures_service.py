@@ -268,7 +268,7 @@ class BinanceFuturesService:
 
     # ── Public interface ──────────────────────────────────────────────────────
 
-    def get_balance(self) -> dict:
+    def get_balance(self, raise_on_error: bool = False) -> dict:
         """Fetch Binance Futures wallet balance (sync).
         Uses futures_account() totals which aggregate ALL margin assets
         (USDT, USDC, BNFCR, BFUSD, etc.) into a single USD-equivalent value.
@@ -290,10 +290,12 @@ class BinanceFuturesService:
             }
         except Exception as e:
             logger.error(f"get_balance error: {e}")
+            if raise_on_error:
+                raise
             return {'balance': 0.0, 'equity': 0.0, 'available': 0.0,
                     'broker': 'binance_futures', 'error': str(e)}
 
-    def get_positions(self) -> list:
+    def get_positions(self, raise_on_error: bool = False) -> list:
         """Return all non-zero open futures positions."""
         try:
             client = self._get_client()
@@ -315,6 +317,8 @@ class BinanceFuturesService:
             ]
         except Exception as e:
             logger.error(f"get_positions error: {e}")
+            if raise_on_error:
+                raise
             return []
 
     def get_exit_price(self, symbol: str) -> Optional[float]:
@@ -344,7 +348,7 @@ class BinanceFuturesService:
             logger.warning(f"[{sym}] get_exit_price (mark) failed: {e}")
         return None
 
-    def get_open_orders(self) -> list:
+    def get_open_orders(self, raise_on_error: bool = False) -> list:
         """Return all open futures orders, INCLUDING conditional/algo orders.
 
         On this account SL/TP/trailing orders placed via futures_create_order are
@@ -368,6 +372,8 @@ class BinanceFuturesService:
                 })
         except Exception as e:
             logger.error(f"get_open_orders error: {e}")
+            if raise_on_error:
+                raise
         # Conditional / algo orders (STOP/TP/TRAILING on this account)
         try:
             algo = client.futures_get_open_algo_orders()
@@ -385,6 +391,8 @@ class BinanceFuturesService:
                 })
         except Exception as e:
             logger.debug(f"get_open_algo_orders error: {e}")
+            if raise_on_error:
+                raise
         return out
 
     def cancel_all_orders(self, symbol: str) -> None:
@@ -413,11 +421,11 @@ class BinanceFuturesService:
         "STOP_MARKET", "TAKE_PROFIT_MARKET", "TRAILING_STOP_MARKET", "STOP", "TAKE_PROFIT",
     })
 
-    def _collect_protective_orders(self, futures_sym: str, position_side: str) -> list:
+    def _collect_protective_orders(self, futures_sym: str, position_side: str, raise_on_error: bool = False) -> list:
         """Return open SL/TP/trailing orders for a symbol+positionSide (regular + algo)."""
         sl_side = 'SELL' if position_side == 'LONG' else 'BUY'
         return [
-            o for o in self.get_open_orders()
+            o for o in self.get_open_orders(raise_on_error)
             if o.get('symbol') == futures_sym
             and o.get('type') in self._PROTECTIVE_ORDER_TYPES
             and o.get('side') == sl_side
@@ -439,9 +447,9 @@ class BinanceFuturesService:
                 )
         return cancelled
 
-    def _live_position_qty(self, futures_sym: str, position_side: str) -> float:
+    def _live_position_qty(self, futures_sym: str, position_side: str, raise_on_error: bool = False) -> float:
         """Exchange position size for emergency closes (full leg, not pyramid add qty)."""
-        for p in self.get_positions():
+        for p in self.get_positions(raise_on_error):
             if p.get('symbol') != futures_sym:
                 continue
             side = (p.get('side') or '').upper()
@@ -451,16 +459,16 @@ class BinanceFuturesService:
                 return float(p.get('quantity') or 0)
         return 0.0
 
-    def _has_exchange_stop(self, futures_sym: str, position_side: str) -> bool:
+    def _has_exchange_stop(self, futures_sym: str, position_side: str, raise_on_error: bool = False) -> bool:
         return any(
             'STOP' in (o.get('type') or '')
-            for o in self._collect_protective_orders(futures_sym, position_side)
+            for o in self._collect_protective_orders(futures_sym, position_side, raise_on_error)
         )
 
-    def _has_exchange_take_profit(self, futures_sym: str, position_side: str) -> bool:
+    def _has_exchange_take_profit(self, futures_sym: str, position_side: str, raise_on_error: bool = False) -> bool:
         return any(
             'TAKE_PROFIT' in (o.get('type') or '')
-            for o in self._collect_protective_orders(futures_sym, position_side)
+            for o in self._collect_protective_orders(futures_sym, position_side, raise_on_error)
         )
 
     @staticmethod
@@ -483,13 +491,23 @@ class BinanceFuturesService:
             return {'status': 'simulated', 'symbol': futures_sym}
 
         position_side = 'LONG' if direction.upper() == 'BUY' else 'SHORT'
-        qty = self._live_position_qty(futures_sym, position_side)
+        try:
+            qty = self._live_position_qty(futures_sym, position_side, raise_on_error=True)
+        except Exception as e:
+            logger.error(f"  [PROTECT-RESTORE] {futures_sym} failed to check position qty: {e}")
+            return {'status': 'error', 'message': str(e), 'symbol': futures_sym}
+
         if qty <= 0:
             return {'status': 'skipped', 'reason': 'no open position'}
 
-        has_sl = self._has_exchange_stop(futures_sym, position_side)
-        needs_tp = bool(take_profit and take_profit > 0)
-        has_tp = self._has_exchange_take_profit(futures_sym, position_side) if needs_tp else True
+        try:
+            has_sl = self._has_exchange_stop(futures_sym, position_side, raise_on_error=True)
+            needs_tp = bool(take_profit and take_profit > 0)
+            has_tp = self._has_exchange_take_profit(futures_sym, position_side, raise_on_error=True) if needs_tp else True
+        except Exception as e:
+            logger.error(f"  [PROTECT-RESTORE] {futures_sym} failed to check exchange orders: {e}")
+            return {'status': 'error', 'message': str(e), 'symbol': futures_sym}
+
         if has_sl and has_tp:
             return {'status': 'ok', 'symbol': futures_sym}
 
@@ -1170,7 +1188,7 @@ class BinanceFuturesService:
 
             # Find the existing reduce-only STOP_MARKET for this symbol+side (regular + algo)
             existing = [
-                o for o in self._collect_protective_orders(futures_sym, position_side)
+                o for o in self._collect_protective_orders(futures_sym, position_side, raise_on_error=True)
                 if 'STOP' in (o.get('type') or '') and 'TAKE_PROFIT' not in (o.get('type') or '')
             ]
 
@@ -1193,7 +1211,7 @@ class BinanceFuturesService:
             qty = quantity
             if not qty:
                 pos = next(
-                    (p for p in self.get_positions()
+                    (p for p in self.get_positions(raise_on_error=True)
                      if p['symbol'] == futures_sym
                      and ((direction.upper() == 'BUY' and p['side'] == 'BUY')
                           or (direction.upper() == 'SELL' and p['side'] == 'SELL'))),

@@ -9,7 +9,6 @@ import os
 
 logger = logging.getLogger(__name__)
 
-_POLL_INTERVAL = 30  # seconds
 _task = None
 
 
@@ -19,7 +18,8 @@ async def start_wallet_poller():
     if _task and not _task.done():
         return
     _task = asyncio.create_task(_poll_loop())
-    logger.info("Binance wallet poller started (interval=30s)")
+    interval = int(os.getenv("BINANCE_WALLET_POLL_INTERVAL", "60"))
+    logger.info(f"Binance wallet poller started (interval={interval}s)")
 
 
 async def _poll_loop():
@@ -45,7 +45,8 @@ async def _poll_loop():
                 await _write_wallet_and_positions(svc, influx)
         except Exception as e:
             logger.warning(f"Wallet poller cycle error: {e}")
-        await asyncio.sleep(_POLL_INTERVAL)
+        interval = int(os.getenv("BINANCE_WALLET_POLL_INTERVAL", "60"))
+        await asyncio.sleep(interval)
 
 
 async def _write_wallet_and_positions(svc, influx):
@@ -110,7 +111,7 @@ async def _write_wallet_and_positions(svc, influx):
             logger.warning(f"Wallet poller: paper portfolio error: {e}")
     else:
         # Live trading mode: read from Binance API
-        bal = svc.get_balance()
+        bal = svc.get_balance(raise_on_error=True)
         if not bal:
             return
 
@@ -137,7 +138,7 @@ async def _write_wallet_and_positions(svc, influx):
 
         # Write open positions
         try:
-            positions = svc.get_positions()
+            positions = svc.get_positions(raise_on_error=True)
             for pos in positions:
                 await influx.write_binance_position(
                     symbol=pos.get('symbol', 'UNKNOWN'),
