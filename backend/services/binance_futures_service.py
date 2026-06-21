@@ -11,6 +11,7 @@ import os
 import time
 from pathlib import Path
 from typing import Dict, Optional
+from datetime import datetime, timezone, timedelta
 
 from dotenv import load_dotenv
 
@@ -109,8 +110,31 @@ TICK_SIZES = {
 }
 
 
+class BinanceClientProxy:
+    """Wrapper around binance.client.Client that intercepts all method calls
+    and runs _handle_api_exception if any call raises an exception.
+    """
+    def __init__(self, client, service_instance):
+        self._client = client
+        self._service = service_instance
+
+    def __getattr__(self, name):
+        attr = getattr(self._client, name)
+        if callable(attr):
+            def wrapper(*args, **kwargs):
+                try:
+                    self._service._check_ban_status()
+                    return attr(*args, **kwargs)
+                except Exception as e:
+                    self._service._handle_api_exception(e)
+                    raise
+            return wrapper
+        return attr
+
+
 class BinanceFuturesService:
     """Binance USDT-M Futures broker — compatible with trading_loop.py interface."""
+    _banned_until = None
 
     def __init__(self):
         self.api_key    = os.getenv('BINANCE_API_KEY', '')
@@ -150,21 +174,52 @@ class BinanceFuturesService:
                 f"({len(self._lot_step)} lot steps)"
             )
         except Exception as e:
+            self._handle_api_exception(e)
             logger.warning(f"Could not load exchange filters: {e} — using static defaults")
 
     # ── Private helpers ───────────────────────────────────────────────────────
 
+    @classmethod
+    def _handle_api_exception(cls, e: Exception) -> None:
+        """Inspect exception for Binance IP ban (HTTP 418/429 / code -1003) and set class-level cooldown."""
+        err_msg = str(e)
+        if "banned until" in err_msg or "-1003" in err_msg or "418" in err_msg or "429" in err_msg:
+            import re
+            match = re.search(r"banned until (\d+)", err_msg)
+            if match:
+                try:
+                    ts_ms = int(match.group(1))
+                    cls._banned_until = datetime.fromtimestamp(ts_ms / 1000.0, timezone.utc)
+                    logger.error(f"!!! BINANCE IP BAN DETECTED !!! Local cooldown set until {cls._banned_until} UTC")
+                    return
+                except Exception:
+                    pass
+            # Fallback: ban for 10 minutes
+            cls._banned_until = datetime.now(timezone.utc) + timedelta(minutes=10)
+            logger.error(f"!!! BINANCE IP BAN DETECTED !!! Local fallback cooldown set for 10 minutes (until {cls._banned_until} UTC)")
+
+    def _check_ban_status(self) -> None:
+        """Raise an exception if the local IP ban cooldown is active."""
+        if BinanceFuturesService._banned_until:
+            now = datetime.now(timezone.utc)
+            if now < BinanceFuturesService._banned_until:
+                remaining = (BinanceFuturesService._banned_until - now).total_seconds()
+                raise Exception(
+                    f"Binance IP ban active. Suppressing API request to avoid extending ban. "
+                    f"Cooldown remaining: {remaining:.1f}s (until {BinanceFuturesService._banned_until} UTC)"
+                )
+
     def _get_client(self):
-        if self._client:
-            return self._client
-        from binance.client import Client
-        self._client = Client(
-            api_key=self.api_key,
-            api_secret=self.api_secret,
-            testnet=self.testnet,
-        )
-        logger.info(f"Binance Futures client connected (testnet={self.testnet})")
-        return self._client
+        self._check_ban_status()
+        if not self._client:
+            from binance.client import Client
+            self._client = Client(
+                api_key=self.api_key,
+                api_secret=self.api_secret,
+                testnet=self.testnet,
+            )
+            logger.info(f"Binance Futures client connected (testnet={self.testnet})")
+        return BinanceClientProxy(self._client, self)
 
     def _to_futures_symbol(self, symbol: str) -> Optional[str]:
         """Convert internal symbol → Binance Futures format. Returns None if unsupported."""
