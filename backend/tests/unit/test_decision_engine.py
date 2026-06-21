@@ -6,7 +6,7 @@ from backend.services.risk_config import RiskConfig
 from backend.strategies.base import StrategySignal
 
 
-def _make_bars(n: int = 60, base: float = 100.0) -> list:
+def _make_bars(n: int = 200, base: float = 100.0) -> list:
     """Synthetic OHLCV bars with gentle uptrend."""
     bars = []
     for i in range(n):
@@ -53,7 +53,7 @@ def test_compute_sl_tp_sell_direction(risk_config):
 def test_create_entry_floors_notional_at_20_usdt(risk_config):
     engine = DecisionEngine(risk_config)
     engine.account_equity = 50.0  # tiny equity → risk sizing would be < $20
-    bars = _make_bars(60, base=50000.0)  # expensive symbol
+    bars = _make_bars(200, base=50000.0)  # expensive symbol
     signal = StrategySignal(
         symbol="ETHUSDT", signal="BUY", confidence=0.8,
         entry_price=bars[-1]["close"], strategy="trend_following",
@@ -67,7 +67,7 @@ def test_create_entry_floors_notional_at_20_usdt(risk_config):
 def test_create_entry_floors_btc_at_100_usdt(risk_config):
     engine = DecisionEngine(risk_config)
     engine.account_equity = 80.0
-    bars = _make_bars(60, base=60000.0)
+    bars = _make_bars(200, base=60000.0)
     signal = StrategySignal(
         symbol="BTCUSDT", signal="BUY", confidence=0.8,
         entry_price=bars[-1]["close"], strategy="trend_following",
@@ -80,7 +80,7 @@ def test_create_entry_floors_btc_at_100_usdt(risk_config):
 
 def test_equity_sizing_scales_with_account(risk_config):
     engine = DecisionEngine(risk_config)
-    bars = _make_bars(60, base=2000.0)
+    bars = _make_bars(200, base=2000.0)
     signal = StrategySignal(
         symbol="ETHUSDT", signal="BUY", confidence=0.8,
         entry_price=bars[-1]["close"], strategy="trend_following",
@@ -107,7 +107,7 @@ async def test_evaluate_symbol_insufficient_bars(risk_config):
 @pytest.mark.asyncio
 async def test_evaluate_symbol_below_threshold(risk_config):
     engine = DecisionEngine(risk_config)
-    bars = _make_bars(60)
+    bars = _make_bars(200)
 
     weak_signal = StrategySignal(
         symbol="ETHUSDT", signal="BUY", confidence=0.20,
@@ -126,7 +126,7 @@ async def test_evaluate_symbol_below_threshold(risk_config):
 @pytest.mark.asyncio
 async def test_evaluate_symbol_skips_when_cooldown_active(risk_config):
     engine = DecisionEngine(risk_config)
-    bars = _make_bars(60)
+    bars = _make_bars(200)
     result = await engine.evaluate_symbol("ETHUSDT", bars, None, 0, [], cooldown_active=True)
     assert result is None
 
@@ -136,7 +136,7 @@ async def test_evaluate_symbol_funding_rate_adjustments(risk_config):
     engine.enable_kronos = False
     engine.config.enable_personas = False
     engine.config.use_risk_reviewer_llm = False
-    bars = _make_bars(60)
+    bars = _make_bars(200)
     
     # SELL signal with positive funding should boost confidence
     signal = StrategySignal(
@@ -159,7 +159,7 @@ async def test_ranging_regime_sizing_and_gate(risk_config):
     engine.config.enable_personas = False
     engine.config.use_risk_reviewer_llm = False
     engine.config.trade_usdt_amount = 100.0
-    bars = _make_bars(60)
+    bars = _make_bars(200)
     
     signal = StrategySignal(
         symbol="ETHUSDT", signal="BUY", confidence=0.50,
@@ -193,6 +193,4 @@ async def test_ranging_regime_sizing_and_gate(risk_config):
     decision_ranging = engine._create_entry_decision("ETHUSDT", bars, signal, "BUY", is_pyramid=False)
     
     assert decision_trending is not None
-    assert decision_ranging is not None
-    # Ranging notional should be half of trending notional
-    assert decision_ranging.quantity == pytest.approx(decision_trending.quantity * 0.5)
+    assert decision_ranging is None

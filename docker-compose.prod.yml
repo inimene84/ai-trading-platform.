@@ -172,6 +172,24 @@ services:
       - influxdb
     networks:
       - trading-net
+  mcp-server:
+    build:
+      context: .
+      dockerfile: mcp_server/Dockerfile
+    container_name: ai-trading-mcp
+    restart: unless-stopped
+    ports:
+      - "9100:9100"
+    environment:
+      - BACKEND_BASE_URL=http://ai-trading-backend:8000
+      - BACKEND_API_PREFIX=/api
+      - MCP_TRANSPORT=http
+      - MCP_HOST=0.0.0.0
+      - MCP_PORT=9100
+    networks:
+      - trading-net
+    depends_on:
+      - backend
 networks:
   trading-net:
     external: true

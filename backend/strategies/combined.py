@@ -194,7 +194,7 @@ class CombinedStrategy(BaseStrategy):
         # ── 3. Moderate single signal passthrough (regime-aware priority) ─────
         for strat_name in priority_order:
             sig = sigs[strat_name]
-            if sig.signal in ("BUY", "SELL") and sig.confidence >= 0.40:
+            if sig.signal in ("BUY", "SELL") and sig.confidence >= 0.55:
                 return StrategySignal(
                     symbol=symbol,
                     signal=sig.signal,

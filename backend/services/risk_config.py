@@ -192,6 +192,23 @@ class RiskConfig(BaseSettings):
         validation_alias=AliasChoices("trail_atr_mult", "TRAIL_ATR_MULT"),
     )
 
+    # ── Partial take-profit ──
+    # Solves the "TP never hit" problem (0% TP rate over 500 trades): the trail
+    # chokes every winner before it reaches the full TP. With partial TP, we
+    # close `partial_tp_close_pct` of the position at `partial_tp_atr_mult` x ATR
+    # into profit, locking in real gains. The remainder rides the trail for runners.
+    partial_tp_enabled: bool = PydanticField(
+        default=True,
+        validation_alias=AliasChoices("partial_tp_enabled", "PARTIAL_TP_ENABLED"),
+    )
+    partial_tp_atr_mult: float = PydanticField(
+        default=1.0,  # close partial at 1× ATR profit
+        validation_alias=AliasChoices("partial_tp_atr_mult", "PARTIAL_TP_ATR_MULT"),
+    )
+    partial_tp_close_pct: float = PydanticField(
+        default=0.50,  # close 50% of position
+        validation_alias=AliasChoices("partial_tp_close_pct", "PARTIAL_TP_CLOSE_PCT"),
+    )
     # ── Symbol-quality gate (liquidity filter + blacklist) ──
     # Reject any symbol whose 24h quote volume (USDT) is below this floor.
     # Low-liquidity / new-listing meme symbols (SIREN, AIGENSYN, MAGMA, SPK ...)

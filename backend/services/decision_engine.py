@@ -184,7 +184,6 @@ class DecisionEngine:
         if cooldown_active:
             return None
 
-
         # 3. Strategy execution — detect regime and generate signal.
         #    Runs FIRST so the expensive Kronos/opinion calls below are only
         #    paid when there's an actual directional setup (most pairs are
@@ -202,6 +201,16 @@ class DecisionEngine:
                 signal.signal if signal else "HOLD",
                 signal.confidence if signal else 0.0,
                 f"no strategy signal",
+            )
+            return None
+
+        # 3b. Early RANGING regime block — skip BEFORE paying for Kronos/LLM.
+        # The _create_entry_decision also blocks RANGING, but that runs AFTER
+        # all the expensive AI analysis. Blocking early saves API costs.
+        if regime_result.regime == "RANGING":
+            self._record_eval(
+                symbol, signal.signal, signal.confidence,
+                f"RANGING regime: blocked early (saves Kronos/LLM cost)",
             )
             return None
 

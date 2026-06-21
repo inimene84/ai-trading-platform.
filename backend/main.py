@@ -178,7 +178,7 @@ async def startup_event():
     try:
         if os.getenv("TRADE_MEMORY_ENABLED", "true").lower() == "true":
             from backend.services.trade_memory import trade_memory
-            asyncio.create_task(trade_memory.run_recorder_loop())
+            trade_memory.start()
             logger.info("✓ Trade-memory recorder loop auto-started")
         else:
             logger.info("ℹ Trade memory disabled (TRADE_MEMORY_ENABLED=false)")
@@ -190,9 +190,58 @@ async def startup_event():
     try:
         if os.getenv("SKILL_MINER_ENABLED", "true").lower() == "true":
             from backend.services.skill_miner import skill_miner
-            asyncio.create_task(skill_miner.run_miner_loop())
+            skill_miner.start()
             logger.info("✓ Skill-miner loop auto-started")
         else:
             logger.info("ℹ Skill miner disabled (SKILL_MINER_ENABLED=false)")
     except Exception as e:
         logger.warning(f"⚠ Skill-miner auto-start failed: {e}")
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Shutdown event to clean up and cancel all background loops/pollers gracefully."""
+    logger.info("Application shutdown initiated. Stopping background tasks...")
+    
+    # 1. Stop wallet poller
+    try:
+        from backend.services.binance_wallet_poller import stop_wallet_poller
+        await stop_wallet_poller()
+    except Exception as e:
+        logger.warning(f"Error stopping wallet poller: {e}")
+        
+    # 2. Stop order poller
+    try:
+        from backend.services.binance_order_poller import stop_order_poller
+        await stop_order_poller()
+    except Exception as e:
+        logger.warning(f"Error stopping order poller: {e}")
+        
+    # 3. Stop trading loop
+    try:
+        await trading_loop.stop()
+    except Exception as e:
+        logger.warning(f"Error stopping trading loop: {e}")
+        
+    # 4. Stop sentiment loop
+    try:
+        from backend.services.sentiment_loop import sentiment_loop
+        await sentiment_loop.stop()
+    except Exception as e:
+        logger.warning(f"Error stopping sentiment loop: {e}")
+        
+    # 5. Stop trade memory
+    try:
+        from backend.services.trade_memory import trade_memory
+        await trade_memory.stop()
+    except Exception as e:
+        logger.warning(f"Error stopping trade memory loop: {e}")
+        
+    # 6. Stop skill miner
+    try:
+        from backend.services.skill_miner import skill_miner
+        await skill_miner.stop()
+    except Exception as e:
+        logger.warning(f"Error stopping skill miner loop: {e}")
+
+    logger.info("All background tasks stopped. Shutdown complete.")

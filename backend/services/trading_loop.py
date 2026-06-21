@@ -1156,7 +1156,114 @@ class TradingLoopService:
             logger.warning(f"Failed to save portfolio snapshot: {e}")
             db.rollback()
 
+    def _apply_partial_tp(self, db, symbol: str, bars: list[dict]):
+        """Close a portion of the position at partial_tp_atr_mult × ATR profit.
+
+        Solves the '0% TP hit' problem: the trail chokes every winner before it
+        reaches the full TP. By closing partial_tp_close_pct (default 50%) of the
+        position early, we lock in real gains. The remainder rides the trail for
+        runners. State is tracked via trade.notes ('PARTIAL_TP_DONE') so it
+        survives restarts and only fires once per trade. FAILS SAFE: any error
+        leaves the position unchanged.
+        """
+        cfg = self.risk_config
+        if not getattr(cfg, "partial_tp_enabled", False):
+            return
+        if not bars or len(bars) < 16:
+            return
+        try:
+            import numpy as np
+            current_price = bars[-1]["close"]
+
+            # ATR computation (same window as decision engine)
+            highs = np.array([b["high"] for b in bars[-15:]])
+            lows = np.array([b["low"] for b in bars[-15:]])
+            closes = np.array([b["close"] for b in bars[-16:-1]])
+            tr = np.maximum(np.maximum(highs - lows, np.abs(highs - closes)), np.abs(lows - closes))
+            atr = float(np.mean(tr))
+            if atr <= 0:
+                atr = current_price * 0.02
+
+            partial_dist = cfg.partial_tp_atr_mult * atr
+            close_pct = cfg.partial_tp_close_pct
+
+            trades = (
+                db.query(Trade)
+                .filter(Trade.symbol == symbol, Trade.status.in_(["open", "filled"]))
+                .all()
+            )
+            for trade in trades:
+                if not trade.entry_price or not trade.quantity:
+                    continue
+                # Skip if partial TP already taken
+                notes = trade.notes or ""
+                if "PARTIAL_TP_DONE" in notes:
+                    continue
+
+                # Check if price has moved enough into profit
+                if trade.direction == "BUY":
+                    profit_dist = current_price - trade.entry_price
+                else:
+                    profit_dist = trade.entry_price - current_price
+
+                if profit_dist < partial_dist:
+                    continue
+
+                # Calculate partial close quantity
+                close_qty = trade.quantity * close_pct
+                if close_qty <= 0:
+                    continue
+
+                # Place partial close order
+                ut = UnifiedTrading()
+                close_side = OrderSide.SELL if trade.direction == "BUY" else OrderSide.BUY
+                res = ut.place_order(UnifiedOrder(
+                    symbol=trade.symbol,
+                    side=close_side,
+                    order_type=OrderType.MARKET,
+                    quantity=close_qty,
+                    reduce_only=True,
+                ))
+
+                if res.success:
+                    filled_px = res.filled_price or current_price
+                    if trade.direction == "BUY":
+                        partial_pnl = (filled_px - trade.entry_price) * close_qty
+                    else:
+                        partial_pnl = (trade.entry_price - filled_px) * close_qty
+
+                    # Reduce remaining quantity on the trade
+                    trade.quantity = trade.quantity - close_qty
+                    trade.notes = (notes + f" | PARTIAL_TP_DONE: closed {close_pct*100:.0f}% "
+                                   f"({close_qty:.6f}) @ {filled_px:.6f}, "
+                                   f"partial PnL=${partial_pnl:+.4f}")
+                    logger.info(
+                        f"  [ {symbol} ] PARTIAL TP: closed {close_pct*100:.0f}% "
+                        f"({close_qty:.6f}) @ {filled_px:.6f}, "
+                        f"PnL=${partial_pnl:+.4f}, remaining={trade.quantity:.6f}"
+                    )
+                    # Write partial PnL to InfluxDB for tracking
+                    try:
+                        import asyncio
+                        asyncio.get_event_loop().create_task(
+                            influx._write(
+                                influx.BUCKET_SYSTEM, "partial_tp",
+                                {"symbol": symbol, "direction": trade.direction},
+                                {"pnl": partial_pnl, "close_qty": close_qty,
+                                 "filled_price": filled_px},
+                            )
+                        )
+                    except Exception:
+                        pass
+                else:
+                    logger.warning(
+                        f"  [ {symbol} ] PARTIAL TP failed: {res.message}"
+                    )
+        except Exception as e:
+            logger.warning(f"  [ {symbol} ] partial-TP error (position unchanged): {e}")
+
     def _apply_trailing_stop(self, db, symbol: str, bars: list[dict]):
+
         """Ratchet-only ATR trailing stop.
 
         Once a position has moved `trail_activation_atr` x ATR into profit, the
@@ -1207,14 +1314,16 @@ class TradingLoopService:
                     hw = max(hw, current_price)
                     self._high_water[trade.id] = hw
 
-                    # Step-Trailing: Move to breakeven at 0.5x activation distance
+                    # Step-Trailing: Move to breakeven+fees at 0.75x activation distance
                     if hw - trade.entry_price < activation_dist:
-                        if hw - trade.entry_price >= (activation_dist * 0.5):
-                            candidate = trade.entry_price  # Breakeven
+                        if hw - trade.entry_price >= (activation_dist * 0.75):
+                            # Offset above entry to cover round-trip fees
+                            fee_offset = trail_dist * 0.1
+                            candidate = trade.entry_price + fee_offset
                             old_stop = trade.stop_loss if trade.stop_loss is not None else float("-inf")
                             if candidate > old_stop:
                                 trade.stop_loss = candidate
-                                logger.info(f"  [ {symbol} ] STEP-TRAIL ↑ stop to breakeven (hw={hw:.6f} >= 0.5 activation)")
+                                logger.info(f"  [ {symbol} ] STEP-TRAIL ↑ stop to BE+fees {candidate:.6f} (hw={hw:.6f} >= 0.75 activation)")
                                 self._sync_exchange_stop(trade, candidate)
                         continue
                     
@@ -1234,14 +1343,16 @@ class TradingLoopService:
                     lw = min(lw, current_price)
                     self._high_water[trade.id] = lw
 
-                    # Step-Trailing: Move to breakeven at 0.5x activation distance
+                    # Step-Trailing: Move to breakeven+fees at 0.75x activation distance
                     if trade.entry_price - lw < activation_dist:
-                        if trade.entry_price - lw >= (activation_dist * 0.5):
-                            candidate = trade.entry_price  # Breakeven
+                        if trade.entry_price - lw >= (activation_dist * 0.75):
+                            # Offset below entry to cover round-trip fees
+                            fee_offset = trail_dist * 0.1
+                            candidate = trade.entry_price - fee_offset
                             old_stop = trade.stop_loss if trade.stop_loss is not None else float("inf")
                             if candidate < old_stop:
                                 trade.stop_loss = candidate
-                                logger.info(f"  [ {symbol} ] STEP-TRAIL ↓ stop to breakeven (lw={lw:.6f} <= 0.5 activation)")
+                                logger.info(f"  [ {symbol} ] STEP-TRAIL ↓ stop to BE+fees {candidate:.6f} (lw={lw:.6f} <= 0.75 activation)")
                                 self._sync_exchange_stop(trade, candidate)
                         continue
                     candidate = lw + trail_dist
@@ -1327,6 +1438,8 @@ class TradingLoopService:
         # Ratchet the trailing stop up/down BEFORE evaluating the crossing,
         # so a profit-locked stop can fire in the same cycle.
         self._apply_trailing_stop(db, symbol, bars)
+        # ── Partial take-profit: close a portion at 1× ATR profit ──────────
+        self._apply_partial_tp(db, symbol, bars)
         current_price = bars[-1]["close"]
         trades = (
             db.query(Trade)
@@ -1334,6 +1447,7 @@ class TradingLoopService:
             .all()
         )
         for trade in trades:
+
             hit = False
             if trade.direction == "BUY":
                 if trade.stop_loss and current_price <= trade.stop_loss:

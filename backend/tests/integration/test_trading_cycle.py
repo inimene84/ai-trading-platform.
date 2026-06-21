@@ -45,7 +45,7 @@ async def test_single_cycle_paper_mode(monkeypatch, clean_db):
         # Mock InfluxDB, Sentiment, and Binance Account endpoints to avoid network hits
         with patch("backend.services.trading_loop.binance_futures_broker._get_client") as mock_binance_client, \
              patch("backend.services.trading_loop.influx") as mock_influx, \
-             patch("backend.services.trading_loop.sentiment_reader") as mock_sentiment, \
+             patch("backend.services.opinion_layer.sentiment_reader") as mock_sentiment, \
              patch("backend.services.trading_loop.binance_market_data") as mock_market_data, \
              patch.object(loop, "_fetch_bars", new_callable=AsyncMock, return_value=[{"close": 50000.0, "high": 51000.0, "low": 49000.0, "open": 49500.0, "volume": 100}]), \
              patch("backend.services.trading_loop.get_active_broker", return_value=mock_broker), \

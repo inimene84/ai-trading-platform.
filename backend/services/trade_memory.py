@@ -248,6 +248,7 @@ class TradeMemoryService:
 
         self._client = None
         self._collection_ready = False
+        self._task = None
         if _QDRANT_AVAILABLE and self.enabled:
             try:
                 self._client = AsyncQdrantClient(
@@ -260,6 +261,28 @@ class TradeMemoryService:
                 self._client = None
         elif not _QDRANT_AVAILABLE:
             logger.warning("TradeMemory: qdrant-client not installed — recall disabled")
+
+    def start(self) -> None:
+        """Start the background recorder loop task."""
+        import asyncio
+        if not self.enabled or not self._client:
+            return
+        if self._task and not self._task.done():
+            return
+        self._task = asyncio.create_task(self.run_recorder_loop())
+        logger.info("TradeMemory service loop started")
+
+    async def stop(self) -> None:
+        """Stop the background recorder loop task gracefully."""
+        if self._task and not self._task.done():
+            logger.info("Stopping TradeMemory recorder loop...")
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+            logger.info("TradeMemory recorder loop stopped")
+        self._task = None
 
     # ── internals ────────────────────────────────────────────────────────────
 

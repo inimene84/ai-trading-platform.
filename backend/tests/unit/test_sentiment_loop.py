@@ -1,6 +1,7 @@
 """Standalone test for sentiment_loop: aggregation + dry-run over all symbols.
 Mocks crypto_news_service and influx so no network/DB is touched."""
 import asyncio
+import pytest
 import sys
 import types
 
@@ -56,6 +57,7 @@ def test_aggregate():
     print("  aggregate: OK")
 
 
+@pytest.mark.asyncio
 async def test_dry_run_emits_all_symbols():
     svc = SentimentLoopService()
     svc._symbols = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "ADAUSDT"]
@@ -69,6 +71,7 @@ async def test_dry_run_emits_all_symbols():
     print(f"  dry_run: OK — all {len(per)} symbols emitted, 0 influx writes")
 
 
+@pytest.mark.asyncio
 async def test_live_run_writes_base_tags():
     WRITES.clear()
     svc = SentimentLoopService()

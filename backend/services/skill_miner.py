@@ -298,6 +298,29 @@ class SkillMinerService:
         self.threshold = float(os.getenv("SKILL_SIMILARITY_THRESHOLD", "0.80"))
         self.vector_size = int(os.getenv("TRADE_MEMORY_VECTOR_SIZE", "64"))
         self.lookback = int(os.getenv("SKILL_MINE_LOOKBACK", "2000"))
+        self._task = None
+
+    def start(self) -> None:
+        """Start the background miner loop task."""
+        import asyncio
+        if not self.enabled:
+            return
+        if self._task and not self._task.done():
+            return
+        self._task = asyncio.create_task(self.run_miner_loop())
+        logger.info("SkillMiner service loop started")
+
+    async def stop(self) -> None:
+        """Stop the background miner loop task gracefully."""
+        if self._task and not self._task.done():
+            logger.info("Stopping SkillMiner miner loop...")
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+            logger.info("SkillMiner miner loop stopped")
+        self._task = None
 
     # -- load --
     def _load_samples(self, limit: int) -> List[TradeSample]:

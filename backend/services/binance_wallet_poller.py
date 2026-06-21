@@ -22,6 +22,20 @@ async def start_wallet_poller():
     logger.info(f"Binance wallet poller started (interval={interval}s)")
 
 
+async def stop_wallet_poller():
+    """Stop the background wallet polling loop gracefully."""
+    global _task
+    if _task and not _task.done():
+        logger.info("Stopping Binance wallet poller...")
+        _task.cancel()
+        try:
+            await _task
+        except asyncio.CancelledError:
+            pass
+        logger.info("Binance wallet poller stopped")
+    _task = None
+
+
 async def _poll_loop():
     """Main polling loop - runs until process exits."""
     # Import here to avoid circular imports at module load time

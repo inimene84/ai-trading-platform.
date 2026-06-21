@@ -52,6 +52,9 @@ class _FakeQdrant:
     async def search(self, **kw):
         return self._search_hits
 
+    async def query_points(self, **kw):
+        return types.SimpleNamespace(points=self._search_hits)
+
 
 def _make_service(search_hits=None):
     svc = TradeMemoryService()

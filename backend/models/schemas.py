@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, ConfigDict
 from typing import List, Optional, Dict, Any
 from backend.llm.models import ModelProvider
 from enum import Enum
@@ -176,8 +176,7 @@ class FlowResponse(BaseModel):
     created_at: datetime
     updated_at: Optional[datetime]
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class FlowSummaryResponse(BaseModel):
@@ -190,8 +189,7 @@ class FlowSummaryResponse(BaseModel):
     created_at: datetime
     updated_at: Optional[datetime]
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # Flow Run schemas
@@ -221,8 +219,7 @@ class FlowRunResponse(BaseModel):
     results: Optional[Dict[str, Any]]
     error_message: Optional[str]
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class FlowRunSummaryResponse(BaseModel):
@@ -236,8 +233,7 @@ class FlowRunSummaryResponse(BaseModel):
     completed_at: Optional[datetime]
     error_message: Optional[str]
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # API Key schemas
@@ -267,8 +263,7 @@ class ApiKeyResponse(BaseModel):
     updated_at: Optional[datetime]
     last_used: Optional[datetime]
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class ApiKeySummaryResponse(BaseModel):
@@ -282,8 +277,7 @@ class ApiKeySummaryResponse(BaseModel):
     last_used: Optional[datetime]
     has_key: bool = True  # Indicates if a key is set
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class ApiKeyBulkUpdateRequest(BaseModel):

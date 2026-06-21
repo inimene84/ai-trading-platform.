@@ -11,7 +11,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/lib/vps_ssh_hygiene.sh"
 
 COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.prod.yml}"
-if [[ ! -f "$COMPOSE_FILE" ]]; then
+if [ ! -f "$COMPOSE_FILE" ]; then
   COMPOSE_FILE="docker-compose.yml"
 fi
 
@@ -19,7 +19,7 @@ echo "=== Hostinger VPS apply (main) ==="
 echo "Project: $PROJECT_DIR"
 echo "Compose: $COMPOSE_FILE"
 
-if [[ ! -f "$COMPOSE_FILE" ]]; then
+if [ ! -f "$COMPOSE_FILE" ]; then
   echo "ERROR: no compose file found"
   exit 1
 fi
@@ -37,7 +37,7 @@ git log -1 --oneline
 
 echo ""
 echo "=== 2. Env sanity (live trading + P0 gates) ==="
-if [[ -f .env ]]; then
+if [ -f .env ]; then
   sed -i 's/BINANCE_TESTNET=true/BINANCE_TESTNET=false/g' .env
   sed -i 's/DRY_RUN_ALL=true/DRY_RUN_ALL=false/g' .env
   sed -i 's/^PYRAMID_MIN_IMPROVEMENT=.*/PYRAMID_MIN_IMPROVEMENT=0/' .env
@@ -61,7 +61,7 @@ if [[ -f .env ]]; then
   EXPANDED_SYMBOLS='BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT,ADAUSDT,DOGEUSDT,AVAXUSDT,DOTUSDT,LINKUSDT,POLUSDT,LTCUSDT,UNIUSDT,ATOMUSDT,NEARUSDT,OPUSDT,ARBUSDT,APTUSDT,INJUSDT,SUIUSDT'
   if grep -q '^TRADING_SYMBOLS=' .env; then
     sym_count=$(grep '^TRADING_SYMBOLS=' .env | cut -d= -f2- | tr ',' '\n' | grep -c . || echo 0)
-    if [[ "$sym_count" -lt 15 ]]; then
+    if [ "$sym_count" -lt 15 ]; then
       sed -i "s|^TRADING_SYMBOLS=.*|TRADING_SYMBOLS=${EXPANDED_SYMBOLS}|" .env
       echo "  Expanded TRADING_SYMBOLS to ${sym_count} -> 20 symbols"
     fi
@@ -72,14 +72,14 @@ fi
 
 echo ""
 echo "=== 3. Frontend build ==="
-if [[ -d frontend ]]; then
+if [ -d frontend ]; then
   cd frontend
   export NODE_OPTIONS="${NODE_OPTIONS:---max-old-space-size=2048}"
   npm ci 2>/dev/null || npm install
   npm run build
   cd ..
 fi
-if [[ ! -f frontend/dist/index.html ]]; then
+if [ ! -f frontend/dist/index.html ]; then
   echo "ERROR: frontend/dist/index.html missing — dashboard will be blank"
   exit 1
 fi
@@ -92,7 +92,7 @@ docker network create trading-net 2>/dev/null || true
 echo ""
 echo "=== 5. Rebuild & start full stack ==="
 docker compose -f "$COMPOSE_FILE" up -d --build \
-  backend litellm nginx influxdb grafana qdrant
+  backend litellm nginx influxdb grafana qdrant mcp-server
 
 echo ""
 echo "=== 5b. InfluxDB buckets ==="
