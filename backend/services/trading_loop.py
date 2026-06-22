@@ -80,11 +80,22 @@ class TradingLoopService:
         self._high_water: dict = {}
         self._last_digest_date = None
 
+    @staticmethod
+    def _is_live_binance() -> bool:
+        from backend.services.trading_mode import get_trading_mode, TradingMode
+        return (
+            os.getenv("ACTIVE_BROKER", "ctrader") == "binance_futures"
+            and get_trading_mode() == TradingMode.LIVE
+        )
+
     @property
     def status(self) -> dict:
-        # Fetch real balance from active broker
         broker = get_active_broker()
-        balance_info = broker.get_balance() if hasattr(broker, 'get_balance') else {"balance": 0.0}
+        balance_info = (
+            broker.get_balance()
+            if hasattr(broker, "get_balance")
+            else {"balance": 0.0, "available": 0.0, "equity": 0.0, "margin_used": 0.0}
+        )
         return {
             "state": self._state,
             "running": self._running,
@@ -95,9 +106,9 @@ class TradingLoopService:
             "next_cycle": self._next_cycle,
             "cycle_count": self._cycle_count,
             "error": self._error,
-            "cash": 0.0,  # Paper trading
-            "equity": 0.0,  # Paper trading
-            "margin_used": 0.0,  # Paper trading
+            "cash": float(balance_info.get("available", balance_info.get("balance", 0.0))),
+            "equity": float(balance_info.get("equity", balance_info.get("balance", 0.0))),
+            "margin_used": float(balance_info.get("margin_used", 0.0)),
         }
 
     async def start(
@@ -162,16 +173,43 @@ class TradingLoopService:
         finally:
             db.close()
 
+    @staticmethod
+    def _pyramid_prices_from_trades(trades: list) -> dict[str, list[float]]:
+        """Rebuild pyramid add prices per symbol (base entry is NOT a layer)."""
+        by_symbol: dict[str, list] = {}
+        for t in trades:
+            by_symbol.setdefault(t.symbol, []).append(t)
+
+        layers: dict[str, list[float]] = {}
+        for symbol, sym_trades in by_symbol.items():
+            sym_trades_sorted = sorted(sym_trades, key=lambda x: x.id or 0)
+            base_id = sym_trades_sorted[0].id if sym_trades_sorted else None
+            pyramid_prices: list[float] = []
+            for t in sym_trades_sorted:
+                notes = t.notes or ""
+                if "pyramid_layer" in notes:
+                    if t.entry_price is not None:
+                        pyramid_prices.append(float(t.entry_price))
+                    continue
+                # Legacy rows without notes: first open trade is base, rest are adds
+                if len(sym_trades_sorted) > 1 and t.id != base_id:
+                    if t.entry_price is not None:
+                        pyramid_prices.append(float(t.entry_price))
+            if pyramid_prices:
+                layers[symbol] = pyramid_prices
+        return layers
+
     def _reconstruct_pyramid_layers(self):
-        """Populate self._pyramid_layers from open trades in DB."""
+        """Populate self._pyramid_layers from open pyramid-add trades in DB."""
         db = SessionLocal()
         try:
             open_trades = db.query(Trade).filter(Trade.status.in_(["open", "filled"])).all()
-            self._pyramid_layers = {}
-            for t in open_trades:
-                self._pyramid_layers.setdefault(t.symbol, []).append(t.entry_price)
+            self._pyramid_layers = self._pyramid_prices_from_trades(open_trades)
             if self._pyramid_layers:
-                logger.info(f"Reconstructed pyramid layers for symbols: {list(self._pyramid_layers.keys())}")
+                logger.info(
+                    "Reconstructed pyramid layers for symbols: "
+                    f"{ {k: len(v) for k, v in self._pyramid_layers.items()} }"
+                )
         except Exception as e:
             logger.warning(f"Failed to reconstruct pyramid layers: {e}")
         finally:
@@ -1438,7 +1476,11 @@ class TradingLoopService:
         # Ratchet the trailing stop up/down BEFORE evaluating the crossing,
         # so a profit-locked stop can fire in the same cycle.
         self._apply_trailing_stop(db, symbol, bars)
-        # ── Partial take-profit: close a portion at 1× ATR profit ──────────
+        # Live Binance: exchange SL/TP + _sync_positions_with_broker are authoritative.
+        # Software partial closes per DB row left legs open and caused restart incidents.
+        if self._is_live_binance():
+            return
+        # Partial take-profit: close a portion at 1× ATR profit (paper / non-live only)
         self._apply_partial_tp(db, symbol, bars)
         current_price = bars[-1]["close"]
         trades = (

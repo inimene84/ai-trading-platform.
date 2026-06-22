@@ -1,0 +1,77 @@
+"""Trading loop safety fixes: status balance, pyramid reconstruct, live SL/TP skip."""
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
+
+from backend.services.trading_loop import TradingLoopService
+
+
+def _trade(symbol, trade_id, entry_price, notes=None):
+    return SimpleNamespace(
+        symbol=symbol, id=trade_id, entry_price=entry_price, notes=notes
+    )
+
+
+def test_pyramid_prices_from_trades_ignores_base_entry():
+    trades = [
+        _trade("DOGEUSDT", 1, 0.10, notes=None),
+        _trade("DOGEUSDT", 2, 0.11, notes="pyramid_layer_1"),
+        _trade("DOGEUSDT", 3, 0.12, notes="pyramid_layer_2"),
+    ]
+    layers = TradingLoopService._pyramid_prices_from_trades(trades)
+    assert layers == {"DOGEUSDT": [0.11, 0.12]}
+
+
+def test_pyramid_prices_legacy_multi_row_without_notes():
+    trades = [
+        _trade("ARBUSDT", 10, 1.0, notes=None),
+        _trade("ARBUSDT", 11, 1.05, notes=None),
+    ]
+    layers = TradingLoopService._pyramid_prices_from_trades(trades)
+    assert layers == {"ARBUSDT": [1.05]}
+
+
+def test_pyramid_prices_single_base_not_counted():
+    trades = [_trade("ETHUSDT", 5, 3000.0, notes=None)]
+    layers = TradingLoopService._pyramid_prices_from_trades(trades)
+    assert layers == {}
+
+
+def test_status_uses_broker_balance():
+    loop = TradingLoopService()
+    mock_broker = MagicMock()
+    mock_broker.get_balance.return_value = {
+        "available": 44.0,
+        "equity": 91.5,
+        "margin_used": 47.0,
+    }
+    with patch("backend.services.trading_loop.get_active_broker", return_value=mock_broker):
+        st = loop.status
+    assert st["cash"] == 44.0
+    assert st["equity"] == 91.5
+    assert st["margin_used"] == 47.0
+
+
+def test_check_sl_tp_skips_software_close_on_live_binance():
+    loop = TradingLoopService()
+    db = MagicMock()
+    bars = [{"close": 100.0}]
+
+    with patch.object(loop, "_ensure_exchange_protection"), \
+         patch.object(loop, "_apply_trailing_stop"), \
+         patch.object(loop, "_is_live_binance", return_value=True), \
+         patch("backend.services.trading_loop.UnifiedTrading") as ut_cls:
+        loop._check_sl_tp(db, "BTCUSDT", bars)
+        ut_cls.assert_not_called()
+
+
+def test_check_sl_tp_runs_software_close_in_paper_mode():
+    loop = TradingLoopService()
+    db = MagicMock()
+    db.query.return_value.filter.return_value.all.return_value = []
+    bars = [{"close": 100.0}]
+
+    with patch.object(loop, "_ensure_exchange_protection"), \
+         patch.object(loop, "_apply_trailing_stop"), \
+         patch.object(loop, "_is_live_binance", return_value=False):
+        loop._check_sl_tp(db, "BTCUSDT", bars)
+    db.query.assert_called()

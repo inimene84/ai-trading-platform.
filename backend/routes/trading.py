@@ -29,6 +29,9 @@ class LoopStatusResponse(BaseModel):
     next_cycle: Optional[str]
     cycle_count: int
     error: Optional[str]
+    cash: Optional[float] = None
+    equity: Optional[float] = None
+    margin_used: Optional[float] = None
 
 class TradingConfigResponse(BaseModel):
     mode: str
@@ -526,24 +529,56 @@ async def loop_status():
 
 # ── Positions ─────────────────────────────────────────────────────────────────
 
+def _fetch_mark_prices_for_symbols(symbols: set[str]) -> dict[str, float]:
+    """Mark prices for open positions — Binance when live, else yfinance."""
+    prices: dict[str, float] = {}
+    if os.getenv("ACTIVE_BROKER", "ctrader") == "binance_futures":
+        try:
+            from backend.services.binance_futures_service import binance_futures_broker
+            for p in binance_futures_broker.get_positions():
+                sym = p.get("symbol")
+                mark = float(p.get("mark_price") or 0)
+                if sym and mark > 0:
+                    prices[sym] = mark
+        except Exception:
+            pass
+        missing = symbols - set(prices.keys())
+        if missing:
+            try:
+                from backend.services.binance_futures_service import BinanceFuturesService
+                bfs = BinanceFuturesService()
+                client = bfs._get_client()
+                for sym in missing:
+                    info = client.futures_mark_price(symbol=sym)
+                    mark = float(info.get("markPrice") or 0)
+                    if mark > 0:
+                        prices[sym] = mark
+            except Exception:
+                pass
+        return prices
+
+    import yfinance as yf
+    for sym in symbols:
+        try:
+            yf_sym = _to_yfinance_symbol(sym)
+            hist = yf.Ticker(yf_sym).history(period="5d")
+            if not hist.empty:
+                prices[sym] = float(hist["Close"].iloc[-1])
+        except Exception:
+            pass
+    return prices
+
+
 @router.get("/positions")
 async def get_positions():
     """Get all open positions with current P&L."""
     db = SessionLocal()
     try:
         open_trades = db.query(Trade).filter(Trade.status.in_(["open", "filled"])).all()
+        mark_prices = _fetch_mark_prices_for_symbols({t.symbol for t in open_trades})
         positions = []
         for t in open_trades:
-            current_price = t.entry_price
-            try:
-                import yfinance as yf
-                yf_sym = _to_yfinance_symbol(t.symbol)
-                ticker = yf.Ticker(yf_sym)
-                hist = ticker.history(period="5d")
-                if not hist.empty:
-                    current_price = float(hist["Close"].iloc[-1])
-            except Exception:
-                pass
+            current_price = mark_prices.get(t.symbol) or t.entry_price
 
             if t.direction == "BUY":
                 unrealized_pnl = (current_price - t.entry_price) * t.quantity

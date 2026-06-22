@@ -41,6 +41,7 @@ if [ -f .env ]; then
   sed -i 's/BINANCE_TESTNET=true/BINANCE_TESTNET=false/g' .env
   sed -i 's/DRY_RUN_ALL=true/DRY_RUN_ALL=false/g' .env
   grep -q '^PYRAMID_MIN_IMPROVEMENT=' .env || echo 'PYRAMID_MIN_IMPROVEMENT=0.005' >> .env
+  sed -i 's/^PYRAMID_MIN_IMPROVEMENT=0$/PYRAMID_MIN_IMPROVEMENT=0.005/' .env
   grep -q '^MIN_AVAILABLE_MARGIN_USDT=' .env || echo 'MIN_AVAILABLE_MARGIN_USDT=5' >> .env
   grep -q '^MAX_SAME_DIRECTION_POSITIONS=' .env || echo 'MAX_SAME_DIRECTION_POSITIONS=5' >> .env
   # Kill floor: never below $50 on a ~$128 account
