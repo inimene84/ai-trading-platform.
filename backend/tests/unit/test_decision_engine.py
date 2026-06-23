@@ -181,18 +181,9 @@ async def test_ranging_regime_sizing_and_gate(risk_config):
     result_trending = await engine.evaluate_symbol("ETHUSDT", bars, None, 0, [], False)
     assert result_trending is not None
     
-    # 3. Position sizing halving in RANGING regime
-    engine.regime_detector.detect = MagicMock(return_value=MagicMock(
-        regime="TRENDING"
-    ))
-    decision_trending = engine._create_entry_decision("ETHUSDT", bars, signal, "BUY", is_pyramid=False)
-    
-    engine.regime_detector.detect = MagicMock(return_value=MagicMock(
-        regime="RANGING"
-    ))
-    decision_ranging = engine._create_entry_decision("ETHUSDT", bars, signal, "BUY", is_pyramid=False)
+    # 3. Block new entries in RANGING regime (as per design in commit af175970)
+    decision_trending = engine._create_entry_decision("ETHUSDT", bars, signal, "BUY", is_pyramid=False, regime="TRENDING")
+    decision_ranging = engine._create_entry_decision("ETHUSDT", bars, signal, "BUY", is_pyramid=False, regime="RANGING")
     
     assert decision_trending is not None
-    assert decision_ranging is not None
-    # Ranging notional should be half of trending notional
-    assert decision_ranging.quantity == pytest.approx(decision_trending.quantity * 0.5)
+    assert decision_ranging is None

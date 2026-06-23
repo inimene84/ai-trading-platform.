@@ -4,14 +4,10 @@ Runs as a background asyncio task, scanning markets and generating signals/trade
 """
 
 import asyncio
-import json
-import logging
 import os
-import time
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 
-import pandas as pd
 import yfinance as yf
 from dotenv import load_dotenv
 
@@ -23,7 +19,7 @@ from backend.services.influxdb_writer import influx
 from backend.services.binance_market_data import binance_market_data
 from backend.strategies.market_regime import MarketRegimeDetector
 from backend.services.unified_trading import UnifiedTrading, UnifiedOrder, OrderSide, OrderType
-from backend.services.position_manager import get_position_manager, ExitOpinion
+from backend.services.position_manager import get_position_manager
 
 load_dotenv()
 
@@ -82,9 +78,6 @@ class TradingLoopService:
 
     @property
     def status(self) -> dict:
-        # Fetch real balance from active broker
-        broker = get_active_broker()
-        balance_info = broker.get_balance() if hasattr(broker, 'get_balance') else {"balance": 0.0}
         return {
             "state": self._state,
             "running": self._running,
@@ -179,11 +172,11 @@ class TradingLoopService:
 
     async def _sync_positions_with_broker(self, db):
         """Sync DB trades with actual broker positions.
-        Uses BinanceFuturesService directly — UnifiedTrading.get_positions() returns empty.
+        Uses the module-level binance_futures_broker singleton — avoids creating
+        a new BinanceFuturesService() (which calls futures_exchange_info() in __init__).
         """
         try:
-            from backend.services.binance_futures_service import BinanceFuturesService as _BFS_SYNC
-            _bfs_sync = _BFS_SYNC()
+            _bfs_sync = binance_futures_broker
             broker_raw = await asyncio.get_event_loop().run_in_executor(None, lambda: _bfs_sync.get_positions(raise_on_error=True))
             # Only symbols with non-zero position amount
             broker_symbols = {
@@ -292,6 +285,10 @@ class TradingLoopService:
 
     async def _run_cycle(self):
         """Execute one trading cycle across all symbols in parallel."""
+        # 0. Refresh RiskConfig from environment variables / .env
+        from backend.services.risk_config import refresh_risk_config
+        self.risk_config = refresh_risk_config()
+
         self._cycle_count += 1
         
         # UTC rollover daily digest trigger
@@ -394,16 +391,14 @@ class TradingLoopService:
             pm = get_position_manager()
             db_pre = SessionLocal()
             try:
-                from sqlalchemy import func as _func
                 pre_open = db_pre.query(Trade).filter(Trade.status.in_(["open", "filled"])).all()
                 if pre_open:
                     logger.info(f"  [POSITION MGR] Pre-sync review: {len(pre_open)} open positions")
-                    # Use BinanceFuturesService directly — UnifiedTrading returns 0 positions
-                    from backend.services.binance_futures_service import BinanceFuturesService as _BFS
+                    # Use module-level singleton — avoids creating a new
+                    # BinanceFuturesService() which calls futures_exchange_info().
                     live_prices = {}
                     try:
-                        _bfs = _BFS()
-                        for bp in _bfs.get_positions():
+                        for bp in binance_futures_broker.get_positions():
                             live_prices[bp['symbol']] = float(bp.get('mark_price') or bp.get('entry_price') or 0)
                     except Exception as _bfs_err:
                         logger.error(f"  [STEP 0] Price fetch error: {_bfs_err}")
@@ -483,14 +478,20 @@ class TradingLoopService:
         min_confidence = self.risk_config.min_signal_strength
         ai_threshold = self.risk_config.ai_analysis_threshold
         max_positions = self.risk_config.max_positions
-        # Snapshot account equity once per cycle for risk-based position sizing.
+        # Snapshot account balance ONCE per cycle — cached and reused everywhere
+        # below to avoid redundant Binance API calls (was 3x per cycle).
         try:
-            _bal = get_active_broker().get_balance()
+            self._cycle_balance = get_active_broker().get_balance()
+        except Exception as _be:
+            logger.warning(f"Could not fetch balance for cycle: {_be}")
+            self._cycle_balance = {}
+        _bal = self._cycle_balance
+        try:
             self._cycle_equity = float(_bal.get("equity", _bal.get("balance", 0.0)) or 0.0)
             self._cycle_available = float(_bal.get("available", 0.0) or 0.0)
             self._cycle_margin_used = float(_bal.get("margin_used", 0.0) or 0.0)
         except Exception as _be:
-            logger.warning(f"Could not fetch equity for sizing: {_be}")
+            logger.warning(f"Could not parse balance: {_be}")
             self._cycle_equity = 0.0
             self._cycle_available = 0.0
             self._cycle_margin_used = 0.0
@@ -642,14 +643,8 @@ class TradingLoopService:
         # ── MARGIN-AWARE GATEKEEPER ───────────────────────────────────────
         # Skip symbol evaluation if available balance is below minimum layer cost ($5)
         # to avoid API cost, LLM/Kronos latency, and log/DB spam.
+        # Uses the cached _cycle_balance from above (no redundant API call).
         margin_sufficient = True
-        try:
-            _bal = get_active_broker().get_balance()
-            self._cycle_available = float(_bal.get("available", 0.0) or 0.0)
-            self._cycle_equity = float(_bal.get("equity", _bal.get("balance", 0.0)) or 0.0)
-        except Exception as _be:
-            logger.warning(f"Could not re-fetch balance for margin check: {_be}")
-            self._cycle_available = getattr(self, "_cycle_available", 0.0)
 
         if self._cycle_available < 5.0:
             logger.warning(f"[MARGIN GATE] Insufficient available balance (${self._cycle_available:.2f} < $5.00). Skipping symbol evaluation.")
@@ -723,8 +718,8 @@ class TradingLoopService:
             except Exception as _pe:
                 logger.warning(f"performance metrics write failed: {_pe}")
             
-            _active_broker = get_active_broker()
-            bal = _active_broker.get_balance() if hasattr(_active_broker, 'get_balance') else {}
+            # Reuse cached cycle balance — no redundant API call
+            bal = getattr(self, '_cycle_balance', None) or {}
             await influx.write_portfolio_snapshot(
                 cash=bal.get("available", 0.0),
                 equity=bal.get("equity", 0.0),
@@ -767,7 +762,6 @@ class TradingLoopService:
         from backend.database.connection import SessionLocal
         from backend.database.models import Trade, TradingSignal
         from datetime import datetime, timezone
-        from backend.services.unified_trading import UnifiedTrading, UnifiedOrder, OrderSide, OrderType
         import asyncio
 
         db = SessionLocal()
@@ -783,9 +777,10 @@ class TradingLoopService:
 
             exchange_legs = []
             try:
-                from backend.services.binance_futures_service import BinanceFuturesService
+                # Use module-level singleton — avoids creating a new
+                # BinanceFuturesService() which calls futures_exchange_info().
                 exchange_legs = [
-                    p for p in BinanceFuturesService().get_positions(raise_on_error=True)
+                    p for p in binance_futures_broker.get_positions(raise_on_error=True)
                     if p.get("symbol") == symbol and float(p.get("quantity") or 0) > 0
                 ]
             except Exception as ex_e:

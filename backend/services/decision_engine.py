@@ -315,7 +315,7 @@ class DecisionEngine:
             return None
             
         # 7. Create Decision
-        decision = self._create_entry_decision(symbol, bars, signal, signal.signal, is_pyramid=False)
+        decision = self._create_entry_decision(symbol, bars, signal, signal.signal, is_pyramid=False, regime=regime_result.regime)
         if not decision:
             return None
 
@@ -351,7 +351,7 @@ class DecisionEngine:
                               tp=decision.take_profit, approved=True)
         return decision
 
-    def _create_entry_decision(self, symbol: str, bars: List[Dict[str, Any]], signal: Any, direction: str, is_pyramid: bool) -> Optional[Decision]:
+    def _create_entry_decision(self, symbol: str, bars: List[Dict[str, Any]], signal: Any, direction: str, is_pyramid: bool, regime: str = "UNKNOWN") -> Optional[Decision]:
         current_price = bars[-1]["close"]
         entry_price = signal.entry_price or current_price
 
@@ -380,7 +380,7 @@ class DecisionEngine:
         
         # Block NEW entries in RANGING regime (choppy = no new positions)
         # Pyramid adds are already separately blocked by the pyramid RANGING check.
-        regime = self.regime_detector.detect(bars).regime
+        # Uses the regime passed in from the caller to avoid redundant detection.
         if regime == "RANGING" and not is_pyramid:
             logger.info(f"[{symbol}] RANGING regime: blocking new entry (flat $25 sizing preserved)")
             return None
@@ -403,7 +403,7 @@ class DecisionEngine:
             stop_loss=sl,
             take_profit=tp,
             confidence=signal.confidence,
-            reasoning=f"Regime: {self.regime_detector.detect(bars).regime if bars else 'N/A'}",
+            reasoning=f"Regime: {regime}",
             is_pyramid=is_pyramid
         )
 
