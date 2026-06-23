@@ -31,6 +31,9 @@ env/
 node_modules/
 frontend/dist/
 frontend/.vite/
+frontend/src/tailwind-generated.css
+frontend/src/tailwind-output.css
+frontend/src/tw-build.css
 
 # ── Testing ──────────────────────────────────────────────────────────────────
 .pytest_cache/

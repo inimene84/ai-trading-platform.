@@ -4,39 +4,89 @@ An AI-powered multi-asset trading platform with real-time data, multi-agent anal
 
 > **Note:** This project began as a fork of `virattt/ai-hedge-fund` but has been heavily customized. It now includes extensive additional features such as Binance and cTrader integrations, Kronos workflow support, n8n webhook pipelines, InfluxDB time-series storage, and Qdrant vector database integration for news and sentiment analysis. This is a fully independent and expanded project.
 
-## Architecture
+## System Architecture & Lifecycle
 
-The platform architecture is divided into three main logical components:
+QuantumTrade Pro is engineered as a highly resilient, multi-layered AI-powered trading platform. The architecture comprises asynchronous background pollers, serialized execution loops, multi-agent consensus networks, and automated risk enforcement gates.
 
-- **Backend:** FastAPI + Trading Loop + Strategies + LLM Agents + Qdrant (Vectors) + InfluxDB (Time-series).
-- **Frontend:** React dashboard featuring Portfolio View, AI Signals, Market Data, and Workflow Flows.
-- **External Systems:** Broker APIs (Binance / cTrader), n8n for workflow automation, InfluxDB, and Qdrant.
-
-### Data Flow Diagram
+### Comprehensive Architecture Map
 
 ```mermaid
-flowchart TD
-    %% External Data & Systems
-    Data[Market Data] --> Strategies
-    News[News/Social] --> n8n[n8n Webhooks]
-    
-    %% Storage
-    n8n --> Qdrant[(Qdrant Vector DB)]
-    n8n --> Influx[(InfluxDB)]
-    
-    %% AI & Agents
-    Qdrant --> OpinionLayer[Opinion Layer]
-    Influx --> OpinionLayer
-    OpinionLayer --> Personas[LLM Agents: Buffett, Burry, etc.]
-    Personas --> CombinedStrategy
-    
-    %% Trading Engine
-    Strategies[Individual Strategies] --> CombinedStrategy[Combined Strategy]
-    CombinedStrategy --> UnifiedTrading[Unified Trading Engine]
-    
-    %% Execution
-    UnifiedTrading --> Brokers[Brokers: Binance / cTrader]
+graph TB
+    subgraph Startup["FastAPI Startup (main.py)"]
+        M[main.py] --> WP[Wallet Poller]
+        M --> OP[Order Poller]
+        M --> UT[Unified Trading Router]
+        M --> TL[Trading Loop]
+        M --> SL[Sentiment Loop]
+        M --> TM[Trade Memory Recorder]
+        M --> SM[Skill Miner]
+    end
+
+    subgraph TradingCycle["Trading Cycle (every 15m)"]
+        TL --> RG[Risk Guard]
+        RG --> KS[Kill Switch]
+        KS --> PM[Position Manager<br>Emergency Exits]
+        PM --> SYNC[Broker Sync]
+        SYNC --> GATE[Margin Gate]
+        GATE --> SQG[Symbol Quality Gate]
+        SQG --> PS["_process_symbol() × N"]
+    end
+
+    subgraph PerSymbol["Per-Symbol Pipeline"]
+        PS --> DE[Decision Engine]
+        DE --> STR[Combined Strategy<br>5 sub-strategies]
+        DE --> KRO[Kronos Foundation Model]
+        DE --> OL[Opinion Layer<br>8+ agents]
+        DE --> RR[LLM Risk Reviewer]
+        DE --> ORD[Order Execution]
+        ORD --> BFS[Binance Futures Service]
+    end
+
+    subgraph Storage["Data Layer"]
+        PG[(PostgreSQL<br>Trades, Signals, Snapshots)]
+        IDB[(InfluxDB<br>Time-series metrics)]
+        QD[(Qdrant<br>Vector store: news + trade memory)]
+    end
+
+    BFS --> PG
+    TL --> IDB
+    OL --> QD
 ```
+
+---
+
+### Core Architectural Layers
+
+#### 1. FastAPI Application Lifecycle & Reliability
+- **Lifespan Manager**: Startup and shutdown events are managed by a FastAPI `lifespan` context manager.
+- **Task Restart Supervisor**: Background tasks (wallet poller, order poller, main trading loop, sentiment loop, trade-memory recorder, and skill miner) are scheduled under an auto-restart supervisor. If any background task crashes with an unhandled exception, it is logged and automatically restarted after a 10-second delay, preventing silent failures.
+- **Graceful Shutdown**: On application termination, all supervised tasks are cleanly cancelled and awaited.
+
+#### 2. Hard Safety Gates & Risk Management
+Before any trading logic evaluates a market, the loop enforces a **fail-closed stack of 9 safety gates**:
+1. **Risk Guard**: Monitors rolling-window drawdown, daily loss limits, and max open positions.
+2. **Kill Switch**: Hard stops all trading if account equity drops below a flat threshold (default $65).
+3. **Emergency Position Manager**: Reviews open trades against live broker mark prices before position synchronization.
+4. **Broker Position Sync**: Serializes database trades with actual exchange-held positions.
+5. **Position Manager Exits**: Evaluates AI technical opinions to trigger early exits.
+6. **Margin Gate**: Skips entry pipeline if available margin falls below a safety floor (default $5).
+7. **Symbol Quality Gate**: Blocks blacklisted symbols and enforces a minimum $50M daily volume floor.
+8. **Per-Symbol Engine**: Evaluates strategy signals, foundation models, and LLM vetoes.
+9. **Execution Lock**: Serializes order placement across parallel symbol scans to prevent race conditions.
+
+#### 3. Per-Symbol Decision Pipeline
+Each symbol is analyzed through a multi-tiered pipeline:
+- **Combined Strategy**: Evaluates 5 technical sub-strategies (trend following, momentum, mean reversion, volatility, and statistical arbitrage) to generate a base signal.
+- **Kronos Foundation Model**: Runs a deep-learning time-series forecasting model to boost, dampen, or veto the signal.
+- **AI Opinion Layer**: A weighted consensus network aggregating 8+ distinct analytical agents (technical analysis, foundation model, social sentiment, news archives, macro indexes, semantic trade memory, and skill miner).
+- **LLM Risk Reviewer**: A final, fail-open LLM agent that acts as a Chief Risk Officer, validating the trade size, SL/TP levels, and market context before signing off on order execution.
+
+#### 4. Dual-Mode Order Router & Brokers
+- **Unified Trading Engine**: A thread-safe order router that manages both paper trading and live execution.
+- **Paper Fill Engine**: Simulates a realistic order book with transaction fees, margin tracking, and real-time P&L calculation.
+- **Exchange Integration**: Interfaces directly with Binance Futures (USDT-M and USDC-M perpetuals) and cTrader (Forex/CFDs) using native APIs, native SL/TP placement, and hedge-mode safety guards.
+
+---
 
 ## Quickstart
 

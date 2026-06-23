@@ -1,4 +1,3 @@
-import os
 from pydantic_settings import BaseSettings
 from pydantic import AliasChoices, Field as PydanticField
 
@@ -249,9 +248,18 @@ def get_risk_config() -> RiskConfig:
         _risk_config = RiskConfig()
     return _risk_config
 
-def get_trading_mode() -> str:
-    """Resolve trading mode (paper vs. live) based on config/env variables."""
-    # If PAPER_TRADING is true or DRY_RUN_ALL is true, it is paper mode
-    paper_trading = os.getenv("PAPER_TRADING", "false").lower() == "true"
-    dry_run = os.getenv("DRY_RUN_ALL", "true").lower() == "true"
-    return "paper" if (paper_trading or dry_run) else "live"
+
+def refresh_risk_config() -> RiskConfig:
+    """Force-reload configuration from environment variables."""
+    global _risk_config
+    # Reload dotenv to ensure we grab the latest changes from .env
+    from dotenv import load_dotenv
+    load_dotenv(override=True)
+    _risk_config = RiskConfig()
+    return _risk_config
+
+
+# Re-export get_trading_mode from the canonical location so existing
+# `from backend.services.risk_config import get_trading_mode` imports
+# keep working without code changes in callers.
+from backend.services.trading_mode import get_trading_mode  # noqa: F401

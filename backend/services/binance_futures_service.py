@@ -109,6 +109,18 @@ TICK_SIZES = {
     'AVAXUSDC': 0.001,     'LINKUSDC': 0.001,    'UNIUSDC':  0.001,
 }
 
+# Minimum order notional per symbol (from /fapi/v1/exchangeInfo MIN_NOTIONAL filter)
+MIN_NOTIONAL = {
+    'BTCUSDT': 100.0, 'ETHUSDT': 20.0, 'SOLUSDT': 20.0,
+    'BNBUSDT': 20.0,  'XRPUSDT': 20.0, 'ADAUSDT': 20.0,
+    'DOGEUSDT': 20.0, 'AVAXUSDT': 20.0, 'DOTUSDT': 20.0,
+    'LINKUSDT': 20.0, 'LTCUSDT': 20.0,
+    'BTCUSDC': 100.0, 'ETHUSDC': 20.0, 'SOLUSDC': 20.0,
+    'BNBUSDC': 20.0,  'XRPUSDC': 20.0, 'ADAUSDC': 20.0,
+    'AVAXUSDC': 20.0, 'LINKUSDC': 20.0,
+}
+
+
 
 class BinanceClientProxy:
     """Wrapper around binance.client.Client that intercepts all method calls
@@ -298,16 +310,7 @@ class BinanceFuturesService:
         min_qty = MIN_QTY.get(sym, 0.001)
         trade_usdt = float(os.getenv("TRADE_USDT_AMOUNT", "10.0"))
         # Per-symbol min notional from Binance /fapi/v1/exchangeInfo MIN_NOTIONAL filter
-        min_notional_map = {
-            'BTCUSDT': 100.0, 'ETHUSDT': 20.0, 'SOLUSDT': 20.0,
-            'BNBUSDT': 20.0,  'XRPUSDT': 20.0, 'ADAUSDT': 20.0,
-            'DOGEUSDT': 20.0, 'AVAXUSDT': 20.0, 'DOTUSDT': 20.0,
-            'LINKUSDT': 20.0, 'LTCUSDT': 20.0,
-            'BTCUSDC': 100.0, 'ETHUSDC': 20.0, 'SOLUSDC': 20.0,
-            'BNBUSDC': 20.0,  'XRPUSDC': 20.0, 'ADAUSDC': 20.0,
-            'AVAXUSDC': 20.0, 'LINKUSDC': 20.0,
-        }
-        min_notional = min_notional_map.get(sym, 20.0)  # safe default: $20
+        min_notional = MIN_NOTIONAL.get(sym, 20.0)  # safe default: $20
         if price > 0:
             notional_qty = trade_usdt / price
             min_notional_qty = min_notional / price
@@ -688,14 +691,7 @@ class BinanceFuturesService:
             # Even when quantity is supplied externally (e.g. by DecisionEngine),
             # ensure the order meets Binance's MIN_NOTIONAL filter to avoid -4164.
             if price > 0 and action != 'close':
-                _min_notional_map = {
-                    'BTCUSDT': 100.0, 'ETHUSDT': 20.0, 'SOLUSDT': 20.0,
-                    'BNBUSDT': 20.0,  'XRPUSDT': 20.0, 'ADAUSDT': 20.0,
-                    'DOGEUSDT': 20.0, 'AVAXUSDT': 20.0, 'DOTUSDT': 20.0,
-                    'LINKUSDT': 20.0, 'LTCUSDT': 20.0,
-                    'BTCUSDC': 100.0, 'ETHUSDC': 20.0,
-                }
-                _min_not = _min_notional_map.get(futures_sym, 20.0)
+                _min_not = MIN_NOTIONAL.get(futures_sym, 20.0)
                 _actual_notional = quantity * price
                 if _actual_notional < _min_not:
                     _old_qty = quantity
