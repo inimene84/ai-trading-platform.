@@ -40,9 +40,7 @@ from typing import Optional
 from backend.services.crypto_news_service import crypto_news_service
 from backend.services.influxdb_writer import influx
 from backend.services.qdrant_client import qdrant
-
-import httpx
-
+from backend.utils.embeddings import generate_text_embedding
 
 logger = logging.getLogger(__name__)
 
@@ -364,30 +362,8 @@ class SentimentLoopService:
         return round(new_score, 4), round(new_impact, 4), new_dir
 
     async def _generate_embedding(self, text: str) -> Optional[list[float]]:
-        """Best-effort embedding for news articles."""
-        if not text.strip():
-            return None
-        base = os.getenv("LITELLM_BASE_URL", "http://litellm:4000/v1").rstrip("/")
-        key = os.getenv("LITELLM_API_KEY", "") or os.getenv("KIE_API_KEY", "")
-        model = os.getenv("TRADE_MEMORY_EMBED_MODEL", "text-embedding-3-small")
-        try:
-            async with httpx.AsyncClient(timeout=8.0) as cx:
-                r = await cx.post(
-                    f"{base}/embeddings",
-                    headers={"Authorization": f"Bearer {key}"} if key else {},
-                    json={"model": model, "input": text},
-                )
-                r.raise_for_status()
-                data = r.json()
-                emb = data["data"][0]["embedding"]
-                # Qdrant news collection uses 1536d
-                if len(emb) >= 1536:
-                    return emb[:1536]
-                else:
-                    return emb + [0.0] * (1536 - len(emb))
-        except Exception as e:
-            logger.warning(f"[sentiment] News embedding failed: {e}")
-            return None
+        """Best-effort embedding for news articles (OpenRouter → LiteLLM)."""
+        return await generate_text_embedding(text, normalize=False)
 
     async def run_macro_tick(self, dry_run: bool = False) -> None:
         """Fetch and write global macro sentiment (Fear & Greed)."""

@@ -40,6 +40,8 @@ from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+from backend.utils.embeddings import generate_text_embedding
+
 logger = logging.getLogger(__name__)
 
 # Reuse the existing async Qdrant client primitives. We talk to a *separate*
@@ -323,30 +325,11 @@ class TradeMemoryService:
         return feature_vector(context, self.vector_size)
 
     async def _llm_embed(self, context: Dict[str, Any]) -> Optional[List[float]]:
-        """Best-effort embedding via the LiteLLM OpenAI-compatible proxy.
-        Returns None on any problem so the caller falls back to features."""
-        import httpx  # local import — only needed on the LLM path
-
-        base = os.getenv("LITELLM_BASE_URL", "http://litellm:4000/v1").rstrip("/")
-        key = os.getenv("LITELLM_API_KEY", "") or os.getenv("KIE_API_KEY", "")
-        model = os.getenv("TRADE_MEMORY_EMBED_MODEL", "text-embedding-3-small")
+        """Best-effort embedding via OpenRouter (fallback LiteLLM)."""
         text = _context_to_text(context)
-        async with httpx.AsyncClient(timeout=8.0) as cx:
-            r = await cx.post(
-                f"{base}/embeddings",
-                headers={"Authorization": f"Bearer {key}"} if key else {},
-                json={"model": model, "input": text},
-            )
-            r.raise_for_status()
-            data = r.json()
-            emb = data["data"][0]["embedding"]
-            # Resize to our collection's fixed width (truncate or pad+normalise).
-            if len(emb) >= self.vector_size:
-                emb = emb[: self.vector_size]
-            else:
-                emb = emb + [0.0] * (self.vector_size - len(emb))
-            norm = math.sqrt(sum(x * x for x in emb)) or 1.0
-            return [x / norm for x in emb]
+        return await generate_text_embedding(
+            text, vector_size=self.vector_size, normalize=True
+        )
 
     # ── public: record ────────────────────────────────────────────────────────
 
