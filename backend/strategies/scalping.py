@@ -65,8 +65,10 @@ class ScalpingStrategy(BaseStrategy):
         e13= float(s.ewm(span=self.ema_slow, adjust=False).mean().iloc[-1])
 
         # ATR
-        h = pd.Series(highs); l = pd.Series(lows); c = pd.Series(closes)
-        tr  = pd.concat([h - l, (h - c.shift()).abs(), (l - c.shift()).abs()], axis=1).max(axis=1)
+        h = pd.Series(highs)
+        lows_s = pd.Series(lows)
+        c = pd.Series(closes)
+        tr  = pd.concat([h - lows_s, (h - c.shift()).abs(), (lows_s - c.shift()).abs()], axis=1).max(axis=1)
         atr = float(tr.ewm(span=14, adjust=False).mean().iloc[-1])
 
         # VWAP
@@ -96,10 +98,12 @@ class ScalpingStrategy(BaseStrategy):
             reasons.append(f"EMA{self.ema_fast}>{self.ema_mid}>{self.ema_slow} ribbon")
             reasons.append(f"price>{vwap:.5f} VWAP")
             if strong_candle:
-                confidence += 0.3; reasons.append(f"strong bull candle ({body_pct:.0%})")
+                confidence += 0.3
+                reasons.append(f"strong bull candle ({body_pct:.0%})")
             # Momentum: last 3 closes trending up
             if len(closes) >= 3 and closes[-1] > closes[-2] > closes[-3]:
-                confidence += 0.2; reasons.append("3-bar momentum")
+                confidence += 0.2
+                reasons.append("3-bar momentum")
             # Tight spread (scalping needs low spread)
             signal = "BUY"
             stop_loss   = price - atr * self.atr_stop_mult
@@ -110,9 +114,11 @@ class ScalpingStrategy(BaseStrategy):
             reasons.append(f"EMA{self.ema_fast}<{self.ema_mid}<{self.ema_slow} ribbon")
             reasons.append(f"price<{vwap:.5f} VWAP")
             if strong_candle:
-                confidence += 0.3; reasons.append(f"strong bear candle ({body_pct:.0%})")
+                confidence += 0.3
+                reasons.append(f"strong bear candle ({body_pct:.0%})")
             if len(closes) >= 3 and closes[-1] < closes[-2] < closes[-3]:
-                confidence += 0.2; reasons.append("3-bar momentum")
+                confidence += 0.2
+                reasons.append("3-bar momentum")
             signal = "SELL"
             stop_loss   = price + atr * self.atr_stop_mult
             take_profit = price - atr * self.atr_tp_mult

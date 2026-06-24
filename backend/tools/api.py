@@ -5,8 +5,6 @@ import pandas as pd
 import requests
 import time
 
-logger = logging.getLogger(__name__)
-
 from backend.data.cache import get_cache
 from backend.data.models import (
     CompanyNews,
@@ -21,6 +19,8 @@ from backend.data.models import (
     InsiderTradeResponse,
     CompanyFactsResponse,
 )
+
+logger = logging.getLogger(__name__)
 
 # Global cache instance
 _cache = get_cache()

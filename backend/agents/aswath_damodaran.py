@@ -20,7 +20,7 @@ from backend.utils.progress import progress
 
 class AswathDamodaranSignal(BaseModel):
     signal: Literal["bullish", "bearish", "neutral"]
-    confidence: float          # 0‒100
+    confidence: float  # 0‒100
     reasoning: str
 
 
@@ -33,10 +33,10 @@ def aswath_damodaran_agent(state: AgentState, agent_id: str = "aswath_damodaran_
       • Cross-check with relative valuation (PE vs. Fwd PE sector median proxy)
     Produces a trading signal and explanation in Damodaran's analytical voice.
     """
-    data      = state["data"]
-    end_date  = data["end_date"]
-    tickers   = data["tickers"]
-    api_key  = get_api_key_from_state(state, "FINANCIAL_DATASETS_API_KEY")
+    data = state["data"]
+    end_date = data["end_date"]
+    tickers = data["tickers"]
+    api_key = get_api_key_from_state(state, "FINANCIAL_DATASETS_API_KEY")
 
     analysis_data: dict[str, dict] = {}
     damodaran_signals: dict[str, dict] = {}
@@ -44,7 +44,9 @@ def aswath_damodaran_agent(state: AgentState, agent_id: str = "aswath_damodaran_
     for ticker in tickers:
         # ─── Fetch core data ────────────────────────────────────────────────────
         progress.update_status(agent_id, ticker, "Fetching financial metrics")
-        metrics = get_financial_metrics(ticker, end_date, period="ttm", limit=5, api_key=api_key)
+        metrics = get_financial_metrics(
+            ticker, end_date, period="ttm", limit=5, api_key=api_key
+        )
 
         progress.update_status(agent_id, ticker, "Fetching financial line items")
         line_items = search_line_items(
@@ -74,7 +76,9 @@ def aswath_damodaran_agent(state: AgentState, agent_id: str = "aswath_damodaran_
         risk_analysis = analyze_risk_profile(metrics, line_items)
 
         progress.update_status(agent_id, ticker, "Calculating intrinsic value (DCF)")
-        intrinsic_val_analysis = calculate_intrinsic_value_dcf(metrics, line_items, risk_analysis)
+        intrinsic_val_analysis = calculate_intrinsic_value_dcf(
+            metrics, line_items, risk_analysis
+        )
 
         progress.update_status(agent_id, ticker, "Assessing relative valuation")
         relative_val_analysis = analyze_relative_valuation(metrics)
@@ -85,11 +89,17 @@ def aswath_damodaran_agent(state: AgentState, agent_id: str = "aswath_damodaran_
             + risk_analysis["score"]
             + relative_val_analysis["score"]
         )
-        max_score = growth_analysis["max_score"] + risk_analysis["max_score"] + relative_val_analysis["max_score"]
+        max_score = (
+            growth_analysis["max_score"]
+            + risk_analysis["max_score"]
+            + relative_val_analysis["max_score"]
+        )
 
         intrinsic_value = intrinsic_val_analysis["intrinsic_value"]
         margin_of_safety = (
-            (intrinsic_value - market_cap) / market_cap if intrinsic_value and market_cap else None
+            (intrinsic_value - market_cap) / market_cap
+            if intrinsic_value and market_cap
+            else None
         )
 
         # Decision rules (Damodaran tends to act with ~20-25 % MOS)
@@ -123,7 +133,9 @@ def aswath_damodaran_agent(state: AgentState, agent_id: str = "aswath_damodaran_
 
         damodaran_signals[ticker] = damodaran_output.model_dump()
 
-        progress.update_status(agent_id, ticker, "Done", analysis=damodaran_output.reasoning)
+        progress.update_status(
+            agent_id, ticker, "Done", analysis=damodaran_output.reasoning
+        )
 
     # ─── Push message back to graph state ──────────────────────────────────────
     message = HumanMessage(content=json.dumps(damodaran_signals), name=agent_id)
@@ -187,7 +199,12 @@ def analyze_growth_and_reinvestment(metrics: list, line_items: list) -> dict[str
         score += 1
         details.append(f"ROIC {latest.return_on_invested_capital:.1%} (> 10 %)")
 
-    return {"score": score, "max_score": max_score, "details": "; ".join(details), "metrics": latest.model_dump()}
+    return {
+        "score": score,
+        "max_score": max_score,
+        "details": "; ".join(details),
+        "metrics": latest.model_dump(),
+    }
 
 
 def analyze_risk_profile(metrics: list, line_items: list) -> dict[str, any]:
@@ -260,7 +277,11 @@ def analyze_relative_valuation(metrics: list) -> dict[str, any]:
     """
     max_score = 1
     if not metrics or len(metrics) < 5:
-        return {"score": 0, "max_score": max_score, "details": "Insufficient P/E history"}
+        return {
+            "score": 0,
+            "max_score": max_score,
+            "details": "Insufficient P/E history",
+        }
 
     pes = [m.price_to_earnings_ratio for m in metrics if m.price_to_earnings_ratio]
     if len(pes) < 5:
@@ -282,7 +303,9 @@ def analyze_relative_valuation(metrics: list) -> dict[str, any]:
 # ────────────────────────────────────────────────────────────────────────────────
 # Intrinsic value via FCFF DCF (Damodaran style)
 # ────────────────────────────────────────────────────────────────────────────────
-def calculate_intrinsic_value_dcf(metrics: list, line_items: list, risk_analysis: dict) -> dict[str, any]:
+def calculate_intrinsic_value_dcf(
+    metrics: list, line_items: list, risk_analysis: dict
+) -> dict[str, any]:
     """
     FCFF DCF with:
       • Base FCFF = latest free cash flow
@@ -349,8 +372,8 @@ def calculate_intrinsic_value_dcf(metrics: list, line_items: list, risk_analysis
 
 def estimate_cost_of_equity(beta: float | None) -> float:
     """CAPM: r_e = r_f + β × ERP (use Damodaran's long-term averages)."""
-    risk_free = 0.04          # 10-yr US Treasury proxy
-    erp = 0.05                # long-run US equity risk premium
+    risk_free = 0.04  # 10-yr US Treasury proxy
+    erp = 0.05  # long-run US equity risk premium
     beta = beta if beta is not None else 1.0
     return risk_free + beta * erp
 
@@ -401,7 +424,9 @@ def generate_damodaran_output(
         ]
     )
 
-    prompt = template.invoke({"analysis_data": json.dumps(analysis_data, indent=2), "ticker": ticker})
+    prompt = template.invoke(
+        {"analysis_data": json.dumps(analysis_data, indent=2), "ticker": ticker}
+    )
 
     def default_signal():
         return AswathDamodaranSignal(

@@ -13,6 +13,12 @@ from backend.database.connection import SessionLocal
 from backend.database.models import TradingSignal, Trade, PortfolioSnapshot
 from backend.services.trading_loop import trading_loop
 from backend.services.ai_analysis import ai_analysis_service
+from backend.services.unified_trading import (
+    UnifiedTrading, UnifiedOrder, OrderSide, OrderType,
+)
+
+import logging
+logger = logging.getLogger(__name__)
 
 class StartLoopRequest(BaseModel):
     interval_minutes: int = 15
@@ -1103,10 +1109,6 @@ async def get_crypto_news(limit: int = 20):
 # ═══════════════════════════════════════════════════════════════════════════════
 # Unified Trading Routes  (Fincept port)
 # ════════════════════════════════════════════════════════════════════════════════
-
-from backend.services.unified_trading import (
-    UnifiedTrading, UnifiedOrder, OrderSide, OrderType,
-)
 
 
 @router.post("/session/init")

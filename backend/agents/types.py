@@ -22,9 +22,12 @@ class AgentOpinion(BaseModel):
     """
 
     agent_name: str = Field(
-        ..., description="Identifier for the agent (e.g. 'warren_buffett', 'technical_analyst')"
+        ...,
+        description="Identifier for the agent (e.g. 'warren_buffett', 'technical_analyst')",
     )
-    symbol: str = Field(default="", description="Trading symbol evaluated (e.g. 'BTCUSDT')")
+    symbol: str = Field(
+        default="", description="Trading symbol evaluated (e.g. 'BTCUSDT')"
+    )
     view: Literal["bullish", "bearish", "neutral"] = Field(
         default="neutral", description="Directional opinion"
     )
@@ -39,7 +42,8 @@ class AgentOpinion(BaseModel):
     )
     reasoning: str = Field(default="", description="Human-readable rationale")
     metadata: dict = Field(
-        default_factory=dict, description="Extra data (kronos predictions, social scores, etc.)"
+        default_factory=dict,
+        description="Extra data (kronos predictions, social scores, etc.)",
     )
 
     # ── Convenience helpers ──────────────────────────────────────────────────

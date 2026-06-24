@@ -29,13 +29,13 @@ def ema(series: list[float], period: int) -> list[float]:
 def adx(highs, lows, closes, period=14):
     """Average Directional Index."""
     h = pd.Series(highs)
-    l = pd.Series(lows)
+    lows_s = pd.Series(lows)
     c = pd.Series(closes)
     up_move   = h.diff()
-    down_move = -l.diff()
+    down_move = -lows_s.diff()
     plus_dm   = up_move.where((up_move > down_move) & (up_move > 0), 0.0)
     minus_dm  = down_move.where((down_move > up_move) & (down_move > 0), 0.0)
-    tr = pd.concat([h - l, (h - c.shift()).abs(), (l - c.shift()).abs()], axis=1).max(axis=1)
+    tr = pd.concat([h - lows_s, (h - c.shift()).abs(), (lows_s - c.shift()).abs()], axis=1).max(axis=1)
     atr_s     = tr.ewm(span=period, adjust=False).mean()
     plus_di   = 100 * plus_dm.ewm(span=period, adjust=False).mean() / (atr_s + 1e-9)
     minus_di  = 100 * minus_dm.ewm(span=period, adjust=False).mean() / (atr_s + 1e-9)
@@ -64,7 +64,9 @@ class TrendFollowingStrategy(BaseStrategy):
         volumes = self._volumes(bars)
 
         # ATR for SL/TP
-        h_s = pd.Series(highs); l_s = pd.Series(lows); c_s = pd.Series(closes)
+        h_s = pd.Series(highs)
+        l_s = pd.Series(lows)
+        c_s = pd.Series(closes)
         tr = pd.concat([h_s - l_s, (h_s - c_s.shift()).abs(), (l_s - c_s.shift()).abs()], axis=1).max(axis=1)
         atr = float(tr.ewm(span=14, adjust=False).mean().iloc[-1])
 
@@ -138,11 +140,14 @@ class TrendFollowingStrategy(BaseStrategy):
             sell_conf = 0.0
             sell_reasons = []
             if fast_cur < slow_cur:
-                sell_conf += 0.3; sell_reasons.append(f"EMA{self.fast_ema}<{self.slow_ema}")
+                sell_conf += 0.3
+                sell_reasons.append(f"EMA{self.fast_ema}<{self.slow_ema}")
             if macd_hist < 0:
-                sell_conf += 0.2; sell_reasons.append("MACD-")
+                sell_conf += 0.2
+                sell_reasons.append("MACD-")
             if adx_val > 25:
-                sell_conf += 0.2; sell_reasons.append(f"ADX={adx_val:.1f}")
+                sell_conf += 0.2
+                sell_reasons.append(f"ADX={adx_val:.1f}")
             elif adx_val > self.adx_thresh:
                 sell_conf += 0.1
             if not above_200:

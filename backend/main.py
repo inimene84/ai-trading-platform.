@@ -9,6 +9,17 @@ from dotenv import load_dotenv
 import sentry_sdk
 import structlog
 
+from backend.routes import api_router
+from backend.database.connection import engine
+from backend.database.models import Base
+from backend.services.ollama_service import ollama_service
+from backend.services.binance_wallet_poller import start_wallet_poller
+from backend.services.binance_order_poller import start_order_poller
+from backend.services.unified_trading import UnifiedTrading
+from backend.services.ctrader_service import ctrader_broker
+from backend.services.binance_futures_service import binance_futures_broker
+from backend.services.trading_loop import trading_loop
+from backend.security import admin_auth_enabled, is_sensitive_request, validate_admin_request
 # Load environment variables
 load_dotenv()
 
@@ -45,17 +56,7 @@ structlog.configure(
     cache_logger_on_first_use=True,
 )
 
-from backend.routes import api_router
-from backend.database.connection import engine
-from backend.database.models import Base
-from backend.services.ollama_service import ollama_service
-from backend.services.binance_wallet_poller import start_wallet_poller
-from backend.services.binance_order_poller import start_order_poller
-from backend.services.unified_trading import UnifiedTrading
-from backend.services.ctrader_service import ctrader_broker
-from backend.services.binance_futures_service import binance_futures_broker
-from backend.services.trading_loop import trading_loop
-from backend.security import admin_auth_enabled, is_sensitive_request, validate_admin_request
+
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)

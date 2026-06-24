@@ -2,6 +2,8 @@ from logging.config import fileConfig
 import os
 from dotenv import load_dotenv
 
+from backend.database.models import Base
+
 from sqlalchemy import engine_from_config
 from sqlalchemy import pool
 
@@ -26,7 +28,6 @@ if config.config_file_name is not None:
 
 # add your model's MetaData object here
 # for 'autogenerate' support
-from backend.database.models import Base
 target_metadata = Base.metadata
 
 # other values from the config, defined by the needs of env.py,

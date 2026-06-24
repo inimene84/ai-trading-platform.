@@ -49,9 +49,9 @@ async def _fetch_bars(symbol: str, limit: int) -> list[dict]:
         for i in range(limit):
             o = price
             h = price * (1 + random.uniform(0, 0.02))
-            l = price * (1 - random.uniform(0, 0.02))
+            l_val = price * (1 - random.uniform(0, 0.02))
             c = price * (1 + random.uniform(-0.015, 0.015))
-            bars.append({"open": o, "high": h, "low": l, "close": c, "volume": random.uniform(1000, 50000)})
+            bars.append({"open": o, "high": h, "low": l_val, "close": c, "volume": random.uniform(1000, 50000)})
             price = c
         return bars
 

@@ -5,6 +5,7 @@ Runs as a background asyncio task, scanning markets and generating signals/trade
 
 import asyncio
 import os
+import structlog
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 
@@ -39,7 +40,6 @@ def get_active_broker():
         return binance_futures_broker
     return ctrader_broker
 
-import structlog
 logger = structlog.get_logger(__name__)
 
 

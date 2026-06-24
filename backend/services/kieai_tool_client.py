@@ -153,7 +153,8 @@ Rules:
         # Walk forward to find matching close
         depth, end = 0, start
         for i, c in enumerate(text[start:], start):
-            if c == '{': depth += 1
+            if c == '{':
+                depth += 1
             elif c == '}':
                 depth -= 1
                 if depth == 0:

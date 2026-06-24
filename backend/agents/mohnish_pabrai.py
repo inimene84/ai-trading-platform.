@@ -30,7 +30,9 @@ def mohnish_pabrai_agent(state: AgentState, agent_id: str = "mohnish_pabrai_agen
     # and potential for doubling in 2-3 years at low risk.
     for ticker in tickers:
         progress.update_status(agent_id, ticker, "Fetching financial metrics")
-        get_financial_metrics(ticker, end_date, period="annual", limit=8, api_key=api_key)
+        get_financial_metrics(
+            ticker, end_date, period="annual", limit=8, api_key=api_key
+        )
 
         progress.update_status(agent_id, ticker, "Gathering financial line items")
         line_items = search_line_items(
@@ -113,7 +115,9 @@ def mohnish_pabrai_agent(state: AgentState, agent_id: str = "mohnish_pabrai_agen
             "reasoning": pabrai_output.reasoning,
         }
 
-        progress.update_status(agent_id, ticker, "Done", analysis=pabrai_output.reasoning)
+        progress.update_status(
+            agent_id, ticker, "Done", analysis=pabrai_output.reasoning
+        )
 
     message = HumanMessage(content=json.dumps(pabrai_analysis), name=agent_id)
 
@@ -153,7 +157,11 @@ def analyze_downside_protection(financial_line_items: list) -> dict[str, any]:
             details.append(f"Net debt position: ${net_cash:,.0f}")
 
     # Current ratio
-    if current_assets is not None and current_liabilities is not None and current_liabilities > 0:
+    if (
+        current_assets is not None
+        and current_liabilities is not None
+        and current_liabilities > 0
+    ):
         current_ratio = current_assets / current_liabilities
         if current_ratio >= 2.0:
             score += 2
@@ -177,7 +185,11 @@ def analyze_downside_protection(financial_line_items: list) -> dict[str, any]:
             details.append(f"High leverage (D/E {de_ratio:.2f})")
 
     # Free cash flow positive and stable
-    fcf_values = [getattr(li, "free_cash_flow", None) for li in financial_line_items if getattr(li, "free_cash_flow", None) is not None]
+    fcf_values = [
+        getattr(li, "free_cash_flow", None)
+        for li in financial_line_items
+        if getattr(li, "free_cash_flow", None) is not None
+    ]
     if fcf_values and len(fcf_values) >= 3:
         recent_avg = sum(fcf_values[:3]) / 3
         older = sum(fcf_values[-3:]) / 3 if len(fcf_values) >= 6 else fcf_values[-1]
@@ -193,21 +205,46 @@ def analyze_downside_protection(financial_line_items: list) -> dict[str, any]:
     return {"score": min(10, score), "details": "; ".join(details)}
 
 
-def analyze_pabrai_valuation(financial_line_items: list, market_cap: float | None) -> dict[str, any]:
+def analyze_pabrai_valuation(
+    financial_line_items: list, market_cap: float | None
+) -> dict[str, any]:
     """Value via simple FCF yield and asset-light preference (keep it simple, low mistakes)."""
     if not financial_line_items or market_cap is None or market_cap <= 0:
-        return {"score": 0, "details": "Insufficient data", "fcf_yield": None, "normalized_fcf": None}
+        return {
+            "score": 0,
+            "details": "Insufficient data",
+            "fcf_yield": None,
+            "normalized_fcf": None,
+        }
 
     details: list[str] = []
-    fcf_values = [getattr(li, "free_cash_flow", None) for li in financial_line_items if getattr(li, "free_cash_flow", None) is not None]
-    capex_vals = [abs(getattr(li, "capital_expenditure", 0) or 0) for li in financial_line_items]
+    fcf_values = [
+        getattr(li, "free_cash_flow", None)
+        for li in financial_line_items
+        if getattr(li, "free_cash_flow", None) is not None
+    ]
+    capex_vals = [
+        abs(getattr(li, "capital_expenditure", 0) or 0) for li in financial_line_items
+    ]
 
     if not fcf_values or len(fcf_values) < 3:
-        return {"score": 0, "details": "Insufficient FCF history", "fcf_yield": None, "normalized_fcf": None}
+        return {
+            "score": 0,
+            "details": "Insufficient FCF history",
+            "fcf_yield": None,
+            "normalized_fcf": None,
+        }
 
-    normalized_fcf = sum(fcf_values[:min(5, len(fcf_values))]) / min(5, len(fcf_values))
+    normalized_fcf = sum(fcf_values[: min(5, len(fcf_values))]) / min(
+        5, len(fcf_values)
+    )
     if normalized_fcf <= 0:
-        return {"score": 0, "details": "Non-positive normalized FCF", "fcf_yield": None, "normalized_fcf": normalized_fcf}
+        return {
+            "score": 0,
+            "details": "Non-positive normalized FCF",
+            "fcf_yield": None,
+            "normalized_fcf": normalized_fcf,
+        }
 
     fcf_yield = normalized_fcf / market_cap
 
@@ -247,10 +284,17 @@ def analyze_pabrai_valuation(financial_line_items: list, market_cap: float | Non
             else:
                 details.append(f"Capex heavy: Avg capex {avg_ratio:.1%} of revenue")
 
-    return {"score": min(10, score), "details": "; ".join(details), "fcf_yield": fcf_yield, "normalized_fcf": normalized_fcf}
+    return {
+        "score": min(10, score),
+        "details": "; ".join(details),
+        "fcf_yield": fcf_yield,
+        "normalized_fcf": normalized_fcf,
+    }
 
 
-def analyze_double_potential(financial_line_items: list, market_cap: float | None) -> dict[str, any]:
+def analyze_double_potential(
+    financial_line_items: list, market_cap: float | None
+) -> dict[str, any]:
     """Estimate low-risk path to double capital in ~2-3 years: runway from FCF growth + rerating."""
     if not financial_line_items or market_cap is None or market_cap <= 0:
         return {"score": 0, "details": "Insufficient data"}
@@ -258,8 +302,16 @@ def analyze_double_potential(financial_line_items: list, market_cap: float | Non
     details: list[str] = []
 
     # Use revenue and FCF trends as rough growth proxy (keep it simple)
-    revenues = [getattr(li, "revenue", None) for li in financial_line_items if getattr(li, "revenue", None) is not None]
-    fcfs = [getattr(li, "free_cash_flow", None) for li in financial_line_items if getattr(li, "free_cash_flow", None) is not None]
+    revenues = [
+        getattr(li, "revenue", None)
+        for li in financial_line_items
+        if getattr(li, "revenue", None) is not None
+    ]
+    fcfs = [
+        getattr(li, "free_cash_flow", None)
+        for li in financial_line_items
+        if getattr(li, "free_cash_flow", None) is not None
+    ]
 
     score = 0
     if revenues and len(revenues) >= 3:
@@ -295,7 +347,9 @@ def analyze_double_potential(financial_line_items: list, market_cap: float | Non
     if fcf_yield is not None:
         if fcf_yield > 0.08:
             score += 3
-            details.append("High FCF yield can drive doubling via retained cash/Buybacks")
+            details.append(
+                "High FCF yield can drive doubling via retained cash/Buybacks"
+            )
         elif fcf_yield > 0.05:
             score += 1
             details.append("Reasonable FCF yield supports moderate compounding")
@@ -310,10 +364,11 @@ def generate_pabrai_output(
     agent_id: str,
 ) -> MohnishPabraiSignal:
     """Generate Pabrai-style decision focusing on low risk, high uncertainty bets and cloning."""
-    template = ChatPromptTemplate.from_messages([
-        (
-          "system",
-          """You are Mohnish Pabrai. Apply my value investing philosophy:
+    template = ChatPromptTemplate.from_messages(
+        [
+            (
+                "system",
+                """You are Mohnish Pabrai. Apply my value investing philosophy:
 
           - Heads I win; tails I don't lose much: prioritize downside protection first.
           - Buy businesses with simple, understandable models and durable moats.
@@ -325,10 +380,10 @@ def generate_pabrai_output(
 
             Provide candid, checklist-driven reasoning, with emphasis on capital preservation and expected mispricing.
             """,
-        ),
-        (
-          "human",
-          """Analyze {ticker} using the provided data.
+            ),
+            (
+                "human",
+                """Analyze {ticker} using the provided data.
 
           DATA:
           {analysis_data}
@@ -340,16 +395,23 @@ def generate_pabrai_output(
             "reasoning": "string with Pabrai-style analysis focusing on downside protection, FCF yield, and doubling potential"
           }}
           """,
-        ),
-    ])
+            ),
+        ]
+    )
 
-    prompt = template.invoke({
-        "analysis_data": json.dumps(analysis_data, indent=2),
-        "ticker": ticker,
-    })
+    prompt = template.invoke(
+        {
+            "analysis_data": json.dumps(analysis_data, indent=2),
+            "ticker": ticker,
+        }
+    )
 
     def create_default_pabrai_signal():
-        return MohnishPabraiSignal(signal="neutral", confidence=0.0, reasoning="Error in analysis, defaulting to neutral")
+        return MohnishPabraiSignal(
+            signal="neutral",
+            confidence=0.0,
+            reasoning="Error in analysis, defaulting to neutral",
+        )
 
     return call_llm(
         prompt=prompt,
@@ -357,4 +419,4 @@ def generate_pabrai_output(
         pydantic_model=MohnishPabraiSignal,
         agent_name=agent_id,
         default_factory=create_default_pabrai_signal,
-    ) 
+    )

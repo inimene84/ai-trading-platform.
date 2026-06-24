@@ -17,13 +17,16 @@ from backend.utils.llm import call_llm
 import statistics
 from backend.utils.api_key import get_api_key_from_state
 
+
 class StanleyDruckenmillerSignal(BaseModel):
     signal: Literal["bullish", "bearish", "neutral"]
     confidence: float
     reasoning: str
 
 
-def stanley_druckenmiller_agent(state: AgentState, agent_id: str = "stanley_druckenmiller_agent"):
+def stanley_druckenmiller_agent(
+    state: AgentState, agent_id: str = "stanley_druckenmiller_agent"
+):
     """
     Analyzes stocks using Stanley Druckenmiller's investing principles:
       - Seeking asymmetric risk-reward opportunities
@@ -43,7 +46,9 @@ def stanley_druckenmiller_agent(state: AgentState, agent_id: str = "stanley_druc
 
     for ticker in tickers:
         progress.update_status(agent_id, ticker, "Fetching financial metrics")
-        get_financial_metrics(ticker, end_date, period="annual", limit=5, api_key=api_key)
+        get_financial_metrics(
+            ticker, end_date, period="annual", limit=5, api_key=api_key
+        )
 
         progress.update_status(agent_id, ticker, "Gathering financial line items")
         # Include relevant line items for Stan Druckenmiller's approach:
@@ -84,11 +89,17 @@ def stanley_druckenmiller_agent(state: AgentState, agent_id: str = "stanley_druc
         progress.update_status(agent_id, ticker, "Fetching company news")
         company_news = get_company_news(ticker, end_date, limit=50, api_key=api_key)
 
-        progress.update_status(agent_id, ticker, "Fetching recent price data for momentum")
-        prices = get_prices(ticker, start_date=start_date, end_date=end_date, api_key=api_key)
+        progress.update_status(
+            agent_id, ticker, "Fetching recent price data for momentum"
+        )
+        prices = get_prices(
+            ticker, start_date=start_date, end_date=end_date, api_key=api_key
+        )
 
         progress.update_status(agent_id, ticker, "Analyzing growth & momentum")
-        growth_momentum_analysis = analyze_growth_and_momentum(financial_line_items, prices)
+        growth_momentum_analysis = analyze_growth_and_momentum(
+            financial_line_items, prices
+        )
 
         progress.update_status(agent_id, ticker, "Analyzing sentiment")
         sentiment_analysis = analyze_sentiment(company_news)
@@ -99,8 +110,12 @@ def stanley_druckenmiller_agent(state: AgentState, agent_id: str = "stanley_druc
         progress.update_status(agent_id, ticker, "Analyzing risk-reward")
         risk_reward_analysis = analyze_risk_reward(financial_line_items, prices)
 
-        progress.update_status(agent_id, ticker, "Performing Druckenmiller-style valuation")
-        valuation_analysis = analyze_druckenmiller_valuation(financial_line_items, market_cap)
+        progress.update_status(
+            agent_id, ticker, "Performing Druckenmiller-style valuation"
+        )
+        valuation_analysis = analyze_druckenmiller_valuation(
+            financial_line_items, market_cap
+        )
 
         # Combine partial scores with weights typical for Druckenmiller:
         #   35% Growth/Momentum, 20% Risk/Reward, 20% Valuation,
@@ -134,7 +149,9 @@ def stanley_druckenmiller_agent(state: AgentState, agent_id: str = "stanley_druc
             "valuation_analysis": valuation_analysis,
         }
 
-        progress.update_status(agent_id, ticker, "Generating Stanley Druckenmiller analysis")
+        progress.update_status(
+            agent_id, ticker, "Generating Stanley Druckenmiller analysis"
+        )
         druck_output = generate_druckenmiller_output(
             ticker=ticker,
             analysis_data=analysis_data,
@@ -148,7 +165,9 @@ def stanley_druckenmiller_agent(state: AgentState, agent_id: str = "stanley_druc
             "reasoning": druck_output.reasoning,
         }
 
-        progress.update_status(agent_id, ticker, "Done", analysis=druck_output.reasoning)
+        progress.update_status(
+            agent_id, ticker, "Done", analysis=druck_output.reasoning
+        )
 
     # Wrap results in a single message
     message = HumanMessage(content=json.dumps(druck_analysis), name=agent_id)
@@ -159,7 +178,7 @@ def stanley_druckenmiller_agent(state: AgentState, agent_id: str = "stanley_druc
     state["data"]["analyst_signals"][agent_id] = druck_analysis
 
     progress.update_status(agent_id, None, "Done")
-    
+
     return {"messages": [message], "data": state["data"]}
 
 
@@ -171,7 +190,10 @@ def analyze_growth_and_momentum(financial_line_items: list, prices: list) -> dic
       - Price Momentum
     """
     if not financial_line_items or len(financial_line_items) < 2:
-        return {"score": 0, "details": "Insufficient financial data for growth analysis"}
+        return {
+            "score": 0,
+            "details": "Insufficient financial data for growth analysis",
+        }
 
     details = []
     raw_score = 0  # We'll sum up a maximum of 9 raw points, then scale to 0–10
@@ -199,14 +221,20 @@ def analyze_growth_and_momentum(financial_line_items: list, prices: list) -> dic
             else:
                 details.append(f"Minimal/negative revenue growth: {rev_growth:.1%}")
         else:
-            details.append("Older revenue is zero/negative; can't compute revenue growth.")
+            details.append(
+                "Older revenue is zero/negative; can't compute revenue growth."
+            )
     else:
         details.append("Not enough revenue data points for growth calculation.")
 
     #
     # 2. EPS Growth (annualized CAGR)
     #
-    eps_values = [fi.earnings_per_share for fi in financial_line_items if fi.earnings_per_share is not None]
+    eps_values = [
+        fi.earnings_per_share
+        for fi in financial_line_items
+        if fi.earnings_per_share is not None
+    ]
     if len(eps_values) >= 2:
         latest_eps = eps_values[0]
         older_eps = eps_values[-1]
@@ -225,7 +253,9 @@ def analyze_growth_and_momentum(financial_line_items: list, prices: list) -> dic
                 raw_score += 1
                 details.append(f"Slight annualized EPS growth: {eps_growth:.1%}")
             else:
-                details.append(f"Minimal/negative annualized EPS growth: {eps_growth:.1%}")
+                details.append(
+                    f"Minimal/negative annualized EPS growth: {eps_growth:.1%}"
+                )
         else:
             details.append("Older EPS is near zero; skipping EPS growth calculation.")
     else:
@@ -324,7 +354,15 @@ def analyze_sentiment(news_items: list) -> dict:
     if not news_items:
         return {"score": 5, "details": "No news data; defaulting to neutral sentiment"}
 
-    negative_keywords = ["lawsuit", "fraud", "negative", "downturn", "decline", "investigation", "recall"]
+    negative_keywords = [
+        "lawsuit",
+        "fraud",
+        "negative",
+        "downturn",
+        "decline",
+        "investigation",
+        "recall",
+    ]
     negative_count = 0
     for news in news_items:
         title_lower = (news.title or "").lower()
@@ -335,7 +373,9 @@ def analyze_sentiment(news_items: list) -> dict:
     if negative_count > len(news_items) * 0.3:
         # More than 30% negative => somewhat bearish => 3/10
         score = 3
-        details.append(f"High proportion of negative headlines: {negative_count}/{len(news_items)}")
+        details.append(
+            f"High proportion of negative headlines: {negative_count}/{len(news_items)}"
+        )
     elif negative_count > 0:
         # Some negativity => 6/10
         score = 6
@@ -364,10 +404,21 @@ def analyze_risk_reward(financial_line_items: list, prices: list) -> dict:
     #
     # 1. Debt-to-Equity
     #
-    debt_values = [fi.total_debt for fi in financial_line_items if fi.total_debt is not None]
-    equity_values = [fi.shareholders_equity for fi in financial_line_items if fi.shareholders_equity is not None]
+    debt_values = [
+        fi.total_debt for fi in financial_line_items if fi.total_debt is not None
+    ]
+    equity_values = [
+        fi.shareholders_equity
+        for fi in financial_line_items
+        if fi.shareholders_equity is not None
+    ]
 
-    if debt_values and equity_values and len(debt_values) == len(equity_values) and len(debt_values) > 0:
+    if (
+        debt_values
+        and equity_values
+        and len(debt_values) == len(equity_values)
+        and len(debt_values) > 0
+    ):
         recent_debt = debt_values[0]
         recent_equity = equity_values[0] if equity_values[0] else 1e-9
         de_ratio = recent_debt / recent_equity
@@ -404,16 +455,22 @@ def analyze_risk_reward(financial_line_items: list, prices: list) -> dict:
                     details.append(f"Low volatility: daily returns stdev {stdev:.2%}")
                 elif stdev < 0.02:
                     raw_score += 2
-                    details.append(f"Moderate volatility: daily returns stdev {stdev:.2%}")
+                    details.append(
+                        f"Moderate volatility: daily returns stdev {stdev:.2%}"
+                    )
                 elif stdev < 0.04:
                     raw_score += 1
                     details.append(f"High volatility: daily returns stdev {stdev:.2%}")
                 else:
-                    details.append(f"Very high volatility: daily returns stdev {stdev:.2%}")
+                    details.append(
+                        f"Very high volatility: daily returns stdev {stdev:.2%}"
+                    )
             else:
                 details.append("Insufficient daily returns data for volatility calc.")
         else:
-            details.append("Not enough close-price data points for volatility analysis.")
+            details.append(
+                "Not enough close-price data points for volatility analysis."
+            )
     else:
         details.append("Not enough price data for volatility analysis.")
 
@@ -422,7 +479,9 @@ def analyze_risk_reward(financial_line_items: list, prices: list) -> dict:
     return {"score": final_score, "details": "; ".join(details)}
 
 
-def analyze_druckenmiller_valuation(financial_line_items: list, market_cap: float | None) -> dict:
+def analyze_druckenmiller_valuation(
+    financial_line_items: list, market_cap: float | None
+) -> dict:
     """
     Druckenmiller is willing to pay up for growth, but still checks:
       - P/E
@@ -438,14 +497,26 @@ def analyze_druckenmiller_valuation(financial_line_items: list, market_cap: floa
     raw_score = 0
 
     # Gather needed data
-    net_incomes = [fi.net_income for fi in financial_line_items if fi.net_income is not None]
-    fcf_values = [fi.free_cash_flow for fi in financial_line_items if fi.free_cash_flow is not None]
+    net_incomes = [
+        fi.net_income for fi in financial_line_items if fi.net_income is not None
+    ]
+    fcf_values = [
+        fi.free_cash_flow
+        for fi in financial_line_items
+        if fi.free_cash_flow is not None
+    ]
     ebit_values = [fi.ebit for fi in financial_line_items if fi.ebit is not None]
     ebitda_values = [fi.ebitda for fi in financial_line_items if fi.ebitda is not None]
 
     # For EV calculation, let's get the most recent total_debt & cash
-    debt_values = [fi.total_debt for fi in financial_line_items if fi.total_debt is not None]
-    cash_values = [fi.cash_and_equivalents for fi in financial_line_items if fi.cash_and_equivalents is not None]
+    debt_values = [
+        fi.total_debt for fi in financial_line_items if fi.total_debt is not None
+    ]
+    cash_values = [
+        fi.cash_and_equivalents
+        for fi in financial_line_items
+        if fi.cash_and_equivalents is not None
+    ]
     recent_debt = debt_values[0] if debt_values else 0
     recent_cash = cash_values[0] if cash_values else 0
 
@@ -538,8 +609,8 @@ def generate_druckenmiller_output(
     template = ChatPromptTemplate.from_messages(
         [
             (
-              "system",
-              """You are a Stanley Druckenmiller AI agent, making investment decisions using his principles:
+                "system",
+                """You are a Stanley Druckenmiller AI agent, making investment decisions using his principles:
             
               1. Seek asymmetric risk-reward opportunities (large upside, limited downside).
               2. Emphasize growth, momentum, and market sentiment.
@@ -567,8 +638,8 @@ def generate_druckenmiller_output(
               """,
             ),
             (
-              "human",
-              """Based on the following analysis, create a Druckenmiller-style investment signal.
+                "human",
+                """Based on the following analysis, create a Druckenmiller-style investment signal.
 
               Analysis Data for {ticker}:
               {analysis_data}
@@ -584,13 +655,15 @@ def generate_druckenmiller_output(
         ]
     )
 
-    prompt = template.invoke({"analysis_data": json.dumps(analysis_data, indent=2), "ticker": ticker})
+    prompt = template.invoke(
+        {"analysis_data": json.dumps(analysis_data, indent=2), "ticker": ticker}
+    )
 
     def create_default_signal():
         return StanleyDruckenmillerSignal(
             signal="neutral",
             confidence=0.0,
-            reasoning="Error in analysis, defaulting to neutral"
+            reasoning="Error in analysis, defaulting to neutral",
         )
 
     return call_llm(

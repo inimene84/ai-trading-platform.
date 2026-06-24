@@ -17,7 +17,9 @@ class PortfolioDecision(BaseModel):
 
 
 class PortfolioManagerOutput(BaseModel):
-    decisions: dict[str, PortfolioDecision] = Field(description="Dictionary of ticker to trading decisions")
+    decisions: dict[str, PortfolioDecision] = Field(
+        description="Dictionary of ticker to trading decisions"
+    )
 
 
 ##### Portfolio Management Agent #####
@@ -37,7 +39,7 @@ def portfolio_management_agent(state: AgentState, agent_id: str = "portfolio_man
 
         # Find the corresponding risk manager for this portfolio manager
         if agent_id.startswith("portfolio_manager_"):
-            suffix = agent_id.split('_')[-1]
+            suffix = agent_id.split("_")[-1]
             risk_manager_id = f"risk_management_agent_{suffix}"
         else:
             risk_manager_id = "risk_management_agent"  # Fallback for CLI
@@ -76,13 +78,23 @@ def portfolio_management_agent(state: AgentState, agent_id: str = "portfolio_man
         state=state,
     )
     message = HumanMessage(
-        content=json.dumps({ticker: decision.model_dump() for ticker, decision in result.decisions.items()}),
+        content=json.dumps(
+            {
+                ticker: decision.model_dump()
+                for ticker, decision in result.decisions.items()
+            }
+        ),
         name=agent_id,
     )
 
     if state["metadata"]["show_reasoning"]:
-        show_agent_reasoning({ticker: decision.model_dump() for ticker, decision in result.decisions.items()},
-                             "Portfolio Manager")
+        show_agent_reasoning(
+            {
+                ticker: decision.model_dump()
+                for ticker, decision in result.decisions.items()
+            },
+            "Portfolio Manager",
+        )
 
     progress.update_status(agent_id, None, "Done")
 
@@ -93,10 +105,10 @@ def portfolio_management_agent(state: AgentState, agent_id: str = "portfolio_man
 
 
 def compute_allowed_actions(
-        tickers: list[str],
-        current_prices: dict[str, float],
-        max_shares: dict[str, int],
-        portfolio: dict[str, float],
+    tickers: list[str],
+    current_prices: dict[str, float],
+    max_shares: dict[str, int],
+    portfolio: dict[str, float],
 ) -> dict[str, dict[str, int]]:
     """Compute allowed actions and max quantities for each ticker deterministically."""
     allowed = {}
@@ -166,7 +178,9 @@ def _compact_signals(signals_by_ticker: dict[str, dict]) -> dict[str, dict]:
         compact = {}
         for agent, payload in agents.items():
             sig = payload.get("sig") or payload.get("signal")
-            conf = payload.get("conf") if "conf" in payload else payload.get("confidence")
+            conf = (
+                payload.get("conf") if "conf" in payload else payload.get("confidence")
+            )
             if sig is not None and conf is not None:
                 compact[agent] = {"sig": sig, "conf": conf}
         out[t] = compact
@@ -174,18 +188,20 @@ def _compact_signals(signals_by_ticker: dict[str, dict]) -> dict[str, dict]:
 
 
 def generate_trading_decision(
-        tickers: list[str],
-        signals_by_ticker: dict[str, dict],
-        current_prices: dict[str, float],
-        max_shares: dict[str, int],
-        portfolio: dict[str, float],
-        agent_id: str,
-        state: AgentState,
+    tickers: list[str],
+    signals_by_ticker: dict[str, dict],
+    current_prices: dict[str, float],
+    max_shares: dict[str, int],
+    portfolio: dict[str, float],
+    agent_id: str,
+    state: AgentState,
 ) -> PortfolioManagerOutput:
     """Get decisions from the LLM with deterministic constraints and a minimal prompt."""
 
     # Deterministic constraints
-    allowed_actions_full = compute_allowed_actions(tickers, current_prices, max_shares, portfolio)
+    allowed_actions_full = compute_allowed_actions(
+        tickers, current_prices, max_shares, portfolio
+    )
 
     # Pre-fill pure holds to avoid sending them to the LLM at all
     prefilled_decisions: dict[str, PortfolioDecision] = {}
@@ -195,7 +211,10 @@ def generate_trading_decision(
         # If only 'hold' key exists, there is no trade possible
         if set(aa.keys()) == {"hold"}:
             prefilled_decisions[t] = PortfolioDecision(
-                action="hold", quantity=0, confidence=100.0, reasoning="No valid trade available"
+                action="hold",
+                quantity=0,
+                confidence=100.0,
+                reasoning="No valid trade available",
             )
         else:
             tickers_for_llm.append(t)
@@ -204,7 +223,9 @@ def generate_trading_decision(
         return PortfolioManagerOutput(decisions=prefilled_decisions)
 
     # Build compact payloads only for tickers sent to LLM
-    compact_signals = _compact_signals({t: signals_by_ticker.get(t, {}) for t in tickers_for_llm})
+    compact_signals = _compact_signals(
+        {t: signals_by_ticker.get(t, {}) for t in tickers_for_llm}
+    )
     compact_allowed = {t: allowed_actions_full[t] for t in tickers_for_llm}
 
     # Minimal prompt template
@@ -215,7 +236,7 @@ def generate_trading_decision(
                 "You are a portfolio manager.\n"
                 "Inputs per ticker: analyst signals and allowed actions with max qty (already validated).\n"
                 "Pick one allowed action per ticker and a quantity ≤ the max. "
-                "Keep reasoning very concise (max 100 chars). No cash or margin math. Return JSON only."
+                "Keep reasoning very concise (max 100 chars). No cash or margin math. Return JSON only.",
             ),
             (
                 "human",
@@ -226,14 +247,18 @@ def generate_trading_decision(
                 '  "decisions": {{\n'
                 '    "TICKER": {{"action":"...","quantity":int,"confidence":int,"reasoning":"..."}}\n'
                 "  }}\n"
-                "}}"
+                "}}",
             ),
         ]
     )
 
     prompt_data = {
-        "signals": json.dumps(compact_signals, separators=(",", ":"), ensure_ascii=False),
-        "allowed": json.dumps(compact_allowed, separators=(",", ":"), ensure_ascii=False),
+        "signals": json.dumps(
+            compact_signals, separators=(",", ":"), ensure_ascii=False
+        ),
+        "allowed": json.dumps(
+            compact_allowed, separators=(",", ":"), ensure_ascii=False
+        ),
     }
     prompt = template.invoke(prompt_data)
 
@@ -243,7 +268,10 @@ def generate_trading_decision(
         decisions = dict(prefilled_decisions)
         for t in tickers_for_llm:
             decisions[t] = PortfolioDecision(
-                action="hold", quantity=0, confidence=0.0, reasoning="Default decision: hold"
+                action="hold",
+                quantity=0,
+                confidence=0.0,
+                reasoning="Default decision: hold",
             )
         return PortfolioManagerOutput(decisions=decisions)
 

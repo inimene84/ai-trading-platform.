@@ -191,20 +191,13 @@ class CTraderProtocol:
 
 
 class _TwistedFactory:
-    # Inherit Twisted ClientFactory interface implicitly via duck-typing stubs
+    """Minimal Twisted client factory for cTrader."""
     noisy = False
     numPorts = 0
+    protocol = None
+    
     def doStart(self): self.numPorts += 1
     def doStop(self): self.numPorts -= 1  
-    def startedConnecting(self, connector): pass
-    """Minimal Twisted client factory for cTrader."""
-    # Twisted requires these attributes on all factories
-    noisy = False
-    protocol = None
-    numPorts = 0
-
-    def doStart(self): pass
-    def doStop(self): pass
     def startedConnecting(self, connector): pass
 
 

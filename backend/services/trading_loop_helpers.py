@@ -200,8 +200,8 @@ class TrailingStopManager:
             lows = [b["low"] for b in bars[-15:]]
             closes = [b["close"] for b in bars[-16:-1]]
             trs = []
-            for h, l, c in zip(highs, lows, closes):
-                trs.append(max(h - l, abs(h - c), abs(l - c)))
+            for h, l_val, c in zip(highs, lows, closes):
+                trs.append(max(h - l_val, abs(h - c), abs(l_val - c)))
             atr = sum(trs) / len(trs) if trs else 0.0
             if atr <= 0:
                 atr = current_price * 0.02

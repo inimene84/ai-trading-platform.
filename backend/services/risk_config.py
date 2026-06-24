@@ -262,4 +262,4 @@ def refresh_risk_config() -> RiskConfig:
 # Re-export get_trading_mode from the canonical location so existing
 # `from backend.services.risk_config import get_trading_mode` imports
 # keep working without code changes in callers.
-from backend.services.trading_mode import get_trading_mode  # noqa: F401
+from backend.services.trading_mode import get_trading_mode  # noqa: E402, F401

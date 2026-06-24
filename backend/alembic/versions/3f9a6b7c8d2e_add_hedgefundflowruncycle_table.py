@@ -80,7 +80,7 @@ def downgrade():
             op.drop_index('ix_hedge_fund_flow_run_cycles_status', 'hedge_fund_flow_run_cycles')
             op.drop_index('ix_hedge_fund_flow_run_cycles_cycle_number', 'hedge_fund_flow_run_cycles')
             op.drop_index('ix_hedge_fund_flow_run_cycles_flow_run_id', 'hedge_fund_flow_run_cycles')
-        except:
+        except Exception:
             pass  # Index may not exist
         
         # Drop hedge_fund_flow_run_cycles table

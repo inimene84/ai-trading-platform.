@@ -37,7 +37,7 @@ fake_influx.influx = _FakeInflux()
 sys.modules["backend.services.influxdb_writer"] = fake_influx
 
 # ── Now import the loop ───────────────────────────────────────────────────────
-from backend.services.sentiment_loop import (
+from backend.services.sentiment_loop import (  # noqa: E402
     SentimentLoopService, _aggregate_keyword_sentiment,
 )
 

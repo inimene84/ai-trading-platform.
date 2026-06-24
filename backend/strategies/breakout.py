@@ -38,8 +38,10 @@ class BreakoutStrategy(BaseStrategy):
         self.min_channel_width_pct = min_channel_width_pct
 
     def _atr(self, highs, lows, closes) -> float:
-        h = pd.Series(highs); l = pd.Series(lows); c = pd.Series(closes)
-        tr = pd.concat([h - l, (h - c.shift()).abs(), (l - c.shift()).abs()], axis=1).max(axis=1)
+        h = pd.Series(highs)
+        lows_s = pd.Series(lows)
+        c = pd.Series(closes)
+        tr = pd.concat([h - lows_s, (h - c.shift()).abs(), (lows_s - c.shift()).abs()], axis=1).max(axis=1)
         return float(tr.ewm(span=self.atr_period, adjust=False).mean().iloc[-1])
 
     def generate_signal(self, symbol: str, bars: list[dict], **kwargs) -> StrategySignal:
@@ -88,7 +90,9 @@ class BreakoutStrategy(BaseStrategy):
         take_profit = None
 
         # ATR expansion check: current ATR > average ATR
-        s_h = pd.Series(highs); s_l = pd.Series(lows); s_c = pd.Series(closes)
+        s_h = pd.Series(highs)
+        s_l = pd.Series(lows)
+        s_c = pd.Series(closes)
         tr  = pd.concat([s_h - s_l, (s_h - s_c.shift()).abs(), (s_l - s_c.shift()).abs()], axis=1).max(axis=1)
         atr_avg = float(tr.rolling(20).mean().iloc[-1])
         atr_expanding = atr > atr_avg * 1.05
@@ -98,12 +102,15 @@ class BreakoutStrategy(BaseStrategy):
             confidence = 0.4
             reasons.append(f"Broke {channel_high:.5f} high ({self.channel_period}p)")
             if vol_ok:
-                confidence += 0.25; reasons.append(f"vol×{volumes[-1]/avg_vol:.1f}")
+                confidence += 0.25
+                reasons.append(f"vol×{volumes[-1]/avg_vol:.1f}")
             if atr_expanding:
-                confidence += 0.2;  reasons.append("ATR expanding")
+                confidence += 0.2
+                reasons.append("ATR expanding")
             # Two consecutive closes above? Stronger confirmation
             if len(closes) >= 2 and closes[-2] > channel_high:
-                confidence += 0.15; reasons.append("2nd close above")
+                confidence += 0.15
+                reasons.append("2nd close above")
             stop_loss   = price - atr * self.atr_multiplier
             take_profit = price + channel_width * 2.0  # project channel width
             signal = "BUY"
@@ -113,11 +120,14 @@ class BreakoutStrategy(BaseStrategy):
             confidence = 0.4
             reasons.append(f"Broke {channel_low:.5f} low ({self.channel_period}p)")
             if vol_ok:
-                confidence += 0.25; reasons.append(f"vol×{volumes[-1]/avg_vol:.1f}")
+                confidence += 0.25
+                reasons.append(f"vol×{volumes[-1]/avg_vol:.1f}")
             if atr_expanding:
-                confidence += 0.2;  reasons.append("ATR expanding")
+                confidence += 0.2
+                reasons.append("ATR expanding")
             if len(closes) >= 2 and closes[-2] < channel_low:
-                confidence += 0.15; reasons.append("2nd close below")
+                confidence += 0.15
+                reasons.append("2nd close below")
             stop_loss   = price + atr * self.atr_multiplier
             take_profit = price - channel_width * 2.0
             signal = "SELL"

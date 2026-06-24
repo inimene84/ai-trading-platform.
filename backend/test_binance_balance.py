@@ -5,6 +5,7 @@ import os
 import sys
 from pathlib import Path
 from dotenv import load_dotenv
+from binance.client import Client
 
 env_path = Path(__file__).resolve().parents[1] / '.env'
 load_dotenv(env_path, override=True)
@@ -27,8 +28,6 @@ print(f"TESTNET:      {os.getenv('BINANCE_TESTNET','false')}")
 print(f"LEVERAGE:     {os.getenv('BINANCE_LEVERAGE','10')}")
 print(f"TRADE_USDT:   {os.getenv('TRADE_USDT_AMOUNT','10')}")
 print(f"MARGIN_TYPE:  {os.getenv('BINANCE_MARGIN_TYPE','ISOLATED')}")
-
-from binance.client import Client
 
 try:
     client = Client(

@@ -87,29 +87,37 @@ class MeanReversionStrategy(BaseStrategy):
             # Oversold — mean reversion BUY
             confidence = 0.4
             if pct_b < 0.0:    # price outside lower band
-                confidence += 0.3; reasons.append(f"below LBand ({price:.5f}<{lower:.5f})")
+                confidence += 0.3
+                reasons.append(f"below LBand ({price:.5f}<{lower:.5f})")
             if rsi < 30:       # extremely oversold
-                confidence += 0.2; reasons.append(f"RSI={rsi:.1f} extreme")
+                confidence += 0.2
+                reasons.append(f"RSI={rsi:.1f} extreme")
             elif rsi < self.rsi_oversold:
-                confidence += 0.1; reasons.append(f"RSI={rsi:.1f} oversold")
+                confidence += 0.1
+                reasons.append(f"RSI={rsi:.1f} oversold")
             # Volume surge (capitulation candle)
             vols = self._volumes(bars)
             if vols[-1] > pd.Series(vols[-20:]).mean() * 1.5:
-                confidence += 0.1; reasons.append("vol surge")
+                confidence += 0.1
+                reasons.append("vol surge")
             signal = "BUY"
 
         elif pct_b > 0.9 and rsi > self.rsi_overbought:
             # Overbought — mean reversion SELL
             confidence = 0.4
             if pct_b > 1.0:   # price outside upper band
-                confidence += 0.3; reasons.append(f"above UBand ({price:.5f}>{upper:.5f})")
+                confidence += 0.3
+                reasons.append(f"above UBand ({price:.5f}>{upper:.5f})")
             if rsi > 70:
-                confidence += 0.2; reasons.append(f"RSI={rsi:.1f} extreme")
+                confidence += 0.2
+                reasons.append(f"RSI={rsi:.1f} extreme")
             elif rsi > self.rsi_overbought:
-                confidence += 0.1; reasons.append(f"RSI={rsi:.1f} overbought")
+                confidence += 0.1
+                reasons.append(f"RSI={rsi:.1f} overbought")
             vols = self._volumes(bars)
             if vols[-1] > pd.Series(vols[-20:]).mean() * 1.5:
-                confidence += 0.1; reasons.append("vol surge")
+                confidence += 0.1
+                reasons.append("vol surge")
             signal = "SELL"
 
         # ATR-based stops for proper risk:reward
@@ -129,7 +137,7 @@ class MeanReversionStrategy(BaseStrategy):
 
     def _atr(self, bars, period=14):
         h = pd.Series(self._highs(bars))
-        l = pd.Series(self._lows(bars))
+        lows_s = pd.Series(self._lows(bars))
         c = pd.Series(self._closes(bars))
-        tr = pd.concat([h - l, (h - c.shift()).abs(), (l - c.shift()).abs()], axis=1).max(axis=1)
+        tr = pd.concat([h - lows_s, (h - c.shift()).abs(), (lows_s - c.shift()).abs()], axis=1).max(axis=1)
         return float(tr.ewm(span=period, adjust=False).mean().iloc[-1])

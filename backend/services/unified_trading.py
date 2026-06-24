@@ -28,6 +28,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Dict, List, Optional
 
+from backend.brokers import IBroker
 from backend.services.portfolio import create_portfolio
 
 logger = logging.getLogger(__name__)
@@ -127,7 +128,7 @@ class TradingSession:
     is_connected: bool = False
 
 
-from backend.brokers import IBroker# ═══════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════════════
 # Paper Trading Engine
 # ═══════════════════════════════════════════════════════════════════════════════
 

@@ -20,6 +20,9 @@ from pathlib import Path
 from typing import List, Optional
 
 import pandas as pd
+import sqlalchemy as sa
+from backend.database.connection import SessionLocal
+from backend.database.models import Trade
 
 from backend.services import kronos_service
 from backend.services.influxdb_sentiment_reader import sentiment_reader
@@ -29,10 +32,6 @@ from backend.services.skill_miner import skill_miner
 from backend.services.persona_adapter import run_all_personas, get_persona_weights, set_persona_weight
 
 logger = logging.getLogger(__name__)
-
-from backend.database.connection import SessionLocal
-from backend.database.models import Trade
-import sqlalchemy as sa
 
 def _get_trade_memory(symbol: str, limit: int = 5) -> dict:
     try:

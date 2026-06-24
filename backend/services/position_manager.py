@@ -140,14 +140,20 @@ class PositionManager:
                 recent_avg = sum(closes[-5:]) / 5
                 prev_avg = sum(closes[-10:-5]) / 5
                 if direction == "BUY" and recent_avg < prev_avg * 0.985 and pnl_pct < -5:
-                    result.exit = True; result.direction = "EXIT"; result.confidence = 0.6
-                    result.urgency = "medium"; result.suggested_action = "close_now"
+                    result.exit = True
+                    result.direction = "EXIT"
+                    result.confidence = 0.6
+                    result.urgency = "medium"
+                    result.suggested_action = "close_now"
                     result.reasoning = f"TECHNICAL EXIT: Downtrend with loss {pnl_pct:.1f}%."
                     logger.warning(f"  [EXIT] {symbol}: Technical deterioration ({pnl_pct:.1f}%)")
                     return result
                 elif direction == "SELL" and recent_avg > prev_avg * 1.015 and pnl_pct < -5:
-                    result.exit = True; result.direction = "EXIT"; result.confidence = 0.6
-                    result.urgency = "medium"; result.suggested_action = "close_now"
+                    result.exit = True
+                    result.direction = "EXIT"
+                    result.confidence = 0.6
+                    result.urgency = "medium"
+                    result.suggested_action = "close_now"
                     result.reasoning = f"TECHNICAL EXIT: Uptrend against SHORT with loss {pnl_pct:.1f}%."
                     logger.warning(f"  [EXIT] {symbol}: Technical deterioration ({pnl_pct:.1f}%)")
                     return result
