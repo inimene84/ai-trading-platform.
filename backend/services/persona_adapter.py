@@ -137,76 +137,26 @@ class PersonaOpinion:
 # LLM caller — uses central router
 # ═══════════════════════════════════════════════════════════════════════════════
 
-_LLM_SEMAPHORE = None
-
-
 async def _call_llm(system: str, user: str) -> dict:
     """Call the LLM and return parsed JSON with signal, confidence, reasoning."""
-    global _LLM_SEMAPHORE
-    if _LLM_SEMAPHORE is None:
-        _LLM_SEMAPHORE = asyncio.Semaphore(3)
-
-    model_cfg = pick_model("persona_analysis")
-    api_key = get_api_key(model_cfg)
-    if not api_key:
-        logger.warning("No LLM API key for persona adapter")
-        return {"signal": "neutral", "confidence": 0.0, "reasoning": "No API key"}
-
-    base_url = model_cfg.base_url or "https://api.groq.com/openai/v1"
-    messages = [
-        {"role": "system", "content": system},
-        {"role": "user", "content": user},
-    ]
-
     try:
-        await _LLM_SEMAPHORE.acquire()
-        try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                resp = await client.post(
-                    f"{base_url}/chat/completions",
-                    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                    json={
-                        "model": model_cfg.name,
-                        "messages": messages,
-                        "temperature": model_cfg.temperature,
-                        "max_tokens": model_cfg.max_tokens,
-                        "response_format": {"type": "json_object"},
-                    },
-                )
-                resp.raise_for_status()
-                data = resp.json()
-                content = data["choices"][0]["message"]["content"]
-                
-                # Robust JSON extraction
-                import re
-                
-                # Remove <think>...</think> tags if present
-                content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
-                
-                # Extract anything between the first { and last }
-                json_match = re.search(r"\{.*\}", content, re.DOTALL)
-                if json_match:
-                    content = json_match.group(0)
-                else:
-                    # Fallback if no braces found (should not happen if LLM followed instructions)
-                    content = "{}"
-
-                try:
-                    parsed = json.loads(content)
-                except json.JSONDecodeError:
-                    logger.warning(f"Persona JSON parse failed. Raw content: {content}")
-                    parsed = {}
-
-                return {
-                    "signal": parsed.get("signal", "neutral").lower(),
-                    "confidence": float(parsed.get("confidence", 0)) / 100.0,
-                    "reasoning": parsed.get("reasoning", ""),
-                }
-        finally:
-            _LLM_SEMAPHORE.release()
+        from backend.llm.router import call_llm_resilient
+        res_str = await call_llm_resilient(
+            task_type="persona_analysis",
+            prompt=user,
+            system=system,
+            response_json=True
+        )
+        parsed = json.loads(res_str)
+        return {
+            "signal": parsed.get("signal", "neutral").lower(),
+            "confidence": float(parsed.get("confidence", 0)) / 100.0,
+            "reasoning": parsed.get("reasoning", ""),
+        }
     except Exception as e:
         logger.warning(f"Persona LLM call failed: {e}")
         return {"signal": "neutral", "confidence": 0.0, "reasoning": f"Error: {e}"}
+
 
 
 def _build_crypto_context(symbol: str, bars: list, metrics: dict) -> str:

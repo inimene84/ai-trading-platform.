@@ -63,22 +63,6 @@ def get_daily_stats() -> dict:
 
 async def generate_digest_text(stats: dict) -> str:
     """Generate a concise 5-line digest using the general LLM."""
-    model_cfg = pick_model("general")
-    api_key = get_api_key(model_cfg)
-    
-    if not api_key:
-        logger.warning("No API key for general LLM. Generating hardcoded text report.")
-        return (
-            f"🔍 *Trading Daily Digest*\n"
-            f"💰 *Net PnL:* ${stats['total_pnl']:.2f} ({stats['wins']}W / {stats['losses']}L)\n"
-            f"🔄 *Activity:* {stats['closed_count']} closed, {stats['open_positions_count']} open (Exp: ${stats['open_exposure']:.2f})\n"
-            f"🛡️ *Signals:* {stats['total_signals']} processed ({stats['vetoed_signals']} vetoed)\n"
-            f"💼 *Equity:* ${stats['equity']:.2f} (Available: ${stats['cash']:.2f})\n"
-            f"💡 *Note:* API Key not configured for advanced LLM summaries."
-        )
-        
-    base_url = model_cfg.base_url or "http://litellm:4000/v1"
-    
     system_prompt = (
         "You are an expert AI trading analyst. "
         "Your task is to write a concise 5-line daily trading performance report for a Telegram channel. "
@@ -102,30 +86,15 @@ async def generate_digest_text(stats: dict) -> str:
     )
     
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.post(
-                f"{base_url.rstrip('/')}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": model_cfg.name,
-                    "messages": [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt},
-                    ],
-                    "temperature": 0.3,
-                    "max_tokens": 512,
-                }
-            )
-            
-            if not resp.is_success:
-                logger.error(f"General LLM daily digest HTTP error: {resp.status_code} - {resp.text}")
-                raise Exception(f"HTTP {resp.status_code}")
-                
-            content = resp.json()["choices"][0]["message"]["content"].strip()
-            return f"🔍 *Trading Daily Digest*\n{content}"
+        from backend.llm.router import call_llm_resilient
+        content = await call_llm_resilient(
+            task_type="general",
+            prompt=user_prompt,
+            system=system_prompt,
+            temperature=0.3,
+            max_tokens=512,
+        )
+        return f"🔍 *Trading Daily Digest*\n{content.strip()}"
             
     except Exception as e:
         logger.error(f"Error generating LLM summary: {e}. Falling back to default format.")
@@ -137,6 +106,7 @@ async def generate_digest_text(stats: dict) -> str:
             f"💼 *Equity:* ${stats['equity']:.2f} (Available: ${stats['cash']:.2f})\n"
             f"💡 *takeaway:* Maintain strict risk control. System operating normally."
         )
+
 
 async def send_telegram_message(text: str) -> bool:
     """Send a text message via Telegram Bot API."""

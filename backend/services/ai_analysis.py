@@ -149,204 +149,29 @@ class AIAnalysisService:
             logger.error(f"Ollama error: {e}")
             return f'[ERROR] Ollama call failed: {str(e)}'
 
-    async def run_litellm(self, prompt: str, system: str = '') -> dict:
-        """Primary: Kie.ai Claude Sonnet 4.6 via LiteLLM OpenAI-compatible proxy."""
-        if not self._litellm_configured():
-            raise ValueError('LiteLLM not configured (set LITELLM_API_KEY or KIE_API_KEY)')
-        messages = []
-        if system:
-            messages.append({'role': 'system', 'content': system})
-        messages.append({'role': 'user', 'content': prompt})
-        async with httpx.AsyncClient(timeout=90.0) as client:
-            resp = await client.post(
-                f"{self.litellm_base_url.rstrip('/')}/chat/completions",
-                headers={
-                    'Authorization': f'Bearer {self.litellm_api_key}',
-                    'Content-Type': 'application/json',
-                },
-                json={
-                    'model': self.litellm_model,
-                    'messages': messages,
-                    'temperature': 0.3,
-                    'max_tokens': 1024,
-                },
-            )
-            if not resp.is_success:
-                body = resp.text[:300]
-                logger.error(f"LiteLLM API {resp.status_code}: {body}")
-                resp.raise_for_status()
-            content = resp.json()['choices'][0]['message']['content']
-            return self._parse_decision(content)
-
-    async def run_xai(self, prompt: str, system: str = '') -> dict:
-        """Primary provider: xAI (Grok)."""
-        if not self.xai_api_key:
-            raise ValueError('No xAI API key configured')
-        async with httpx.AsyncClient(timeout=90.0) as client:
-            messages = []
-            if system:
-                messages.append({'role': 'system', 'content': system})
-            messages.append({'role': 'user', 'content': prompt})
-
-            is_reasoning = any(x in self.xai_model for x in ['reasoning', 'o1', 'o3', 'o4'])
-            payload = {
-                'model': self.xai_model,
-                'messages': messages,
-                'max_tokens': 1024,
-            }
-            if not is_reasoning:
-                payload['temperature'] = 0.3
-
-            resp = await client.post(
-                f"{self.xai_base_url}/chat/completions",
-                headers={
-                    'Authorization': f'Bearer {self.xai_api_key}',
-                    'Content-Type': 'application/json'
-                },
-                json=payload,
-            )
-            if not resp.is_success:
-                body = resp.text[:300]
-                logger.error(f"xAI API {resp.status_code}: {body}")
-                resp.raise_for_status()
-            content = resp.json()['choices'][0]['message']['content']
-            return self._parse_decision(content)
-
-    async def run_kieai(self, prompt: str, system: str = '') -> dict:
-        """Fallback 1: Kie.ai Claude proxy."""
-        if not self.kieai_api_key:
-            raise ValueError('No Kie.ai API key configured')
-        async with httpx.AsyncClient(timeout=90.0) as client:
-            payload = {
-                'model': self.kieai_model,
-                'messages': [{'role': 'user', 'content': prompt}],
-                'max_tokens': 1024,
-                'stream': False,
-            }
-            if system:
-                payload['system'] = system
-            resp = await client.post(
-                'https://api.kie.ai/claude/v1/messages',
-                headers={
-                    'Authorization': f'Bearer {self.kieai_api_key}',
-                    'Content-Type': 'application/json'
-                },
-                json=payload,
-            )
-            if not resp.is_success:
-                body = resp.text[:300]
-                logger.error(f"Kie.ai API {resp.status_code}: {body}")
-                resp.raise_for_status()
-            data = resp.json()
-            text = ''
-            for block in data.get('content', []):
-                if block.get('type') == 'text':
-                    text += block.get('text', '')
-            return self._parse_decision(text)
-
-    async def run_anthropic(self, prompt: str, system: str = '') -> dict:
-        """Fallback 2: Anthropic Claude."""
-        if not self.anthropic_api_key:
-            raise ValueError('No Anthropic API key configured')
-        async with httpx.AsyncClient(timeout=90.0) as client:
-            payload = {
-                'model': self.anthropic_model,
-                'messages': [{'role': 'user', 'content': prompt}],
-                'max_tokens': 1024,
-            }
-            if system:
-                payload['system'] = system
-            resp = await client.post(
-                'https://api.anthropic.com/v1/messages',
-                headers={
-                    'x-api-key': self.anthropic_api_key,
-                    'anthropic-version': '2023-06-01',
-                    'Content-Type': 'application/json'
-                },
-                json=payload,
-            )
-            if not resp.is_success:
-                body = resp.text[:300]
-                logger.error(f"Anthropic API {resp.status_code}: {body}")
-                resp.raise_for_status()
-            data = resp.json()
-            text = ''
-            for block in data.get('content', []):
-                if block.get('type') == 'text':
-                    text += block.get('text', '')
-            return self._parse_decision(text)
-
-    async def run_gemini(self, prompt: str, system: str = '') -> dict:
-        """Fallback 3: Google Gemini."""
-        if not self.gemini_api_key:
-            raise ValueError('No Google API key configured')
-        async with httpx.AsyncClient(timeout=90.0) as client:
-            # Gemini uses a different API format
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.gemini_model}:generateContent?key={self.gemini_api_key}"
-            contents = []
-            if system:
-                contents.append({'role': 'user', 'parts': [{'text': f"System: {system}"}]})
-                contents.append({'role': 'model', 'parts': [{'text': 'Understood.'}]})
-            contents.append({'role': 'user', 'parts': [{'text': prompt}]})
-
-            payload = {
-                'contents': contents,
-                'generationConfig': {
-                    'temperature': 0.3,
-                    'maxOutputTokens': 1024,
-                },
-            }
-            resp = await client.post(url, json=payload)
-            if not resp.is_success:
-                body = resp.text[:300]
-                logger.error(f"Gemini API {resp.status_code}: {body}")
-                resp.raise_for_status()
-            data = resp.json()
-            candidates = data.get('candidates', [])
-            if not candidates:
-                raise ValueError('Gemini returned no candidates')
-            text = candidates[0].get('content', {}).get('parts', [{}])[0].get('text', '')
-            return self._parse_decision(text)
-
     async def run_expensive_model(self, prompt: str, system: str = '') -> dict:
         """Legacy alias - now uses the full fallback chain."""
         return await self.run_with_fallback(prompt, system)
 
     async def run_with_fallback(self, prompt: str, system: str = '') -> dict:
         """
-        Try providers in order: Kie.ai Sonnet (LiteLLM) → Kie.ai direct → xAI → Anthropic → Gemini → Ollama.
+        Try providers in order via the centralized resilient LLM caller.
         """
-        providers = [
-            ('Kie.ai (LiteLLM)', self.run_litellm, self._litellm_configured()),
-            ('Kie.ai (direct)', self.run_kieai, bool(self.kieai_api_key)),
-            ('xAI', self.run_xai, bool(self.xai_api_key)),
-            ('Anthropic', self.run_anthropic, bool(self.anthropic_api_key)),
-            ('Gemini', self.run_gemini, bool(self.gemini_api_key)),
-            ('Ollama', self._run_ollama_decision, self._ollama_configured()),
-        ]
+        try:
+            from backend.llm.router import call_llm_resilient
+            res_str = await call_llm_resilient(
+                task_type="deep_analysis",
+                prompt=prompt,
+                system=system,
+                response_json=True
+            )
+            result = json.loads(res_str)
+            result['_provider_used'] = 'Centralized Router'
+            return result
+        except Exception as e:
+            logger.error(f"All AI providers in centralized router failed: {e}")
+            return self._fallback_decision(str(e))
 
-        for name, provider_fn, configured in providers:
-            if not configured:
-                continue
-            try:
-                logger.info(f"Trying AI provider: {name}")
-                result = await provider_fn(prompt, system)
-                if result.get('direction') and not result.get('error'):
-                    result['_provider_used'] = name
-                    logger.info(f"AI provider succeeded: {name}")
-                    return result
-            except Exception as e:
-                logger.warning(f"AI provider {name} failed: {e}")
-                continue
-
-        return self._fallback_decision('All AI providers failed or not configured')
-
-    async def _run_ollama_decision(self, prompt: str, system: str = '') -> dict:
-        """Run Ollama and parse the response as a decision."""
-        text = await self.run_ollama(prompt, system)
-        if text.startswith('[ERROR]'):
-            raise ValueError(text)
-        return self._parse_decision(text)
 
 
     def _parse_decision(self, content: str) -> dict:

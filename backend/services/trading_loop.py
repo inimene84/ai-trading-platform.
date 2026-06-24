@@ -20,6 +20,14 @@ from backend.services.binance_market_data import binance_market_data
 from backend.strategies.market_regime import MarketRegimeDetector
 from backend.services.unified_trading import UnifiedTrading, UnifiedOrder, OrderSide, OrderType
 from backend.services.position_manager import get_position_manager
+from backend.services.trading_loop_helpers import (
+    EmergencyExitManager,
+    BrokerPositionSyncService,
+    TrailingStopManager,
+    PartialTPManager,
+    ExchangeProtectionManager,
+    PerformanceMetricsWriter,
+)
 
 load_dotenv()
 
@@ -216,66 +224,12 @@ class TradingLoopService:
         Uses the module-level binance_futures_broker singleton — avoids creating
         a new BinanceFuturesService() (which calls futures_exchange_info() in __init__).
         """
-        try:
-            _bfs_sync = binance_futures_broker
-            broker_raw = await asyncio.get_event_loop().run_in_executor(None, lambda: _bfs_sync.get_positions(raise_on_error=True))
-            # Only symbols with non-zero position amount
-            broker_symbols = {
-                bp['symbol'] for bp in broker_raw
-                if float(bp.get('quantity') or bp.get('positionAmt') or 0) != 0
-            }
-            
-            db_trades = db.query(Trade).filter(Trade.status.in_(["open", "filled"])).all()
-            
-            updated = 0
-            exit_price_cache: dict = {}
-            cancelled_orphans: set = set()
-            for t in db_trades:
-                if t.symbol not in broker_symbols:
-                    # Position was closed externally (e.g. SL/TP hit on Binance)
-                    logger.info(f"  [ {t.symbol} ] Position not found in broker, marking as closed in DB.")
-
-                    # Record exit price + realized P&L (one mark/fill lookup per symbol)
-                    if t.symbol not in exit_price_cache:
-                        exit_price_cache[t.symbol] = await asyncio.get_event_loop().run_in_executor(
-                            None, _bfs_sync.get_exit_price, t.symbol
-                        )
-                    exit_px = exit_price_cache[t.symbol]
-
-                    t.status = "closed"
-                    t.closed_at = datetime.now(timezone.utc)
-                    if exit_px and t.entry_price and t.quantity:
-                        t.exit_price = exit_px
-                        if str(t.direction).upper() == "BUY":
-                            t.pnl = round((exit_px - t.entry_price) * t.quantity, 4)
-                        else:
-                            t.pnl = round((t.entry_price - exit_px) * t.quantity, 4)
-                    t.notes = (t.notes or "") + " | Closed externally (sync)"
-
-                    # Cancel any orphaned reduce-only orders (SL/TP/trailing) left
-                    # on the exchange after a native stop fired, once per symbol.
-                    if t.symbol not in cancelled_orphans:
-                        try:
-                            # Cancels regular AND conditional/algo SL/TP/trailing orders
-                            _bfs_sync.cancel_all_orders(t.symbol)
-                            cancelled_orphans.add(t.symbol)
-                        except Exception as _ce:
-                            logger.warning(f"  [ {t.symbol} ] orphan order cleanup failed: {_ce}")
-                    
-                    # Also cleanup pyramid layers
-                    if t.symbol in self._pyramid_layers:
-                        del self._pyramid_layers[t.symbol]
-                    # Set cooldown so we don't immediately re-enter after SL hit
-                    self._sl_cooldown[t.symbol] = datetime.now(timezone.utc)
-                    updated += 1
-            
-            if updated > 0:
-                db.commit()
-                logger.info(f"Synced {updated} closed position(s) from broker.")
-                
-        except Exception as e:
-            db.rollback()
-            logger.warning(f"Failed to sync positions with broker: {e}")
+        await BrokerPositionSyncService.sync_positions(
+            db=db,
+            broker=binance_futures_broker,
+            pyramid_layers=self._pyramid_layers,
+            sl_cooldown=self._sl_cooldown,
+        )
 
     async def stop(self):
         """Stop the trading loop."""
@@ -428,88 +382,18 @@ class TradingLoopService:
         # We check DB open trades against LIVE Binance prices BEFORE the sync
         # so positions that are still open on Binance get the drawdown check.
         _exits_triggered = 0
+        db_pre = SessionLocal()
         try:
-            pm = get_position_manager()
-            db_pre = SessionLocal()
-            try:
-                pre_open = db_pre.query(Trade).filter(Trade.status.in_(["open", "filled"])).all()
-                if pre_open:
-                    logger.info(f"  [POSITION MGR] Pre-sync review: {len(pre_open)} open positions")
-                    # Use module-level singleton — avoids creating a new
-                    # BinanceFuturesService() which calls futures_exchange_info().
-                    live_prices = {}
-                    try:
-                        for bp in binance_futures_broker.get_positions():
-                            live_prices[bp['symbol']] = float(bp.get('mark_price') or bp.get('entry_price') or 0)
-                    except Exception as _bfs_err:
-                        logger.error(f"  [STEP 0] Price fetch error: {_bfs_err}")
-
-                    ut_pre = UnifiedTrading()  # FIX: was undefined - NameError on emergency exit
-                    for trade in pre_open:
-                        try:
-                            live_px = live_prices.get(trade.symbol, 0.0)
-                            if live_px <= 0:
-                                continue  # can't check without a price
-                            entry_px = trade.entry_price or 0.0
-                            if not entry_px:
-                                continue
-                            direction = trade.direction or "BUY"
-                            if direction == "BUY":
-                                pnl_pct = ((live_px - entry_px) / entry_px) * 100
-                            else:
-                                pnl_pct = ((entry_px - live_px) / entry_px) * 100
-                            emergency_threshold = pm.emergency_drawdown_pct
-                            if pnl_pct <= emergency_threshold:
-                                logger.warning(
-                                    f"  [EMERGENCY EXIT] {trade.symbol}: PnL={pnl_pct:.1f}% "
-                                    f"<= threshold {emergency_threshold:.1f}% — FORCE CLOSING"
-                                )
-                                close_side = OrderSide.SELL if direction == "BUY" else OrderSide.BUY
-                                res = ut_pre.place_order(UnifiedOrder(
-                                    symbol=trade.symbol,
-                                    side=close_side,
-                                    order_type=OrderType.MARKET,
-                                    quantity=trade.quantity,
-                                    reduce_only=True,
-                                ))
-                                if res.success:
-                                    trade.exit_price = res.filled_price or live_px
-                                    trade.pnl = (pnl_pct / 100) * entry_px * trade.quantity
-                                    trade.status = "closed"
-                                    trade.closed_at = datetime.now(timezone.utc)
-                                    trade.notes = (trade.notes or "") + f" | EMERGENCY EXIT: PnL={pnl_pct:.1f}%"
-                                    db_pre.add(trade)
-                                    if trade.symbol in self._pyramid_layers:
-                                        del self._pyramid_layers[trade.symbol]
-                                    # Mark cooldown so we don't immediately re-enter
-                                    self._sl_cooldown[trade.symbol] = datetime.now(timezone.utc)
-                                    _exits_triggered += 1
-                                    logger.warning(f"  [EMERGENCY EXIT] {trade.symbol} CLOSED. PnL={pnl_pct:.1f}%")
-                                else:
-                                    # already_flat = success (exchange SL already fired)
-                                    if hasattr(res, 'message') and ('-2022' in str(res.message) or 'already' in str(res.message).lower()):
-                                        logger.info(f"  [EMERGENCY EXIT] {trade.symbol} already flat on exchange — marking DB closed")
-                                        trade.status = 'closed'
-                                        trade.closed_at = datetime.now(timezone.utc)
-                                        trade.notes = (trade.notes or '') + ' | EMERGENCY-EXIT: already flat on exchange'
-                                        db_pre.add(trade)
-                                        if trade.symbol in self._pyramid_layers:
-                                            del self._pyramid_layers[trade.symbol]
-                                        self._sl_cooldown[trade.symbol] = datetime.now(timezone.utc)
-                                        _exits_triggered += 1
-                                    else:
-                                        logger.error(f"  [EMERGENCY EXIT] {trade.symbol} FAILED: {res.message}")
-                        except Exception as e:
-                            logger.error(f"  [EMERGENCY EXIT] {trade.symbol} error: {e}")
-                    if _exits_triggered:
-                        db_pre.commit()
-            except Exception as e:
-                logger.error(f"Pre-sync PM error: {e}")
-                db_pre.rollback()
-            finally:
-                db_pre.close()
+            _exits_triggered = await EmergencyExitManager.run_emergency_exits(
+                db=db_pre,
+                broker=binance_futures_broker,
+                pyramid_layers=self._pyramid_layers,
+                sl_cooldown=self._sl_cooldown,
+            )
         except Exception as e:
             logger.error(f"Pre-sync PM outer error: {e}")
+        finally:
+            db_pre.close()
         self._error = None
 
         logger.info(
@@ -1108,29 +992,11 @@ class TradingLoopService:
             
     async def _write_performance_metrics(self, db):
         """Compute and emit rolling win-rate / drawdown / equity to InfluxDB."""
-        from sqlalchemy import func as _func
-        closed = db.query(Trade).filter(Trade.status == "closed").all()
-        wins = sum(1 for t in closed if (t.pnl or 0) > 0)
-        losses = sum(1 for t in closed if (t.pnl or 0) < 0)
-        decided = wins + losses
-        win_rate = (wins / decided * 100.0) if decided else 0.0
-        realized_pnl = round(sum((t.pnl or 0.0) for t in closed), 4)
-
-        equity = float(getattr(self, "_cycle_equity", 0.0) or 0.0)
-        # Drawdown vs peak equity seen in portfolio snapshots
-        peak = db.query(_func.max(PortfolioSnapshot.total_value)).scalar() or equity
-        drawdown_pct = ((equity - peak) / peak * 100.0) if peak and peak > 0 else 0.0
-
-        await influx.write_performance(
-            equity=equity,
-            realized_pnl=realized_pnl,
-            win_rate=round(win_rate, 2),
-            wins=wins,
-            losses=losses,
-            total_trades=len(closed),
-            drawdown_pct=round(drawdown_pct, 3),
-            open_positions=self._open_count,
-            cycle=self._cycle_count,
+        await PerformanceMetricsWriter.write_metrics(
+            db=db,
+            cycle_equity=float(getattr(self, "_cycle_equity", 0.0) or 0.0),
+            open_count=self._open_count,
+            cycle_count=self._cycle_count,
         )
 
     def _save_portfolio_snapshot(self, db):
@@ -1193,278 +1059,33 @@ class TradingLoopService:
             db.rollback()
 
     def _apply_partial_tp(self, db, symbol: str, bars: list[dict]):
-        """Close a portion of the position at partial_tp_atr_mult × ATR profit.
-
-        Solves the '0% TP hit' problem: the trail chokes every winner before it
-        reaches the full TP. By closing partial_tp_close_pct (default 50%) of the
-        position early, we lock in real gains. The remainder rides the trail for
-        runners. State is tracked via trade.notes ('PARTIAL_TP_DONE') so it
-        survives restarts and only fires once per trade. FAILS SAFE: any error
-        leaves the position unchanged.
-        """
-        cfg = self.risk_config
-        if not getattr(cfg, "partial_tp_enabled", False):
-            return
-        if not bars or len(bars) < 16:
-            return
-        try:
-            import numpy as np
-            current_price = bars[-1]["close"]
-
-            # ATR computation (same window as decision engine)
-            highs = np.array([b["high"] for b in bars[-15:]])
-            lows = np.array([b["low"] for b in bars[-15:]])
-            closes = np.array([b["close"] for b in bars[-16:-1]])
-            tr = np.maximum(np.maximum(highs - lows, np.abs(highs - closes)), np.abs(lows - closes))
-            atr = float(np.mean(tr))
-            if atr <= 0:
-                atr = current_price * 0.02
-
-            partial_dist = cfg.partial_tp_atr_mult * atr
-            close_pct = cfg.partial_tp_close_pct
-
-            trades = (
-                db.query(Trade)
-                .filter(Trade.symbol == symbol, Trade.status.in_(["open", "filled"]))
-                .all()
-            )
-            for trade in trades:
-                if not trade.entry_price or not trade.quantity:
-                    continue
-                # Skip if partial TP already taken
-                notes = trade.notes or ""
-                if "PARTIAL_TP_DONE" in notes:
-                    continue
-
-                # Check if price has moved enough into profit
-                if trade.direction == "BUY":
-                    profit_dist = current_price - trade.entry_price
-                else:
-                    profit_dist = trade.entry_price - current_price
-
-                if profit_dist < partial_dist:
-                    continue
-
-                # Calculate partial close quantity
-                close_qty = trade.quantity * close_pct
-                if close_qty <= 0:
-                    continue
-
-                # Place partial close order
-                ut = UnifiedTrading()
-                close_side = OrderSide.SELL if trade.direction == "BUY" else OrderSide.BUY
-                res = ut.place_order(UnifiedOrder(
-                    symbol=trade.symbol,
-                    side=close_side,
-                    order_type=OrderType.MARKET,
-                    quantity=close_qty,
-                    reduce_only=True,
-                ))
-
-                if res.success:
-                    filled_px = res.filled_price or current_price
-                    if trade.direction == "BUY":
-                        partial_pnl = (filled_px - trade.entry_price) * close_qty
-                    else:
-                        partial_pnl = (trade.entry_price - filled_px) * close_qty
-
-                    # Reduce remaining quantity on the trade
-                    trade.quantity = trade.quantity - close_qty
-                    trade.notes = (notes + f" | PARTIAL_TP_DONE: closed {close_pct*100:.0f}% "
-                                   f"({close_qty:.6f}) @ {filled_px:.6f}, "
-                                   f"partial PnL=${partial_pnl:+.4f}")
-                    logger.info(
-                        f"  [ {symbol} ] PARTIAL TP: closed {close_pct*100:.0f}% "
-                        f"({close_qty:.6f}) @ {filled_px:.6f}, "
-                        f"PnL=${partial_pnl:+.4f}, remaining={trade.quantity:.6f}"
-                    )
-                    # Write partial PnL to InfluxDB for tracking
-                    try:
-                        import asyncio
-                        asyncio.get_event_loop().create_task(
-                            influx._write(
-                                influx.BUCKET_SYSTEM, "partial_tp",
-                                {"symbol": symbol, "direction": trade.direction},
-                                {"pnl": partial_pnl, "close_qty": close_qty,
-                                 "filled_price": filled_px},
-                            )
-                        )
-                    except Exception:
-                        pass
-                else:
-                    logger.warning(
-                        f"  [ {symbol} ] PARTIAL TP failed: {res.message}"
-                    )
-        except Exception as e:
-            logger.warning(f"  [ {symbol} ] partial-TP error (position unchanged): {e}")
+        """Close a portion of the position at partial_tp_atr_mult × ATR profit."""
+        PartialTPManager.apply_partial_tp(
+            db=db,
+            symbol=symbol,
+            bars=bars,
+            risk_config=self.risk_config,
+            strategy_name=self._strategy_name,
+        )
 
     def _apply_trailing_stop(self, db, symbol: str, bars: list[dict]):
-
-        """Ratchet-only ATR trailing stop.
-
-        Once a position has moved `trail_activation_atr` x ATR into profit, the
-        stop trails the high-water mark by `trail_atr_mult` x ATR and only ever
-        tightens (never loosens). Writes the new level into Trade.stop_loss so
-        the existing _check_sl_tp close path enforces it. FAILS SAFE: any error
-        leaves the existing stop untouched (never widens or removes a stop).
-        """
-        cfg = self.risk_config
-        if not getattr(cfg, "trailing_stop_enabled", False):
-            return
-        # When the exchange-native trailing stop is active it trails the market
-        # continuously; skip the per-cycle software ratchet to avoid two
-        # competing trail mechanisms moving the same stop.
-        if getattr(cfg, "native_trailing_enabled", False):
-            return
-        if not bars or len(bars) < 16:
-            return
-        try:
-            current_price = bars[-1]["close"]
-
-            # ATR over the same window the decision engine uses
-            highs = [b["high"] for b in bars[-15:]]
-            lows = [b["low"] for b in bars[-15:]]
-            closes = [b["close"] for b in bars[-16:-1]]
-            trs = []
-            for h, l, c in zip(highs, lows, closes):
-                trs.append(max(h - l, abs(h - c), abs(l - c)))
-            atr = sum(trs) / len(trs) if trs else 0.0
-            if atr <= 0:
-                atr = current_price * 0.02
-
-            activation_dist = cfg.trail_activation_atr * atr
-            trail_dist = cfg.trail_atr_mult * atr
-
-            trades = (
-                db.query(Trade)
-                .filter(Trade.symbol == symbol, Trade.status.in_(["open", "filled"]))
-                .all()
-            )
-            for trade in trades:
-                if not trade.entry_price:
-                    continue
-
-                if trade.direction == "BUY":
-                    # Track the highest price seen since entry
-                    hw = self._high_water.get(trade.id, max(trade.entry_price, current_price))
-                    hw = max(hw, current_price)
-                    self._high_water[trade.id] = hw
-
-                    # Step-Trailing: Move to breakeven+fees at 0.75x activation distance
-                    if hw - trade.entry_price < activation_dist:
-                        if hw - trade.entry_price >= (activation_dist * 0.75):
-                            # Offset above entry to cover round-trip fees
-                            fee_offset = trail_dist * 0.1
-                            candidate = trade.entry_price + fee_offset
-                            old_stop = trade.stop_loss if trade.stop_loss is not None else float("-inf")
-                            if candidate > old_stop:
-                                trade.stop_loss = candidate
-                                logger.info(f"  [ {symbol} ] STEP-TRAIL ↑ stop to BE+fees {candidate:.6f} (hw={hw:.6f} >= 0.75 activation)")
-                                self._sync_exchange_stop(trade, candidate)
-                        continue
-                    
-                    candidate = hw - trail_dist
-                    # Never above current price; never loosen an existing stop
-                    candidate = min(candidate, current_price)
-                    old_stop = trade.stop_loss if trade.stop_loss is not None else float("-inf")
-                    if candidate > old_stop:
-                        trade.stop_loss = candidate
-                        logger.info(
-                            f"  [ {symbol} ] TRAIL ↑ stop {old_stop if old_stop != float('-inf') else 'None'} "
-                            f"-> {candidate:.6f} (hw={hw:.6f}, atr={atr:.6f})"
-                        )
-                        self._sync_exchange_stop(trade, candidate)
-                else:  # SHORT
-                    lw = self._high_water.get(trade.id, min(trade.entry_price, current_price))
-                    lw = min(lw, current_price)
-                    self._high_water[trade.id] = lw
-
-                    # Step-Trailing: Move to breakeven+fees at 0.75x activation distance
-                    if trade.entry_price - lw < activation_dist:
-                        if trade.entry_price - lw >= (activation_dist * 0.75):
-                            # Offset below entry to cover round-trip fees
-                            fee_offset = trail_dist * 0.1
-                            candidate = trade.entry_price - fee_offset
-                            old_stop = trade.stop_loss if trade.stop_loss is not None else float("inf")
-                            if candidate < old_stop:
-                                trade.stop_loss = candidate
-                                logger.info(f"  [ {symbol} ] STEP-TRAIL ↓ stop to BE+fees {candidate:.6f} (lw={lw:.6f} <= 0.75 activation)")
-                                self._sync_exchange_stop(trade, candidate)
-                        continue
-                    candidate = lw + trail_dist
-                    candidate = max(candidate, current_price)
-                    old_stop = trade.stop_loss if trade.stop_loss is not None else float("inf")
-                    if candidate < old_stop:
-                        trade.stop_loss = candidate
-                        logger.info(
-                            f"  [ {symbol} ] TRAIL ↓ stop {old_stop if old_stop != float('inf') else 'None'} "
-                            f"-> {candidate:.6f} (lw={lw:.6f}, atr={atr:.6f})"
-                        )
-                        self._sync_exchange_stop(trade, candidate)
-        except Exception as e:
-            logger.warning(f"  [ {symbol} ] trailing-stop error (stop unchanged): {e}")
-
-    def _sync_exchange_stop(self, trade, new_stop: float):
-        """Push a ratcheted trail level to the exchange-native STOP_MARKET.
-
-        Keeps the Binance reduce-only STOP_MARKET (placed at entry) tracking the
-        trailed DB stop, so locked profit is protected during the inter-cycle
-        sleep and even if this process dies. No-op unless we are live on Binance
-        Futures. FAILS SAFE: never raises into the trail logic; on any error the
-        existing exchange stop is left in force (the broker method places the new
-        stop before cancelling the old, so the position is never left naked).
-        """
-        try:
-            if os.getenv("ACTIVE_BROKER", "ctrader") != "binance_futures":
-                return
-            from backend.services.trading_mode import get_trading_mode, TradingMode
-            if get_trading_mode() != TradingMode.LIVE:
-                return
-            res = binance_futures_broker.replace_stop_loss(
-                symbol=trade.symbol,
-                direction=trade.direction,
-                new_stop_price=new_stop,
-                quantity=trade.quantity,
-            )
-            status = res.get("status") if isinstance(res, dict) else None
-            if status not in ("replaced", "simulated", "skipped"):
-                logger.warning(
-                    f"  [ {trade.symbol} ] exchange-stop sync returned {res}"
-                )
-        except Exception as e:
-            logger.warning(
-                f"  [ {trade.symbol} ] exchange-stop sync error (DB stop set, "
-                f"exchange stop unchanged): {e}"
-            )
+        """Ratchet-only ATR trailing stop."""
+        TrailingStopManager.apply_trailing_stop(
+            db=db,
+            symbol=symbol,
+            bars=bars,
+            high_water=self._high_water,
+            risk_config=self.risk_config,
+            broker=binance_futures_broker,
+        )
 
     def _ensure_exchange_protection(self, db, symbol: str):
         """Re-place missing Binance SL/TP from DB levels (fail-safe, never cancels first)."""
-        try:
-            if os.getenv("ACTIVE_BROKER", "ctrader") != "binance_futures":
-                return
-            from backend.services.trading_mode import get_trading_mode, TradingMode
-            if get_trading_mode() != TradingMode.LIVE:
-                return
-            trades = (
-                db.query(Trade)
-                .filter(Trade.symbol == symbol, Trade.status.in_(["open", "filled"]))
-                .all()
-            )
-            for trade in trades:
-                if not trade.stop_loss and not trade.take_profit:
-                    continue
-                res = binance_futures_broker.ensure_protective_orders(
-                    trade.symbol,
-                    trade.direction,
-                    trade.stop_loss,
-                    trade.take_profit,
-                )
-                if res.get("status") == "restored":
-                    logger.warning(
-                        f"  [ {symbol} ] Exchange protection restored: {res.get('restored')}"
-                    )
-        except Exception as e:
-            logger.warning(f"  [ {symbol} ] exchange protection check failed: {e}")
+        ExchangeProtectionManager.ensure_exchange_protection(
+            db=db,
+            symbol=symbol,
+            broker=binance_futures_broker,
+        )
 
     def _check_sl_tp(self, db, symbol: str, bars: list[dict]):
         """Check stop-loss and take-profit for open positions."""

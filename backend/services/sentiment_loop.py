@@ -251,12 +251,7 @@ class SentimentLoopService:
         bubbles up to the caller, which keeps the keyword result.
         """
         import json
-        import httpx
-        from backend.llm.router import pick_model, get_api_key
-
-        model_cfg = pick_model("deep_analysis")
-        api_key = get_api_key(model_cfg)
-        base_url = model_cfg.base_url or "http://litellm:4000/v1"
+        from backend.llm.router import call_llm_resilient
 
         headlines = "\n".join(f"- {a.get('title', '')}" for a in articles[:15] if a.get("title"))
         system_prompt = (
@@ -266,32 +261,23 @@ class SentimentLoopService:
         )
         user_prompt = f"Coin: {symbol}\nHeadlines:\n{headlines}\n\nReturn the JSON only."
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            resp = await client.post(
-                f"{base_url}/chat/completions",
-                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                json={
-                    "model": model_cfg.name,
-                    "messages": [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt},
-                    ],
-                    "temperature": 0.2,
-                    "max_tokens": 120,
-                },
-            )
-            resp.raise_for_status()
-            content = resp.json()["choices"][0]["message"]["content"]
-
-        txt = content.replace("```json", "").replace("```", "").strip()
-        si, ei = txt.find("{"), txt.rfind("}")
-        p = json.loads(txt[si:ei + 1])
+        res_str = await call_llm_resilient(
+            task_type="deep_analysis",
+            prompt=user_prompt,
+            system=system_prompt,
+            temperature=0.2,
+            max_tokens=120,
+            response_json=True
+        )
+        
+        p = json.loads(res_str)
         new_score = max(-1.0, min(1.0, float(p.get("sentiment_score", score))))
         new_impact = max(0.0, min(1.0, float(p.get("impact_score", impact))))
         new_dir = str(p.get("direction", direction)).upper()
         if new_dir not in {"BULLISH", "BEARISH", "NEUTRAL"}:
             new_dir = direction
         return round(new_score, 4), round(new_impact, 4), new_dir
+
 
 
 # Module-level singleton (mirrors trading_loop / influx pattern)

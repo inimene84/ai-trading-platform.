@@ -101,15 +101,6 @@ async def review_trade_decision(
     Returns:
         (approved: bool, reasoning: str)
     """
-    model_cfg = pick_model("deep_analysis")
-    api_key = get_api_key(model_cfg)
-    
-    if not api_key:
-        logger.warning("No API key configured for Risk Reviewer LLM. Defaulting to APPROVED.")
-        return True, "Approved (LLM API key not configured)."
-        
-    base_url = model_cfg.base_url or "http://litellm:4000/v1"
-    
     system_prompt = (
         "You are the Chief Risk Officer (CRO) of a systematic quantitative hedge fund. "
         "The trading engine already filtered this signal; your job is a final sanity check — "
@@ -138,40 +129,17 @@ async def review_trade_decision(
     )
     
     try:
-        async with httpx.AsyncClient(timeout=45.0) as client:
-            resp = await client.post(
-                f"{base_url.rstrip('/')}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": model_cfg.name,
-                    "messages": [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt},
-                    ],
-                    "temperature": 0.1,
-                    "max_tokens": 512,
-                    "response_format": {"type": "json_object"},
-                }
-            )
-            
-            if not resp.is_success:
-                logger.error(f"Risk reviewer LLM HTTP error: {resp.status_code} - {resp.text}")
-                return True, f"Approved (LLM error: HTTP {resp.status_code})"
-                
-            data = resp.json()
-            message = data["choices"][0].get("message") or {}
-            content = message.get("content") or ""
-            if isinstance(content, list):
-                # Some providers return content parts array
-                content = " ".join(
-                    part.get("text", "") if isinstance(part, dict) else str(part)
-                    for part in content
-                )
-            return _parse_reviewer_response(str(content))
-                
+        from backend.llm.router import call_llm_resilient
+        res_str = await call_llm_resilient(
+            task_type="deep_analysis",
+            prompt=user_prompt,
+            system=system_prompt,
+            temperature=0.1,
+            max_tokens=512,
+            response_json=True
+        )
+        return _parse_reviewer_response(res_str)
     except Exception as e:
         logger.error(f"Error calling risk reviewer LLM: {type(e).__name__}: {e}")
-        return True, f"Approved (Error invoking reviewer: {type(e).__name__}: {e})"
+        return True, f"Approved (Error invoking reviewer: {type(e).__name__}: {e} — fail-open)"
+
