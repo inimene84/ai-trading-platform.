@@ -1,10 +1,9 @@
-import os
 import logging
-import httpx
 from datetime import datetime, timezone, timedelta
 from backend.database.connection import SessionLocal
 from backend.database.models import Trade, TradingSignal, PortfolioSnapshot
 from backend.llm.router import call_llm_resilient
+from backend.utils.telegram import send_telegram_message
 
 logger = logging.getLogger("daily_digest")
 
@@ -105,32 +104,6 @@ async def generate_digest_text(stats: dict) -> str:
             f"💡 *takeaway:* Maintain strict risk control. System operating normally."
         )
 
-
-async def send_telegram_message(text: str) -> bool:
-    """Send a text message via Telegram Bot API."""
-    token = os.getenv("TELEGRAM_BOT_TOKEN")
-    chat_id = os.getenv("TELEGRAM_CHAT_ID")
-    if not token or not chat_id:
-        logger.warning("Telegram bot token or chat ID not configured. Skipping daily digest broadcast.")
-        return False
-        
-    api_url = f"https://api.telegram.org/bot{token}/sendMessage"
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(api_url, json={
-                "chat_id": chat_id,
-                "text": text,
-                "parse_mode": "Markdown",
-            })
-            if resp.is_success:
-                logger.info("Daily digest successfully broadcast to Telegram.")
-                return True
-            else:
-                logger.error(f"Failed to send daily digest: {resp.text}")
-                return False
-    except Exception as e:
-        logger.error(f"Error sending Telegram message: {e}")
-        return False
 
 async def run_daily_digest():
     """Main entrypoint to run the daily stats extraction, LLM summary generation, and broadcasting."""

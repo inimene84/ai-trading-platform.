@@ -4,7 +4,7 @@ from backend.services.risk_reviewer import review_trade_decision
 
 @pytest.mark.asyncio
 async def test_review_trade_decision_approve():
-    with patch("backend.services.risk_reviewer.call_llm_resilient", new_callable=AsyncMock) as mock_call:
+    with patch("backend.llm.router.call_llm_resilient", new_callable=AsyncMock) as mock_call:
         mock_call.return_value = '{"approved": true, "reasoning": "Strong setup with clean support levels."}'
         approved, reasoning = await review_trade_decision(
             symbol="BTCUSDT",
@@ -22,7 +22,7 @@ async def test_review_trade_decision_approve():
 
 @pytest.mark.asyncio
 async def test_review_trade_decision_veto():
-    with patch("backend.services.risk_reviewer.call_llm_resilient", new_callable=AsyncMock) as mock_call:
+    with patch("backend.llm.router.call_llm_resilient", new_callable=AsyncMock) as mock_call:
         mock_call.return_value = '{"approved": false, "reasoning": "Funding rate is too high and news is bearish."}'
         approved, reasoning = await review_trade_decision(
             symbol="ETHUSDT",
@@ -41,7 +41,7 @@ async def test_review_trade_decision_veto():
 
 @pytest.mark.asyncio
 async def test_review_trade_decision_fail_open_on_garbage_response():
-    with patch("backend.services.risk_reviewer.call_llm_resilient", new_callable=AsyncMock) as mock_call:
+    with patch("backend.llm.router.call_llm_resilient", new_callable=AsyncMock) as mock_call:
         mock_call.return_value = "I recommend rejecting this trade."
 
         approved, reasoning = await review_trade_decision(

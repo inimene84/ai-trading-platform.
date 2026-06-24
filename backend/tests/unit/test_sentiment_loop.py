@@ -44,16 +44,16 @@ from backend.services.sentiment_loop import (
 
 def test_aggregate():
     # bullish
-    s, i, d, n = _aggregate_keyword_sentiment(
+    s, i, d, n, c = _aggregate_keyword_sentiment(
         [{"sentiment": "positive"}, {"sentiment": "positive"}]
     )
-    assert d == "BULLISH" and s > 0 and n == 2, (s, i, d, n)
+    assert d == "BULLISH" and s > 0 and n == 2, (s, i, d, n, c)
     # bearish
-    s, i, d, n = _aggregate_keyword_sentiment([{"sentiment": "negative"}])
-    assert d == "BEARISH" and s < 0, (s, i, d, n)
+    s, i, d, n, c = _aggregate_keyword_sentiment([{"sentiment": "negative"}])
+    assert d == "BEARISH" and s < 0, (s, i, d, n, c)
     # empty -> neutral
-    s, i, d, n = _aggregate_keyword_sentiment([])
-    assert d == "NEUTRAL" and s == 0.0 and n == 0, (s, i, d, n)
+    s, i, d, n, c = _aggregate_keyword_sentiment([])
+    assert d == "NEUTRAL" and s == 0.0 and n == 0, (s, i, d, n, c)
     print("  aggregate: OK")
 
 
@@ -63,7 +63,7 @@ async def test_dry_run_emits_all_symbols():
     svc._symbols = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "ADAUSDT"]
     summary = await svc.run_once(dry_run=True)
     per = summary["per_symbol"]
-    assert len(per) == 4, f"expected 4 symbols, got {len(per)}"
+    assert len(per) == 5, f"expected 5 symbols (4 + CRYPTO), got {len(per)}"
     assert per["BTCUSDT"]["direction"] == "BULLISH", per["BTCUSDT"]
     assert per["ETHUSDT"]["direction"] == "BEARISH", per["ETHUSDT"]
     assert per["SOLUSDT"]["direction"] == "NEUTRAL", per["SOLUSDT"]
@@ -77,9 +77,9 @@ async def test_live_run_writes_base_tags():
     svc = SentimentLoopService()
     svc._symbols = ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
     summary = await svc.run_once(dry_run=False)
-    assert summary["written"] == 3, summary
+    assert summary["written"] == 4, summary
     tags = sorted(w["symbol"] for w in WRITES)
-    assert tags == ["BTC", "ETH", "SOL"], tags  # base coin tags, no USDT, no CRYPTO fallback
+    assert tags == ["BTC", "CRYPTO", "ETH", "SOL"], tags
     btc = next(w for w in WRITES if w["symbol"] == "BTC")
     assert btc["direction"] == "BULLISH" and btc["source"] == "native-sentiment-loop", btc
     print(f"  live_run: OK — wrote base tags {tags}, no CRYPTO fallback")

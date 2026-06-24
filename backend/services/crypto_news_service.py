@@ -15,6 +15,13 @@ logger = logging.getLogger(__name__)
 # ── Configuration ─────────────────────────────────────────────────────────────
 CACHE_TTL = 300  # 5 minutes
 
+RSS_FEEDS = [
+    ("CoinDesk",       "https://feeds.feedburner.com/CoinDesk"),
+    ("CoinTelegraph",  "https://cointelegraph.com/rss"),
+    ("Reddit Crypto",  "https://www.reddit.com/r/CryptoCurrency/new/.rss"),
+    ("Yahoo Finance",  "https://feeds.finance.yahoo.com/rss/2.0/headline?s=BTC-USD,ETH-USD,SOL-USD&region=US&lang=en-US"),
+]
+
 POSITIVE_WORDS = {
     'rally', 'surge', 'bullish', 'gains', 'gain', 'rises', 'rise', 'soar',
     'jump', 'jumps', 'record', 'high', 'recover', 'recovery', 'boom',
@@ -119,25 +126,80 @@ class CryptoNewsService:
             return []
 
     # ══════════════════════════════════════════════════════════════════════
-    # 2. CryptoCompare News
+    # 2. CryptoCompare News + RSS Fallback
     # ══════════════════════════════════════════════════════════════════════
+    async def _fetch_rss_feed(self, source: str, url: str) -> list:
+        """Fetch and parse a single RSS feed, return list of news items."""
+        try:
+            import feedparser
+            import concurrent.futures
+            import asyncio
+            loop = asyncio.get_event_loop()
+            with concurrent.futures.ThreadPoolExecutor() as pool:
+                feed = await loop.run_in_executor(pool, feedparser.parse, url)
+
+            items = []
+            for entry in feed.entries[:15]:
+                title = getattr(entry, "title", "") or ""
+                summary = getattr(entry, "summary", "") or ""
+                import re
+                summary = re.sub(r"<[^>]+>", " ", summary).strip()[:300]
+                link = getattr(entry, "link", "") or ""
+                pub = ""
+                if hasattr(entry, "published"):
+                    pub = entry.published
+                elif hasattr(entry, "updated"):
+                    pub = entry.updated
+
+                sentiment = self._classify_sentiment(title + " " + summary)
+                items.append({
+                    "title": title,
+                    "body": summary,
+                    "url": link,
+                    "source": source,
+                    "published_at": pub,
+                    "categories": "",
+                    "sentiment": sentiment,
+                })
+            return items
+        except Exception as e:
+            logger.warning(f"Feed {source} failed: {e}")
+            return []
+
+    async def get_rss_news(self) -> list[dict]:
+        """Fetch news from all configured RSS feeds."""
+        import asyncio
+        tasks = [self._fetch_rss_feed(src, url) for src, url in RSS_FEEDS]
+        results = await asyncio.gather(*tasks)
+        all_items = []
+        for r in results:
+            all_items.extend(r)
+        
+        all_items.sort(key=lambda x: str(x.get("published_at", "")), reverse=True)
+        return all_items
+
     async def get_crypto_news(self, symbols: list[str] = None) -> list[dict]:
-        """Get crypto news from CryptoCompare with sentiment classification."""
+        """Get crypto news from CryptoCompare with sentiment classification. Falls back to RSS."""
+        import os
         cache_key = f"news:{','.join(symbols) if symbols else 'all'}"
         cached = self._get_cached(cache_key)
         if cached is not None:
             return cached
 
+        articles = []
         try:
+            api_key = os.getenv("CRYPTOCOMPARE_API_KEY", "")
+            headers = {"authorization": f"Apikey {api_key}"} if api_key else {}
+            
             async with httpx.AsyncClient(timeout=15.0) as client:
                 resp = await client.get(
                     'https://min-api.cryptocompare.com/data/v2/news/',
                     params={'lang': 'EN', 'sortOrder': 'latest'},
+                    headers=headers
                 )
                 resp.raise_for_status()
                 data = resp.json()
 
-            articles = []
             for item in data.get('Data', []):
                 title = item.get('title', '')
                 body = item.get('body', '')
@@ -152,33 +214,40 @@ class CryptoNewsService:
                     'categories': item.get('categories', ''),
                     'sentiment': sentiment,
                 }
-
-                # Filter by symbols if provided
-                if symbols:
-                    text_lower = f"{title} {body}".lower()
-                    matched = False
-                    for sym in symbols:
-                        # Normalize quote asset (USDC↔USDT) so the USDT-keyed
-                        # keyword map also serves USDC perpetuals (EEA/MiCA).
-                        lookup = sym.upper()
-                        if lookup.endswith('USDC'):
-                            lookup = lookup[:-4] + 'USDT'
-                        base = lookup.lower().replace('usdt', '')
-                        keywords = SYMBOL_KEYWORDS.get(lookup, [base])
-                        if any(kw in text_lower for kw in keywords):
-                            matched = True
-                            article['related_symbol'] = sym
-                            break
-                    if not matched:
-                        continue
-
                 articles.append(article)
-
-            self._set_cache(cache_key, articles)
-            return articles
+                
         except Exception as e:
-            logger.error(f"CryptoCompare news error: {e}")
-            return []
+            logger.warning(f"CryptoCompare news error: {e}. Falling back to RSS feeds.")
+            
+        # Fallback to RSS if CryptoCompare fails or returns no data
+        if not articles:
+            articles = await self.get_rss_news()
+            
+        # Filter by symbols if provided
+        filtered_articles = []
+        for article in articles:
+            if symbols:
+                title = article.get('title', '')
+                body = article.get('body', '')
+                text_lower = f"{title} {body}".lower()
+                matched = False
+                for sym in symbols:
+                    lookup = sym.upper()
+                    if lookup.endswith('USDC'):
+                        lookup = lookup[:-4] + 'USDT'
+                    base = lookup.lower().replace('usdt', '')
+                    keywords = SYMBOL_KEYWORDS.get(lookup, [base])
+                    if any(kw in text_lower for kw in keywords):
+                        matched = True
+                        article['related_symbol'] = sym
+                        break
+                if matched:
+                    filtered_articles.append(article)
+            else:
+                filtered_articles.append(article)
+
+        self._set_cache(cache_key, filtered_articles)
+        return filtered_articles
 
     # ══════════════════════════════════════════════════════════════════════
     # 3. Fear & Greed Index

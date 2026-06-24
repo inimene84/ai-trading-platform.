@@ -250,6 +250,16 @@ class InfluxDBWriter:
         }
         await self._write(self.BUCKET_NEWS, "news_sentiment", tags, fields)
 
+    async def write_global_sentiment(
+        self,
+        index_value: float,
+        source: str = "alternative.me",
+    ) -> None:
+        """Write global macro sentiment (Fear & Greed) to news-sentiment bucket."""
+        tags = {"source": source}
+        fields: dict[str, Any] = {"index": float(index_value)}
+        await self._write(self.BUCKET_NEWS, "global_sentiment", tags, fields)
+
     # ─────────────────────────── internals ────────────────────────────── #
 
     @staticmethod

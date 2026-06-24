@@ -251,6 +251,19 @@ class SentimentReader:
                     value = 50.0 + (score * 50.0)  # 0=extreme fear, 100=extreme greed
 
             if value is None:
+                # Absolute Fallback: Hit Alternative.me API directly if Influx is completely empty
+                try:
+                    import requests
+                    resp = requests.get('https://api.alternative.me/fng/?limit=1', timeout=5)
+                    resp.raise_for_status()
+                    data = resp.json()
+                    entries = data.get('data', [])
+                    if entries:
+                        value = int(entries[0].get('value', 0))
+                except Exception as e:
+                    logger.warning(f"Alternative.me fallback error: {e}")
+
+            if value is None:
                 return None
 
             if value > 75:

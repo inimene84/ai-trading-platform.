@@ -39,6 +39,10 @@ from typing import Optional
 
 from backend.services.crypto_news_service import crypto_news_service
 from backend.services.influxdb_writer import influx
+from backend.services.qdrant_client import qdrant
+
+import httpx
+
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +73,7 @@ def _aggregate_keyword_sentiment(articles: list[dict]) -> tuple[float, float, st
     Returns (sentiment_score, impact_score, direction, headline_count).
     """
     if not articles:
-        return 0.0, 0.0, "NEUTRAL", 0
+        return 0.0, 0.0, "NEUTRAL", 0, 0.0
 
     scores = []
     for a in articles:
@@ -90,7 +94,9 @@ def _aggregate_keyword_sentiment(articles: list[dict]) -> tuple[float, float, st
 
     # Impact scales with how much coverage this coin got (saturates at ~10 items).
     impact = max(0.0, min(1.0, n / 10.0))
-    return round(avg, 4), round(impact, 4), direction, n
+    # Confidence is 0.1 minimum so coins with neutral sentiment but some coverage aren't dropped
+    confidence = max(impact, 0.1) if n > 0 else 0.0
+    return round(avg, 4), round(impact, 4), direction, n, round(confidence, 4)
 
 
 class SentimentLoopService:
@@ -108,6 +114,7 @@ class SentimentLoopService:
         self._next_cycle: Optional[str] = None
         self._cycle_count = 0
         self._last_written: dict[str, dict] = {}  # symbol -> last point summary
+        self._archived_news_urls = set()
 
     # ── status ──────────────────────────────────────────────────────────
     def status(self) -> dict:
@@ -152,6 +159,8 @@ class SentimentLoopService:
 
     # ── core loop ───────────────────────────────────────────────────────
     async def _loop(self) -> None:
+        last_macro_fetch = 0.0
+
         while self._running:
             try:
                 await self.run_once()
@@ -159,6 +168,16 @@ class SentimentLoopService:
                 self._state = "error"
                 self._error = str(e)
                 logger.error(f"Sentiment loop cycle error: {e}")
+
+            if os.getenv("MACRO_LOOP_ENABLED", "true").lower() == "true":
+                macro_interval = int(os.getenv("MACRO_LOOP_INTERVAL_MIN", "60")) * 60
+                now = time.time()
+                if now - last_macro_fetch >= macro_interval:
+                    try:
+                        await self.run_macro_tick()
+                        last_macro_fetch = now
+                    except Exception as e:
+                        logger.error(f"Macro loop cycle error: {e}")
             # Sleep until next cycle
             self._next_cycle = datetime.now(timezone.utc).isoformat()
             for _ in range(self._interval_minutes * 60):
@@ -184,7 +203,7 @@ class SentimentLoopService:
                 logger.warning(f"[sentiment] news fetch failed for {sym}: {e}")
                 articles = []
 
-            score, impact, direction, n = _aggregate_keyword_sentiment(articles)
+            score, impact, direction, n, confidence = _aggregate_keyword_sentiment(articles)
 
             # Optional LLM refinement (best-effort; falls back to keyword score).
             if self._use_llm and articles:
@@ -205,6 +224,36 @@ class SentimentLoopService:
                 "headline_count": n,
             }
 
+            per_symbol[sym] = point
+
+            # Archive impactful news into Qdrant
+            for article in articles:
+                url = article.get("url") or article.get("title")
+                if not url or url in self._archived_news_urls:
+                    continue
+                
+                # Only archive high-impact or strong confidence AI-filtered articles to save space
+                if confidence > 0.5 or impact > 0.6:
+                    try:
+                        emb = await self._generate_embedding(article.get("title", "") + " " + article.get("body", ""))
+                        if emb:
+                            await qdrant.store_news_article(
+                                title=article.get("title", ""),
+                                content=article.get("body", ""),
+                                source=article.get("source", "native-sentiment"),
+                                url=article.get("url", ""),
+                                published_at=article.get("published_on"),
+                                sentiment=score,
+                                symbols=[sym],
+                                embedding=emb,
+                            )
+                            self._archived_news_urls.add(url)
+                            # Keep set size reasonable
+                            if len(self._archived_news_urls) > 5000:
+                                self._archived_news_urls.clear()
+                    except Exception as e:
+                        logger.warning(f"Failed to archive news {url}: {e}")
+
             if not dry_run:
                 try:
                     base = sym.replace("USDT", "").replace("USDC", "").replace("PERP", "").upper()
@@ -215,7 +264,7 @@ class SentimentLoopService:
                         source="native-sentiment-loop",
                         time_horizon="short",
                         topics=topics,
-                        confidence=impact,                 # coverage doubles as a confidence proxy
+                        confidence=confidence,             # properly uses the computed confidence
                         direction=direction,
                     )
                     written += 1
@@ -223,8 +272,44 @@ class SentimentLoopService:
                 except Exception as e:
                     skipped += 1
                     logger.warning(f"[sentiment] influx write failed for {sym}: {e}")
+
+        if per_symbol:
+            crypto_score = sum(v["sentiment_score"] for v in per_symbol.values()) / len(per_symbol)
+            crypto_impact = sum(v["impact_score"] for v in per_symbol.values()) / len(per_symbol)
+            crypto_n = sum(v["headline_count"] for v in per_symbol.values())
+            
+            if crypto_score > 0.05:
+                crypto_dir = "BULLISH"
+            elif crypto_score < -0.05:
+                crypto_dir = "BEARISH"
             else:
-                per_symbol[sym] = point
+                crypto_dir = "NEUTRAL"
+                
+            crypto_point = {
+                "sentiment_score": round(crypto_score, 4),
+                "impact_score": round(crypto_impact, 4),
+                "direction": crypto_dir,
+                "headline_count": crypto_n
+            }
+
+            if not dry_run:
+                try:
+                    await influx.write_news_sentiment(
+                        symbol="CRYPTO",
+                        sentiment_score=crypto_score,
+                        impact_score=crypto_impact,
+                        source="native-sentiment-loop-aggregate",
+                        time_horizon="short",
+                        topics="aggregate",
+                        confidence=crypto_impact,
+                        direction=crypto_dir,
+                    )
+                    written += 1
+                    self._last_written["CRYPTO"] = crypto_point
+                except Exception as e:
+                    logger.warning(f"[sentiment] influx write failed for CRYPTO: {e}")
+            else:
+                per_symbol["CRYPTO"] = crypto_point
 
         self._cycle_count += 1
         self._last_cycle = datetime.now(timezone.utc).isoformat()
@@ -277,6 +362,47 @@ class SentimentLoopService:
         if new_dir not in {"BULLISH", "BEARISH", "NEUTRAL"}:
             new_dir = direction
         return round(new_score, 4), round(new_impact, 4), new_dir
+
+    async def _generate_embedding(self, text: str) -> Optional[list[float]]:
+        """Best-effort embedding for news articles."""
+        if not text.strip():
+            return None
+        base = os.getenv("LITELLM_BASE_URL", "http://litellm:4000/v1").rstrip("/")
+        key = os.getenv("LITELLM_API_KEY", "") or os.getenv("KIE_API_KEY", "")
+        model = os.getenv("TRADE_MEMORY_EMBED_MODEL", "text-embedding-3-small")
+        try:
+            async with httpx.AsyncClient(timeout=8.0) as cx:
+                r = await cx.post(
+                    f"{base}/embeddings",
+                    headers={"Authorization": f"Bearer {key}"} if key else {},
+                    json={"model": model, "input": text},
+                )
+                r.raise_for_status()
+                data = r.json()
+                emb = data["data"][0]["embedding"]
+                # Qdrant news collection uses 1536d
+                if len(emb) >= 1536:
+                    return emb[:1536]
+                else:
+                    return emb + [0.0] * (1536 - len(emb))
+        except Exception as e:
+            logger.warning(f"[sentiment] News embedding failed: {e}")
+            return None
+
+    async def run_macro_tick(self, dry_run: bool = False) -> None:
+        """Fetch and write global macro sentiment (Fear & Greed)."""
+        try:
+            fng = await crypto_news_service.get_fear_greed()
+            value = fng.get('value')
+            if value is not None:
+                if not dry_run:
+                    await influx.write_global_sentiment(
+                        index_value=value,
+                        source="alternative.me"
+                    )
+                logger.info(f"[macro] Fetched Fear & Greed: {value}")
+        except Exception as e:
+            logger.warning(f"[macro] fetch failed: {e}")
 
 
 

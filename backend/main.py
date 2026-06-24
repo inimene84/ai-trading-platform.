@@ -86,6 +86,14 @@ async def run_supervised_task(task_name: str, coro_func, *args, **kwargs):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifespan context manager for startup and shutdown events."""
+    # 0. Initialize Vector DB Collections
+    try:
+        from backend.services.qdrant_client import qdrant
+        await qdrant.ensure_collection()
+        logger.info("✓ Qdrant collections verified")
+    except Exception as e:
+        logger.warning(f"⚠ Qdrant initialization warning: {e}")
+
     # 1. Startup Logic
     try:
         logger.info("Checking Ollama availability...")
@@ -177,6 +185,15 @@ async def lifespan(app: FastAPI):
         logger.info("✓ Skill-miner loop auto-started under supervisor")
     else:
         logger.info("ℹ Skill miner disabled (SKILL_MINER_ENABLED=false)")
+
+    # 7. Market Alerts Loop
+    if os.getenv("MARKET_ALERTS_ENABLED", "true").lower() == "true":
+        from backend.services.market_alerts import market_alerts_loop
+        task = asyncio.create_task(run_supervised_task("Market Alerts Loop", market_alerts_loop.start))
+        background_tasks.append(task)
+        logger.info("✓ Market alerts loop auto-started under supervisor")
+    else:
+        logger.info("ℹ Market alerts disabled (MARKET_ALERTS_ENABLED=false)")
 
     yield
 
