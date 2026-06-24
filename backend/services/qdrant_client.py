@@ -176,11 +176,12 @@ class QdrantNewsClient:
         try:
             if query_embedding is not None:
                 # True semantic vector search
-                results = await self._client.search(
+                resp = await self._client.query_points(
                     collection_name=self.collection_name,
-                    query_vector=query_embedding,
+                    query=query_embedding,
                     limit=limit,
                 )
+                results = getattr(resp, "points", resp) or []
                 return [
                     {
                         "id": r.id,

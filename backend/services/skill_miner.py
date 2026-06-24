@@ -380,6 +380,16 @@ class SkillMinerService:
         from backend.database.models import StrategySkill
         now = datetime.now(timezone.utc)
         stored = 0
+
+        # Deduplicate mined list by skill_key (keeping the first one, which has the highest edge score)
+        seen_keys = set()
+        deduped = []
+        for m in mined:
+            if m.skill_key not in seen_keys:
+                seen_keys.add(m.skill_key)
+                deduped.append(m)
+        mined = deduped
+
         active_keys = {m.skill_key for m in mined}
         with SessionLocal() as db:
             for m in mined:

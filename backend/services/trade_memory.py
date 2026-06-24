@@ -410,7 +410,7 @@ class TradeMemoryService:
 
             resp = await self._client.query_points(
                 collection_name=self.collection,
-                query_vector=vec,
+                query=vec,
                 limit=k,
                 query_filter=qfilter,
                 with_payload=True,
