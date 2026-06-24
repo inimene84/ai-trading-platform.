@@ -16,10 +16,17 @@ logger = logging.getLogger(__name__)
 CACHE_TTL = 300  # 5 minutes
 
 RSS_FEEDS = [
-    ("CoinDesk",       "https://feeds.feedburner.com/CoinDesk"),
+    ("CoinDesk",       "https://www.coindesk.com/arc/outboundfeeds/rss/"),
     ("CoinTelegraph",  "https://cointelegraph.com/rss"),
     ("Reddit Crypto",  "https://www.reddit.com/r/CryptoCurrency/new/.rss"),
     ("Yahoo Finance",  "https://feeds.finance.yahoo.com/rss/2.0/headline?s=BTC-USD,ETH-USD,SOL-USD&region=US&lang=en-US"),
+    ("Bitcoinist",     "https://bitcoinist.com/feed/"),
+    ("NewsBTC",        "https://www.newsbtc.com/feed/"),
+    ("CryptoPotato",   "https://cryptopotato.com/feed/"),
+    ("99Bitcoins",     "https://99bitcoins.com/feed/"),
+    ("CryptoBriefing", "https://cryptobriefing.com/feed/"),
+    ("Crypto.news",    "https://crypto.news/feed/"),
+    ("BitcoinMagazine","https://bitcoinmagazine.com/.rss/full/"),
 ]
 
 POSITIVE_WORDS = {
@@ -41,26 +48,35 @@ NEGATIVE_WORDS = {
 
 # Symbol to keyword mapping for news filtering
 SYMBOL_KEYWORDS = {
-    'BTCUSDT': ['bitcoin', 'btc'],
-    'ETHUSDT': ['ethereum', 'eth'],
-    'SOLUSDT': ['solana', 'sol'],
-    'BNBUSDT': ['bnb', 'binance coin'],
-    'XRPUSDT': ['xrp', 'ripple'],
-    'ADAUSDT': ['cardano', 'ada'],
+    'BTCUSDT':  ['bitcoin', 'btc'],
+    'ETHUSDT':  ['ethereum', 'ether', 'eth'],
+    'BNBUSDT':  ['binance', 'bnb', 'binance coin'],
+    'SOLUSDT':  ['solana', 'sol'],
+    'XRPUSDT':  ['ripple', 'xrp'],
+    'ADAUSDT':  ['cardano', 'ada'],
+    'DOTUSDT':  ['polkadot', 'dot'],
     'DOGEUSDT': ['dogecoin', 'doge'],
-    'AVAXUSDT': ['avalanche', 'avax'],
-    'DOTUSDT': ['polkadot', 'dot'],
+    'LTCUSDT':  ['litecoin', 'ltc'],
     'LINKUSDT': ['chainlink', 'link'],
-    'POLUSDT': ['polygon', 'matic'],
-    'LTCUSDT': ['litecoin', 'ltc'],
-    'UNIUSDT': ['uniswap', 'uni'],
+    'AVAXUSDT': ['avalanche', 'avax'],
+    'MATICUSDT':['polygon', 'matic'],
+    'ICPUSDT':  ['internet computer', 'icp', 'dfinity'],
     'ATOMUSDT': ['cosmos', 'atom'],
     'NEARUSDT': ['near protocol', 'near'],
-    'OPUSDT': ['optimism', 'op'],
-    'ARBUSDT': ['arbitrum', 'arb'],
-    'APTUSDT': ['aptos', 'apt'],
-    'INJUSDT': ['injective', 'inj'],
-    'SUIUSDT': ['sui'],
+    'UNIUSDT':  ['uniswap', 'uni'],
+    'ARBUSDT':  ['arbitrum', 'arb'],
+    'OPUSDT':   ['optimism', 'op'],
+    'SUIUSDT':  ['sui'],
+    'APTUSDT':  ['aptos', 'apt'],
+    'INJUSDT':  ['injective', 'inj'],
+    'FILUSDT':  ['filecoin', 'fil'],
+    'TRXUSDT':  ['tron', 'trx'],
+    'XLMUSDT':  ['stellar', 'xlm'],
+    'HBARUSDT': ['hedera', 'hbar'],
+    'PEPEUSDT': ['pepe'],
+    'SHIBUSDT': ['shiba', 'shib'],
+    'WIFUSDT':  ['dogwifhat', 'wif'],
+    'TONUSDT':  ['toncoin', 'ton'],
 }
 
 
