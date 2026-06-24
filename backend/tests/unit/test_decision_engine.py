@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import MagicMock, AsyncMock, patch
+from unittest.mock import MagicMock
 
 from backend.services.decision_engine import DecisionEngine, compute_sl_tp_levels
 from backend.services.risk_config import RiskConfig

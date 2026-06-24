@@ -3,7 +3,6 @@ Kronos stub — minimal fallback for NeoQuasar/Kronos-mini integration.
 Installs as backend.services.kronos so imports don't crash.
 """
 import logging
-import random
 import numpy as np
 
 logger = logging.getLogger("kronos")
@@ -41,14 +40,11 @@ class KronosPredictor:
             sma20 = float(df["close"].iloc[-20:].mean())
             diff = (last - sma20) / sma20 if sma20 else 0
             if diff > 0.02:
-                sig = "UP"
-                conf = min(abs(diff)*10, 0.7)
+                min(abs(diff)*10, 0.7)
             elif diff < -0.02:
-                sig = "DOWN"
-                conf = min(abs(diff)*10, 0.7)
+                min(abs(diff)*10, 0.7)
             else:
-                sig = "NEUTRAL"
-                conf = 0.0
+                pass
             
             # Return a DataFrame mock if needed, or dict. 
             # kronos_service.py expects a DataFrame from predictor.predict

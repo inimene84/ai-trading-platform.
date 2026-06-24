@@ -1,6 +1,5 @@
 """News and market data routes for the News & Data Panel."""
 from fastapi import APIRouter, HTTPException
-from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 import asyncio
 import time

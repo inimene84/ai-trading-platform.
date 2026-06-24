@@ -1,4 +1,3 @@
-import pytest
 from unittest.mock import MagicMock
 from backend.strategies.combined import CombinedStrategy
 from backend.strategies.base import StrategySignal

@@ -15,11 +15,9 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import json
 import logging
 import os
 import sys
-from datetime import datetime, timezone
 
 # Ensure project root is on the path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
@@ -59,7 +57,7 @@ async def _fetch_bars(symbol: str, limit: int) -> list[dict]:
 
 
 async def _run_eval(args):
-    from backend.services.persona_adapter import PersonaRegistry, run_all_personas, run_persona
+    from backend.services.persona_adapter import PersonaRegistry, run_all_personas
 
     registry = PersonaRegistry()
 

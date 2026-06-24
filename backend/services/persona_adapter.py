@@ -18,11 +18,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional
 
-import httpx
 import yaml
 import time
 
-from backend.llm.router import pick_model, get_api_key
 
 logger = logging.getLogger(__name__)
 

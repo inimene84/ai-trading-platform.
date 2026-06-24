@@ -1,13 +1,9 @@
 import asyncio
 import os
-import sys
 import platform
 import subprocess
 import time
-import re
 import json
-import queue
-import threading
 from pathlib import Path
 from typing import Dict, List, Optional, AsyncGenerator
 import logging
@@ -457,7 +453,7 @@ class OllamaService:
         api_models = []
         for model_name in downloaded_models:
             # Clean up model name for display
-            base = model_name.split(':')[0] if ':' in model_name else model_name
+            model_name.split(':')[0] if ':' in model_name else model_name
             api_models.append({
                 "display_name": f"[ollama] {model_name}",
                 "model_name": model_name,

@@ -146,9 +146,11 @@ class TrendFollowingStrategy(BaseStrategy):
             elif adx_val > self.adx_thresh:
                 sell_conf += 0.1
             if not above_200:
-                sell_conf += 0.15; sell_reasons.append("below200EMA")
+                sell_conf += 0.15
+                sell_reasons.append("below200EMA")
             if vol_ok:
-                sell_conf += 0.15; sell_reasons.append("vol+")
+                sell_conf += 0.15
+                sell_reasons.append("vol+")
             if trending and sell_conf >= 0.45:
                 return StrategySignal(
                     symbol=symbol, signal="SELL", confidence=min(sell_conf, 1.0),

@@ -1,7 +1,6 @@
-from fastapi import APIRouter, Query, BackgroundTasks
+from fastapi import APIRouter
 from pydantic import BaseModel
-from typing import List, Dict, Any, Optional
-import asyncio
+from typing import List
 
 from backend.backtesting.crypto_backtester import CryptoBacktestEngine
 

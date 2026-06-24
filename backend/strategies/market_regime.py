@@ -22,7 +22,6 @@ from dataclasses import dataclass
 from typing import Literal
 
 import pandas as pd
-import numpy as np
 
 logger = logging.getLogger(__name__)
 
@@ -211,7 +210,6 @@ class MarketRegimeDetector:
         Decision tree for regime classification.
         Returns (regime, confidence, reasoning).
         """
-        reasons = []
 
         # ── 1. VOLATILE: extreme ATR, wide BB, erratic ─────────────────────
         if atr_ratio > 0.035 and bb_pct > 0.80:

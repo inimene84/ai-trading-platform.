@@ -174,7 +174,7 @@ class CTraderProtocol:
                 err.ParseFromString(msg.payload)
                 logger.error(f"cTrader Error: {err.errorCode} — {err.description}")
             except Exception:
-                logger.error(f"cTrader error response (type=2142)")
+                logger.error("cTrader error response (type=2142)")
             self._service._auth_event.set()  # unblock connect()
 
         else:
@@ -355,7 +355,7 @@ class CTraderService:
                 content = re.sub(r"CTRADER_ACCESS_TOKEN=.*", f"CTRADER_ACCESS_TOKEN={new_token}", content)
                 content = re.sub(r"CTRADER_REFRESH_TOKEN=.*", f"CTRADER_REFRESH_TOKEN={new_refresh}", content)
                 env_path.write_text(content)
-                logger.info(f"cTrader token refreshed successfully")
+                logger.info("cTrader token refreshed successfully")
                 return new_token
         except Exception as e:
             logger.error(f"Token refresh failed: {e}")

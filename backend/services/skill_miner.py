@@ -36,7 +36,7 @@ from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
-from backend.services.trade_memory import feature_vector, extract_features, _FEATURE_ORDER
+from backend.services.trade_memory import feature_vector, _FEATURE_ORDER
 
 logger = logging.getLogger(__name__)
 

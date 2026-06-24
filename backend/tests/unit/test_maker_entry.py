@@ -10,7 +10,6 @@ fee-churn fix (d0799f8). The method must:
 
 These run fully offline with a fake Binance client; no network, no real sleeps.
 """
-import os
 import pytest
 
 from backend.services.binance_futures_service import BinanceFuturesService

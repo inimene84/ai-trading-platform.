@@ -1,6 +1,5 @@
 """Constants and utilities related to analysts configuration."""
 
-from backend.agents import portfolio_manager
 from backend.agents.aswath_damodaran import aswath_damodaran_agent
 from backend.agents.ben_graham import ben_graham_agent
 from backend.agents.bill_ackman import bill_ackman_agent

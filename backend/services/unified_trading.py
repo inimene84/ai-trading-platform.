@@ -23,10 +23,10 @@ from __future__ import annotations
 import logging
 import threading
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Callable, Dict, List, Optional, Protocol
+from typing import Dict, List, Optional
 
 from backend.services.portfolio import create_portfolio
 
@@ -286,7 +286,7 @@ class PaperTradingEngine:
             # Auto-fill market orders
             if order.order_type == OrderType.MARKET:
                 fill_price = order.price if order.price > 0 else 1000.0
-                trade = self._fill_order_locked(pf, rec, fill_price)
+                self._fill_order_locked(pf, rec, fill_price)
                 return UnifiedOrderResponse(
                     True, oid, f"Paper market order filled @ {fill_price}", "paper",
                     filled_price=fill_price, filled_qty=order.quantity

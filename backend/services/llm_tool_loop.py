@@ -22,7 +22,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 
 import httpx
 
@@ -211,9 +211,6 @@ def build_trading_tools(unified_trading, market_data_service=None) -> ToolRegist
     Register the tools your AI needs to trade.
     Pass your UnifiedTrading singleton and optional market data fetcher.
     """
-    from backend.services.unified_trading import (
-        UnifiedOrder, OrderSide, OrderType, UnifiedTrading
-    )
 
     registry = ToolRegistry()
 

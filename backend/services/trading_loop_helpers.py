@@ -8,12 +8,10 @@ Exchange Protection, and Performance Metrics to clean up the main loop orchestra
 
 import logging
 import os
-import time
 import asyncio
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Any
 
-from backend.database.models import Trade, PortfolioSnapshot, TradingSignal
+from backend.database.models import Trade, PortfolioSnapshot
 from backend.services.influxdb_writer import influx
 from backend.services.unified_trading import UnifiedTrading, UnifiedOrder, OrderSide, OrderType
 from backend.services.position_manager import get_position_manager

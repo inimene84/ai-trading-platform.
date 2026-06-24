@@ -3,9 +3,7 @@ import logging
 import numpy as np
 from typing import Optional, Dict, Any, List
 from dataclasses import dataclass
-from datetime import datetime, timezone
 
-from backend.services.unified_trading import UnifiedOrder, OrderSide, OrderType
 from backend.services.risk_config import RiskConfig
 from backend.strategies.combined import CombinedStrategy
 from backend.strategies.market_regime import MarketRegimeDetector
@@ -102,7 +100,7 @@ class DecisionEngine:
             self._record_eval(symbol, "HOLD", 0.0, "insufficient bars")
             return None
             
-        current_price = bars[-1]["close"]
+        bars[-1]["close"]
         self._record_eval(symbol, "HOLD", 0.0, "evaluating")
         
         # 1. Active position logic
@@ -200,7 +198,7 @@ class DecisionEngine:
                 symbol,
                 signal.signal if signal else "HOLD",
                 signal.confidence if signal else 0.0,
-                f"no strategy signal",
+                "no strategy signal",
             )
             return None
 
@@ -210,7 +208,7 @@ class DecisionEngine:
         if regime_result.regime == "RANGING":
             self._record_eval(
                 symbol, signal.signal, signal.confidence,
-                f"RANGING regime: blocked early (saves Kronos/LLM cost)",
+                "RANGING regime: blocked early (saves Kronos/LLM cost)",
             )
             return None
 

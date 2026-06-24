@@ -341,7 +341,7 @@ class BacktestService:
                             missing_data = True
                             break
                         current_prices[ticker] = price_data.iloc[-1]["close"]
-                    except Exception as e:
+                    except Exception:
                         missing_data = True
                         break
 

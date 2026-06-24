@@ -88,13 +88,13 @@ def create_default_response(model_class: type[BaseModel]) -> BaseModel:
     """Creates a safe default response based on the model's fields."""
     default_values = {}
     for field_name, field in model_class.model_fields.items():
-        if field.annotation == str:
+        if field.annotation is str:
             default_values[field_name] = "Error in analysis, using default"
-        elif field.annotation == float:
+        elif field.annotation is float:
             default_values[field_name] = 0.0
-        elif field.annotation == int:
+        elif field.annotation is int:
             default_values[field_name] = 0
-        elif hasattr(field.annotation, "__origin__") and field.annotation.__origin__ == dict:
+        elif hasattr(field.annotation, "__origin__") and field.annotation.__origin__ is dict:
             default_values[field_name] = {}
         else:
             # For other types (like Literal), try to use the first allowed value

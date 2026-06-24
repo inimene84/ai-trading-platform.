@@ -450,7 +450,7 @@ class AIAnalysisService:
         # Support/Resistance
         high_20 = max(b['high'] for b in bars[-20:])
         low_20 = min(b['low'] for b in bars[-20:])
-        range_pct = (high_20 - low_20) / low_20 * 100
+        (high_20 - low_20) / low_20 * 100
         if price < low_20 * 1.02: bull.append(f'Near 20-bar support (${low_20:,.2f})')
         if price > high_20 * 0.98: bear.append(f'Near 20-bar resistance (${high_20:,.2f})')
 

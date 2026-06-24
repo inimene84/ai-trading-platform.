@@ -39,7 +39,7 @@ class FlowRepository:
         """Get all flows, optionally excluding templates"""
         query = self.db.query(HedgeFundFlow)
         if not include_templates:
-            query = query.filter(HedgeFundFlow.is_template == False)
+            query = query.filter(not HedgeFundFlow.is_template)
         return query.order_by(HedgeFundFlow.updated_at.desc()).all()
     
     def get_flows_by_name(self, name: str) -> List[HedgeFundFlow]:

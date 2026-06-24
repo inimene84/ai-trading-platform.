@@ -9,7 +9,7 @@ print(f"QDRANT_URL: {os.getenv('QDRANT_URL')}")
 print(f"QDRANT_COLLECTION_CRYPTO_NEWS: {os.getenv('QDRANT_COLLECTION_CRYPTO_NEWS')}")
 
 from qdrant_client import AsyncQdrantClient
-from qdrant_client.models import VectorParams, Distance, PointStruct
+from qdrant_client.models import PointStruct
 
 async def test():
     embedding = [0.1] * 1536

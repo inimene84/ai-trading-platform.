@@ -10,7 +10,6 @@ from backend.models.schemas import (
     FlowRunUpdateRequest,
     FlowRunResponse,
     FlowRunSummaryResponse,
-    FlowRunStatus,
     ErrorResponse
 )
 

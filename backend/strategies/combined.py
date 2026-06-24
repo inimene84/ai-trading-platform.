@@ -31,7 +31,6 @@ from backend.strategies.trend_following import TrendFollowingStrategy
 from backend.strategies.mean_reversion import MeanReversionStrategy
 from backend.strategies.breakout import BreakoutStrategy
 
-import os
 import json
 from pathlib import Path
 

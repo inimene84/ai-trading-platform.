@@ -84,7 +84,7 @@ class BinanceWebSocketService:
 
         while True:
             try:
-                logger.info(f"Connecting to Binance Futures WebSocket...")
+                logger.info("Connecting to Binance Futures WebSocket...")
                 async with websockets.connect(url, ping_interval=20) as ws:
                     self._connected = True
                     logger.info(f"WebSocket connected - streaming {len(self._symbols)} symbols")

@@ -330,7 +330,7 @@ async def get_status():
         brokers.append({'name': 'Binance', 'env': 'testnet', 'status': 'not_configured'})
     if os.getenv('CTRADER_ACCESS_TOKEN'):
         from backend.services.ctrader_service import ctrader_broker
-        is_live = os.getenv('CTRADER_ENV', 'demo') == 'live'
+        os.getenv('CTRADER_ENV', 'demo') == 'live'
         status_str = 'configured'
         if ctrader_broker.is_connected:
             status_str = 'online'
@@ -1357,9 +1357,6 @@ async def datahub_peek(topic: str):
 # B: SSE Real-time Stream
 # ═══════════════════════════════════════════════════════════════════════════════
 
-import asyncio
-import json
-from fastapi.responses import StreamingResponse
 
 
 @router.get("/stream")

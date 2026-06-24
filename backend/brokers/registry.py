@@ -110,7 +110,8 @@ class PaperBroker(BrokerBase):
         self._balance = float(os.getenv("PAPER_BALANCE", "10000"))
 
     async def place_market_order(self, symbol, side, quantity, stop_loss=None, take_profit=None, comment="") -> Order:
-        import random, time
+        import random
+        import time
         order = Order(
             order_id=f"PAPER-{int(time.time())}-{random.randint(1000,9999)}",
             symbol=symbol, side=side, quantity=quantity,
@@ -122,7 +123,8 @@ class PaperBroker(BrokerBase):
         return order
 
     async def place_limit_order(self, symbol, side, quantity, price, stop_loss=None, take_profit=None) -> Order:
-        import random, time
+        import random
+        import time
         order = Order(
             order_id=f"PAPER-L-{int(time.time())}-{random.randint(1000,9999)}",
             symbol=symbol, side=side, quantity=quantity, price=price,
@@ -465,7 +467,6 @@ class OANDABroker(BrokerBase):
 
     async def place_market_order(self, symbol, side, quantity, stop_loss=None, take_profit=None, comment="") -> Order:
         import httpx
-        import json
         import time
         # OANDA symbols: EURUSD → EUR_USD
         oanda_sym = symbol[:3] + "_" + symbol[3:6] if len(symbol) == 6 else symbol.replace("/", "_")

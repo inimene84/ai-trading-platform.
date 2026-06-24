@@ -1,6 +1,6 @@
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
-from backend.services.daily_digest import generate_digest_text, send_telegram_message
+from unittest.mock import AsyncMock, patch
+from backend.services.daily_digest import generate_digest_text
 
 @pytest.mark.asyncio
 async def test_generate_digest_text_with_api_key():
@@ -16,27 +16,8 @@ async def test_generate_digest_text_with_api_key():
         "equity": 10250.0,
         "cash": 9750.0,
     }
-    with patch("backend.services.daily_digest.get_api_key", return_value="dummy_key"), \
-         patch("backend.services.daily_digest.pick_model") as mock_pick, \
-         patch("httpx.AsyncClient.post") as mock_post:
-         
-        mock_model = MagicMock()
-        mock_model.name = "claude-sonnet"
-        mock_model.base_url = "http://litellm:4000/v1"
-        mock_model.temperature = 0.3
-        mock_model.max_tokens = 512
-        mock_pick.return_value = mock_model
-        
-        mock_response = AsyncMock()
-        mock_response.is_success = True
-        mock_response.json = MagicMock(return_value={
-            "choices": [{
-                "message": {
-                    "content": "Line 1\nLine 2\nLine 3\nLine 4\nLine 5"
-                }
-            }]
-        })
-        mock_post.return_value = mock_response
+    with patch("backend.services.daily_digest.call_llm_resilient", new_callable=AsyncMock) as mock_call:
+        mock_call.return_value = "Line 1\nLine 2\nLine 3\nLine 4\nLine 5"
         
         digest = await generate_digest_text(stats)
         assert "Trading Daily Digest" in digest
@@ -56,7 +37,8 @@ async def test_generate_digest_text_fallback():
         "equity": 10250.0,
         "cash": 9750.0,
     }
-    with patch("backend.services.daily_digest.get_api_key", return_value=""):
+    with patch("backend.services.daily_digest.call_llm_resilient", new_callable=AsyncMock) as mock_call:
+        mock_call.side_effect = Exception("API down")
         digest = await generate_digest_text(stats)
         assert "Trading Daily Digest" in digest
         assert "Net PnL" in digest

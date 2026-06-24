@@ -10,7 +10,6 @@ Run with:  PYTHONPATH=<repo root> python backend/tests/unit/test_trade_memory.py
 import asyncio
 import math
 import os
-import sys
 import types
 
 # Force deterministic feature embedding (no LLM path) and small thresholds.

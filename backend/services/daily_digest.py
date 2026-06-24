@@ -1,11 +1,10 @@
 import os
-import json
 import logging
 import httpx
 from datetime import datetime, timezone, timedelta
 from backend.database.connection import SessionLocal
 from backend.database.models import Trade, TradingSignal, PortfolioSnapshot
-from backend.llm.router import pick_model, get_api_key
+from backend.llm.router import call_llm_resilient
 
 logger = logging.getLogger("daily_digest")
 
@@ -86,7 +85,6 @@ async def generate_digest_text(stats: dict) -> str:
     )
     
     try:
-        from backend.llm.router import call_llm_resilient
         content = await call_llm_resilient(
             task_type="general",
             prompt=user_prompt,

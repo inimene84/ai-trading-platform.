@@ -1,9 +1,7 @@
 import os
-import asyncio
 import logging
-from typing import List, Dict, Any
+from typing import List, Dict
 from collections import defaultdict
-from datetime import datetime
 
 from backend.services.binance_market_data import BinanceMarketDataService
 from backend.services.decision_engine import DecisionEngine
@@ -219,7 +217,7 @@ class CryptoBacktestEngine:
                         
         # End of backtest: Force close any remaining open positions
         for sym in list(self.positions.keys()):
-            pos = self.positions[sym]
+            self.positions[sym]
             last_candle = data_by_sym[sym][-1]
             self._close_trade(sym, last_candle['close'], last_candle['date'], "END_OF_TEST")
             

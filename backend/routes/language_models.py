@@ -1,5 +1,4 @@
 from fastapi import APIRouter, HTTPException
-from typing import List, Dict, Any
 
 from backend.models.schemas import ErrorResponse
 from backend.services.ollama_service import OllamaService

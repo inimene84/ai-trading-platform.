@@ -7,7 +7,6 @@ from backend.database.models import Base
 from backend.repositories.flow_repository import FlowRepository
 from backend.repositories.flow_run_repository import FlowRunRepository
 from backend.repositories.api_key_repository import ApiKeyRepository
-from backend.models.schemas import FlowRunStatus
 
 
 @pytest.fixture

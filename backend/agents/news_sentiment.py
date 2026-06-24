@@ -2,7 +2,6 @@
 
 from langchain_core.messages import HumanMessage
 from pydantic import BaseModel, Field
-from backend.data.models import CompanyNews
 import pandas as pd
 import numpy as np
 import json

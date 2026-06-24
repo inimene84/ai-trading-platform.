@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 """Restore missing Binance SL/TP from open DB trades. Run inside backend container."""
-import os
 import sys
 
 sys.path.insert(0, "/app")

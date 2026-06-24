@@ -1,7 +1,6 @@
 """One-shot read-only reconciliation check: broker positions vs DB trades.
 Does NOT modify anything. Prints a comparison so we can decide next steps.
 """
-import os
 from pathlib import Path
 from dotenv import load_dotenv
 

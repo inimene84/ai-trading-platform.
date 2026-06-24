@@ -6,7 +6,6 @@ Implements a growth-focused valuation methodology.
 """
 
 import json
-import statistics
 from langchain_core.messages import HumanMessage
 from backend.graph.state import AgentState, show_agent_reasoning
 from backend.utils.progress import progress

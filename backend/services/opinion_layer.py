@@ -13,15 +13,13 @@ Produces a unified TradingOpinion with direction, confidence, and reasoning.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import List, Optional
 
 import pandas as pd
-import numpy as np
 
 from backend.services import kronos_service
 from backend.services.influxdb_sentiment_reader import sentiment_reader
@@ -32,8 +30,8 @@ from backend.services.persona_adapter import run_all_personas, get_persona_weigh
 
 logger = logging.getLogger(__name__)
 
-from backend.database.connection import SessionLocal, engine
-from backend.database.models import Trade, TradingSignal
+from backend.database.connection import SessionLocal
+from backend.database.models import Trade
 import sqlalchemy as sa
 
 def _get_trade_memory(symbol: str, limit: int = 5) -> dict:
@@ -181,7 +179,6 @@ def _run_technical_opinion(bars: pd.DataFrame, symbol: str) -> AgentOpinion:
         conf = combined["confidence"]
 
         # Map to BUY/SELL/NEUTRAL for reasoning
-        direction_map = {"bullish": "BUY", "bearish": "SELL", "neutral": "HOLD"}
 
         reasoning_parts = []
         for name, data in [

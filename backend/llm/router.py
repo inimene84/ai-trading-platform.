@@ -18,7 +18,7 @@ import httpx
 import asyncio
 import json
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Literal, Optional
 
 logger = logging.getLogger(__name__)
