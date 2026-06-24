@@ -1,13 +1,33 @@
 import asyncio
+import json
 import logging
 import os
-import json
 from datetime import datetime, timezone
+from typing import List, Tuple
+
 from backend.llm.router import call_llm_resilient
-from backend.utils.telegram import send_telegram_message
 from backend.services.crypto_news_service import crypto_news_service
+from backend.services.influxdb_writer import influx
+from backend.utils.telegram import send_telegram_message
 
 logger = logging.getLogger("market_alerts")
+
+_ALERT_SYMBOLS = ("CRYPTO", "BTC", "ETH", "SOL")
+
+
+def derive_alert_points(output: dict) -> List[Tuple[str, float]]:
+    """Map LLM JSON to Influx alert_type + score pairs for opinion_layer."""
+    confidence = float(output.get("confidence", 0) or 0)
+    bias = str(output.get("bias", "HOLD")).upper()
+    mood = str(output.get("marketMood", "NEUTRAL")).upper()
+    points: List[Tuple[str, float]] = []
+    if bias == "BUY" or mood == "RISK_ON":
+        points.append(("trending", confidence))
+    if bias == "SELL" or mood == "RISK_OFF":
+        points.append(("dump", confidence))
+    if not points and confidence > 0:
+        points.append(("neutral", confidence * 0.5))
+    return points
 
 class MarketAlertsLoop:
     def __init__(self):
@@ -46,7 +66,7 @@ class MarketAlertsLoop:
                     break
                 await asyncio.sleep(1)
                 
-    async def run_once(self):
+    async def run_once(self, *, dry_run: bool = False, skip_telegram: bool = False):
         logger.info("Running Market Alerts cycle...")
         # 1. Fetch Global Fear & Greed
         fng = await crypto_news_service.get_fear_greed()
@@ -94,7 +114,10 @@ class MarketAlertsLoop:
         except Exception as e:
             logger.error(f"Failed to parse LLM JSON: {e}\nRaw output: {res_str}")
             return
-            
+
+        if not dry_run:
+            await self._write_alerts_to_influx(output)
+
         bias = str(output.get("bias", "HOLD")).upper()
         mood = str(output.get("marketMood", "NEUTRAL")).upper()
         
@@ -114,7 +137,44 @@ class MarketAlertsLoop:
             f"⏰ {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')} UTC"
         )
         
-        await send_telegram_message(msg, parse_mode="HTML")
-        logger.info("Market alert sent successfully.")
+        if not dry_run and not skip_telegram:
+            sent = await send_telegram_message(msg, parse_mode="HTML")
+            if sent:
+                logger.info("Market alert sent to Telegram.")
+            else:
+                logger.warning("Market alert Telegram send skipped or failed.")
+        else:
+            logger.info("Market alert cycle complete (telegram skipped).")
+
+    async def _write_alerts_to_influx(self, output: dict) -> int:
+        """Persist alert scores so opinion_layer can read market_alert points."""
+        alert_points = derive_alert_points(output)
+        if not alert_points:
+            logger.warning("No alert points derived from LLM output")
+            return 0
+
+        written = 0
+        for symbol in _ALERT_SYMBOLS:
+            for alert_type, score in alert_points:
+                await influx.write_market_alert(
+                    symbol=symbol,
+                    alert_type=alert_type,
+                    score=score,
+                    source="market_alerts_loop",
+                )
+                written += 1
+        logger.info(
+            "Wrote %d market_alert point(s) to Influx (%s)",
+            written,
+            ", ".join(f"{t}:{s:.0f}" for t, s in alert_points),
+        )
+        return written
+
+    def status(self) -> dict:
+        return {
+            "running": self._running,
+            "interval_minutes": self._interval_minutes,
+        }
+
 
 market_alerts_loop = MarketAlertsLoop()

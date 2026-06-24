@@ -260,6 +260,28 @@ class InfluxDBWriter:
         fields: dict[str, Any] = {"index": float(index_value)}
         await self._write(self.BUCKET_NEWS, "global_sentiment", tags, fields)
 
+    async def write_market_alert(
+        self,
+        symbol: str,
+        alert_type: str,
+        score: float,
+        *,
+        impact_score: Optional[float] = None,
+        source: str = "native_loop",
+    ) -> None:
+        """Write market alert (trending/pump/dump) to news-sentiment bucket."""
+        tags = {
+            "symbol": symbol.upper(),
+            "alert_type": alert_type.lower(),
+            "source": source,
+        }
+        impact = float(impact_score if impact_score is not None else score)
+        fields: dict[str, Any] = {
+            "score": float(score),
+            "impact_score": impact,
+        }
+        await self._write(self.BUCKET_NEWS, "market_alert", tags, fields)
+
     # ─────────────────────────── internals ────────────────────────────── #
 
     @staticmethod

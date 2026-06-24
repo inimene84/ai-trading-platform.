@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -263,7 +264,9 @@ def _run_social_opinion(symbol: str) -> AgentOpinion:
 def _run_alert_opinion(symbol: str) -> AgentOpinion:
     """Get market alert opinion (trending/pumps/whales)."""
     try:
-        alerts = sentiment_reader.get_market_alerts(symbol, lookback_minutes=60)
+        interval = int(os.getenv("MARKET_ALERTS_INTERVAL_MINUTES", "120"))
+        lookback = int(os.getenv("MARKET_ALERTS_LOOKBACK_MINUTES", str(interval + 30)))
+        alerts = sentiment_reader.get_market_alerts(symbol, lookback_minutes=lookback)
         if not alerts:
             return AgentOpinion(
                 agent="market_alerts", signal="neutral", confidence=0.0,

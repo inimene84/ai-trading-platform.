@@ -617,6 +617,28 @@ async def sentiment_loop_run(dry_run: bool = False):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/market-alerts/status")
+async def market_alerts_status():
+    """Status of the native market alerts loop."""
+    try:
+        from backend.services.market_alerts import market_alerts_loop
+        return market_alerts_loop.status()
+    except Exception as e:
+        return {"running": False, "error": str(e)}
+
+
+@router.post("/market-alerts/run")
+async def market_alerts_run(dry_run: bool = False, skip_telegram: bool = False):
+    """Trigger one market alerts cycle on demand."""
+    try:
+        from backend.services.market_alerts import market_alerts_loop
+        await market_alerts_loop.run_once(dry_run=dry_run, skip_telegram=skip_telegram)
+        return {"status": "ok", "dry_run": dry_run, "skip_telegram": skip_telegram}
+    except Exception as e:
+        logger.error(f"Market alerts manual run failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/gdrive/status")
 async def gdrive_archive_status():
     """Check Google Drive archive integration status."""
