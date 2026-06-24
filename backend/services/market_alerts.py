@@ -3,7 +3,9 @@ import json
 import logging
 import os
 from datetime import datetime, timezone
-from typing import List, Tuple
+from typing import Any, List, Tuple
+
+import httpx
 
 from backend.llm.router import call_llm_resilient
 from backend.services.crypto_news_service import crypto_news_service
@@ -13,6 +15,9 @@ from backend.utils.telegram import send_telegram_message
 logger = logging.getLogger("market_alerts")
 
 _ALERT_SYMBOLS = ("CRYPTO", "BTC", "ETH", "SOL")
+_OPENROUTER_CHAT_URL = os.getenv(
+    "OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"
+).rstrip("/") + "/chat/completions"
 
 
 def derive_alert_points(output: dict) -> List[Tuple[str, float]]:
@@ -28,6 +33,119 @@ def derive_alert_points(output: dict) -> List[Tuple[str, float]]:
     if not points and confidence > 0:
         points.append(("neutral", confidence * 0.5))
     return points
+
+
+def build_fallback_output(
+    fng_value: Any,
+    fng_class: str,
+    headline_count: int,
+) -> dict:
+    """Rule-based alert when the LLM chain is unavailable."""
+    try:
+        fng = int(fng_value)
+    except (TypeError, ValueError):
+        fng = 50
+
+    if fng <= 25:
+        mood, bias = "RISK_OFF", "SELL"
+        confidence = min(100, 40 + (25 - fng) * 2)
+    elif fng >= 75:
+        mood, bias = "RISK_ON", "BUY"
+        confidence = min(100, 40 + (fng - 75) * 2)
+    else:
+        mood, bias = "NEUTRAL", "HOLD"
+        confidence = max(20, min(60, abs(fng - 50)))
+
+    return {
+        "marketMood": mood,
+        "bias": bias,
+        "confidence": int(confidence),
+        "tradingRecommendation": (
+            f"Macro-only alert from Fear & Greed {fng} ({fng_class}). "
+            "LLM synthesis unavailable — treat as low-conviction guidance."
+        ),
+        "keyNarratives": [
+            f"Scanned {headline_count} headlines across BTC/ETH/SOL RSS feeds",
+            f"Fear & Greed index: {fng} ({fng_class})",
+        ],
+        "topRisks": ["LLM providers offline — alert derived from macro index only"],
+        "source": "fallback",
+    }
+
+
+async def _openrouter_analyze(system_prompt: str, user_prompt: str) -> dict:
+    """Direct OpenRouter chat when LiteLLM/Kie chain fails."""
+    api_key = os.getenv("OPENROUTER_API_KEY", "").strip()
+    if not api_key:
+        raise RuntimeError("OPENROUTER_API_KEY not configured")
+
+    model = os.getenv(
+        "MARKET_ALERTS_LLM_MODEL",
+        os.getenv("GENERAL_LLM_MODEL", "openrouter/free"),
+    )
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    referer = os.getenv("OPENROUTER_HTTP_REFERER", "").strip()
+    if referer:
+        headers["HTTP-Referer"] = referer
+    title = os.getenv("OPENROUTER_APP_TITLE", "ai-trading-platform").strip()
+    if title:
+        headers["X-Title"] = title
+
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        "temperature": 0.3,
+        "max_tokens": 300,
+        "response_format": {"type": "json_object"},
+    }
+
+    async with httpx.AsyncClient(timeout=45.0) as client:
+        resp = await client.post(_OPENROUTER_CHAT_URL, headers=headers, json=payload)
+        resp.raise_for_status()
+        content = resp.json()["choices"][0]["message"]["content"]
+    output = json.loads(content)
+    output["source"] = "openrouter"
+    return output
+
+
+async def _analyze_market(
+    system_prompt: str,
+    user_prompt: str,
+    fng_value: Any,
+    fng_class: str,
+    headline_count: int,
+) -> dict:
+    """LLM synthesis with OpenRouter + rule-based fallbacks."""
+    try:
+        res_str = await call_llm_resilient(
+            task_type="deep_analysis",
+            prompt=user_prompt,
+            system=system_prompt,
+            temperature=0.3,
+            max_tokens=300,
+            response_json=True,
+        )
+        output = json.loads(res_str)
+        output["source"] = "litellm"
+        return output
+    except Exception as exc:
+        logger.warning("Market alerts LiteLLM chain failed: %s", exc)
+
+    try:
+        return await _openrouter_analyze(system_prompt, user_prompt)
+    except Exception as exc:
+        logger.warning("Market alerts OpenRouter failed: %s", exc)
+
+    output = build_fallback_output(fng_value, fng_class, headline_count)
+    logger.info("Market alerts using rule-based fallback (F&G=%s)", fng_value)
+    return output
+
 
 class MarketAlertsLoop:
     def __init__(self):
@@ -66,7 +184,7 @@ class MarketAlertsLoop:
                     break
                 await asyncio.sleep(1)
                 
-    async def run_once(self, *, dry_run: bool = False, skip_telegram: bool = False):
+    async def run_once(self, *, dry_run: bool = False, skip_telegram: bool = False) -> dict:
         logger.info("Running Market Alerts cycle...")
         # 1. Fetch Global Fear & Greed
         fng = await crypto_news_service.get_fear_greed()
@@ -76,9 +194,11 @@ class MarketAlertsLoop:
         # 2. Get Recent News for top coins (BTC, ETH, SOL)
         symbols = ["BTC", "ETH", "SOL"]
         news_summaries = []
+        headline_count = 0
         for sym in symbols:
             articles = await crypto_news_service.get_crypto_news([sym])
             headlines = [a.get("title") for a in articles[:3] if a.get("title")]
+            headline_count += len(headlines)
             if headlines:
                 news_summaries.append(f"{sym}: " + " | ".join(headlines))
                 
@@ -99,24 +219,18 @@ class MarketAlertsLoop:
             f"Recent Headlines:\n{news_context}\n\n"
             "Analyze the market and provide your JSON output."
         )
-        
-        res_str = await call_llm_resilient(
-            task_type="deep_analysis",
-            prompt=user_prompt,
-            system=system_prompt,
-            temperature=0.3,
-            max_tokens=300,
-            response_json=True
-        )
-        
-        try:
-            output = json.loads(res_str)
-        except Exception as e:
-            logger.error(f"Failed to parse LLM JSON: {e}\nRaw output: {res_str}")
-            return
 
+        output = await _analyze_market(
+            system_prompt,
+            user_prompt,
+            fng_value,
+            fng_class,
+            headline_count,
+        )
+
+        written = 0
         if not dry_run:
-            await self._write_alerts_to_influx(output)
+            written = await self._write_alerts_to_influx(output)
 
         bias = str(output.get("bias", "HOLD")).upper()
         mood = str(output.get("marketMood", "NEUTRAL")).upper()
@@ -137,14 +251,25 @@ class MarketAlertsLoop:
             f"⏰ {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')} UTC"
         )
         
+        telegram_sent = False
         if not dry_run and not skip_telegram:
-            sent = await send_telegram_message(msg, parse_mode="HTML")
-            if sent:
+            telegram_sent = await send_telegram_message(msg, parse_mode="HTML")
+            if telegram_sent:
                 logger.info("Market alert sent to Telegram.")
             else:
                 logger.warning("Market alert Telegram send skipped or failed.")
         else:
             logger.info("Market alert cycle complete (telegram skipped).")
+
+        return {
+            "source": output.get("source", "unknown"),
+            "bias": bias,
+            "marketMood": mood,
+            "confidence": output.get("confidence", 0),
+            "influx_points_written": written,
+            "telegram_sent": telegram_sent,
+            "dry_run": dry_run,
+        }
 
     async def _write_alerts_to_influx(self, output: dict) -> int:
         """Persist alert scores so opinion_layer can read market_alert points."""
