@@ -123,6 +123,11 @@ async def _analyze_market(
 ) -> dict:
     """LLM synthesis with OpenRouter + rule-based fallbacks."""
     try:
+        return await _openrouter_analyze(system_prompt, user_prompt)
+    except Exception as exc:
+        logger.warning("Market alerts OpenRouter failed: %s", exc)
+
+    try:
         res_str = await call_llm_resilient(
             task_type="deep_analysis",
             prompt=user_prompt,
@@ -136,11 +141,6 @@ async def _analyze_market(
         return output
     except Exception as exc:
         logger.warning("Market alerts LiteLLM chain failed: %s", exc)
-
-    try:
-        return await _openrouter_analyze(system_prompt, user_prompt)
-    except Exception as exc:
-        logger.warning("Market alerts OpenRouter failed: %s", exc)
 
     output = build_fallback_output(fng_value, fng_class, headline_count)
     logger.info("Market alerts using rule-based fallback (F&G=%s)", fng_value)
