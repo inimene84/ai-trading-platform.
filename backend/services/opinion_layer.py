@@ -578,9 +578,8 @@ async def analyze_symbol(
     started = datetime.now(timezone.utc)
     logger.info(f"Opinion Layer starting for {symbol}")
 
-    # Convert bars to DataFrame
     df = pd.DataFrame(bars)
-    if df.empty or len(df) < 20:
+    if df.empty:
         return TradingOpinion(
             symbol=symbol, direction="HOLD", confidence=0.0,
             reasoning="Insufficient bar data",

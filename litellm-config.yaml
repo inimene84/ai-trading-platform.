@@ -8,27 +8,19 @@ model_list:
       max_tokens: 256
       rpm: 30
 
-  # ── Kie.ai Claude Sonnet 4.6 — PRIMARY (alias: claude-sonnet) ──
+  # ── OpenRouter Claude 3.5 Sonnet (Replaces broken Kie) ──
   - model_name: claude-sonnet
     litellm_params:
-      model: claude-sonnet-4-6
-      api_key: os.environ/KIE_API_KEY
-      api_base: https://api.kie.ai/claude
-      custom_llm_provider: anthropic
-      headers:
-        Authorization: os.environ/KIE_BEARER_TOKEN
+      model: openrouter/anthropic/claude-3.5-sonnet
+      api_key: os.environ/OPENROUTER_API_KEY
       temperature: 0.3
       max_tokens: 1024
 
-  # Legacy alias (same Kie Sonnet 4.6 backend)
+  # Legacy alias (now points to OpenRouter)
   - model_name: gemini-3-flash
     litellm_params:
-      model: claude-sonnet-4-6
-      api_key: os.environ/KIE_API_KEY
-      api_base: https://api.kie.ai/claude
-      custom_llm_provider: anthropic
-      headers:
-        Authorization: os.environ/KIE_BEARER_TOKEN
+      model: openrouter/anthropic/claude-3.5-sonnet
+      api_key: os.environ/OPENROUTER_API_KEY
       temperature: 0.3
       max_tokens: 512
 

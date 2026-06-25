@@ -78,13 +78,13 @@ _DEFAULT_REGISTRY: dict[str, ModelConfig] = {
         api_key_env="LITELLM_API_KEY",
     ),
 
-    # Direct Kie.ai fallback (bypasses LiteLLM proxy)
+    # Direct OpenRouter fallback (bypasses LiteLLM proxy)
     "fallback_1": ModelConfig(
-        name=_KIE_SONNET_DIRECT_MODEL,
-        provider="kie",
+        name=os.getenv("OPENROUTER_MODEL", "openrouter/anthropic/claude-3.5-sonnet"),
+        provider="openai",  # OpenRouter uses OpenAI format
         tier="balanced",
-        base_url=os.getenv("KIE_BASE_URL", "https://api.kie.ai/claude"),
-        api_key_env="KIE_API_KEY",
+        base_url=os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
+        api_key_env="OPENROUTER_API_KEY",
     ),
     "fallback_2": ModelConfig(
         name=os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6"),
