@@ -7,7 +7,6 @@ from typing import Any, List, Tuple
 
 import httpx
 
-from backend.llm.router import call_llm_resilient
 from backend.services.crypto_news_service import crypto_news_service
 from backend.services.influxdb_writer import influx
 from backend.utils.telegram import send_telegram_message
@@ -126,21 +125,6 @@ async def _analyze_market(
         return await _openrouter_analyze(system_prompt, user_prompt)
     except Exception as exc:
         logger.warning("Market alerts OpenRouter failed: %s", exc)
-
-    try:
-        res_str = await call_llm_resilient(
-            task_type="deep_analysis",
-            prompt=user_prompt,
-            system=system_prompt,
-            temperature=0.3,
-            max_tokens=300,
-            response_json=True,
-        )
-        output = json.loads(res_str)
-        output["source"] = "litellm"
-        return output
-    except Exception as exc:
-        logger.warning("Market alerts LiteLLM chain failed: %s", exc)
 
     output = build_fallback_output(fng_value, fng_class, headline_count)
     logger.info("Market alerts using rule-based fallback (F&G=%s)", fng_value)
