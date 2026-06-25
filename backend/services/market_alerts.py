@@ -8,15 +8,13 @@ from typing import Any, List, Tuple
 import httpx
 
 from backend.services.crypto_news_service import crypto_news_service
+from backend.llm.router import call_llm_resilient
 from backend.services.influxdb_writer import influx
 from backend.utils.telegram import send_telegram_message
 
 logger = logging.getLogger("market_alerts")
 
 _ALERT_SYMBOLS = ("CRYPTO", "BTC", "ETH", "SOL")
-_OPENROUTER_CHAT_URL = os.getenv(
-    "OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"
-).rstrip("/") + "/chat/completions"
 
 
 def derive_alert_points(output: dict) -> List[Tuple[str, float]]:
@@ -72,47 +70,6 @@ def build_fallback_output(
     }
 
 
-async def _openrouter_analyze(system_prompt: str, user_prompt: str) -> dict:
-    """Direct OpenRouter chat when LiteLLM/Kie chain fails."""
-    api_key = os.getenv("OPENROUTER_API_KEY", "").strip()
-    if not api_key:
-        raise RuntimeError("OPENROUTER_API_KEY not configured")
-
-    model = os.getenv(
-        "MARKET_ALERTS_LLM_MODEL",
-        os.getenv("GENERAL_LLM_MODEL", "openrouter/free"),
-    )
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
-    referer = os.getenv("OPENROUTER_HTTP_REFERER", "").strip()
-    if referer:
-        headers["HTTP-Referer"] = referer
-    title = os.getenv("OPENROUTER_APP_TITLE", "ai-trading-platform").strip()
-    if title:
-        headers["X-Title"] = title
-
-    payload = {
-        "model": model,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-        "temperature": 0.3,
-        "max_tokens": 300,
-        "response_format": {"type": "json_object"},
-    }
-
-    async with httpx.AsyncClient(timeout=45.0) as client:
-        resp = await client.post(_OPENROUTER_CHAT_URL, headers=headers, json=payload)
-        resp.raise_for_status()
-        content = resp.json()["choices"][0]["message"]["content"]
-    output = json.loads(content)
-    output["source"] = "openrouter"
-    return output
-
-
 async def _analyze_market(
     system_prompt: str,
     user_prompt: str,
@@ -120,11 +77,21 @@ async def _analyze_market(
     fng_class: str,
     headline_count: int,
 ) -> dict:
-    """LLM synthesis with OpenRouter + rule-based fallbacks."""
+    """LLM synthesis with Resilient LLM Router + rule-based fallbacks."""
     try:
-        return await _openrouter_analyze(system_prompt, user_prompt)
+        res = await call_llm_resilient(
+            task_type="deep_analysis",
+            prompt=user_prompt,
+            system=system_prompt,
+            temperature=0.3,
+            max_tokens=300,
+            response_json=True
+        )
+        output = json.loads(res)
+        output["source"] = "resilient_router"
+        return output
     except Exception as exc:
-        logger.warning("Market alerts OpenRouter failed: %s", exc)
+        logger.warning("Market alerts LLM analysis failed: %s", exc)
 
     output = build_fallback_output(fng_value, fng_class, headline_count)
     logger.info("Market alerts using rule-based fallback (F&G=%s)", fng_value)
