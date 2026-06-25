@@ -181,6 +181,7 @@ def _clean_and_parse_json(content: str) -> dict:
         except json.JSONDecodeError:
             pass
             
+    logger.error(f"Failed to parse JSON. Raw LLM output: {content}")
     raise ValueError("Could not parse JSON from LLM response")
 
 
