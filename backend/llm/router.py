@@ -45,37 +45,37 @@ _KIE_SONNET_DIRECT_MODEL = os.getenv("KIE_MODEL", "claude-sonnet-4-6")
 _LITELLM_BASE_URL = os.getenv("LITELLM_BASE_URL", os.getenv("PERSONA_LLM_BASE_URL", "http://litellm:4000/v1"))
 
 _DEFAULT_REGISTRY: dict[str, ModelConfig] = {
-    # PRIMARY: Kie.ai Claude Sonnet 4.6 via LiteLLM proxy (docker: http://litellm:4000/v1)
+    # PRIMARY: Direct Kie.ai Claude Sonnet 4.6 (bypasses LiteLLM proxy)
     "persona_analysis": ModelConfig(
-        name=os.getenv("PERSONA_LLM_MODEL", _KIE_SONNET_LITELLM_MODEL),
-        provider=os.getenv("PERSONA_LLM_PROVIDER", "litellm"),
+        name=os.getenv("PERSONA_LLM_MODEL", _KIE_SONNET_DIRECT_MODEL),
+        provider=os.getenv("PERSONA_LLM_PROVIDER", "kie"),
         tier="balanced",
-        base_url=_LITELLM_BASE_URL,
+        base_url=os.getenv("KIE_BASE_URL", "https://api.kie.ai/claude"),
         max_tokens=1024,
         temperature=0.3,
-        api_key_env="LITELLM_API_KEY",
+        api_key_env="KIE_API_KEY",
     ),
 
     # Deep trading analysis — same Kie Sonnet 4.6 route as personas
     "deep_analysis": ModelConfig(
-        name=os.getenv("DEEP_ANALYSIS_LLM_MODEL", os.getenv("PERSONA_LLM_MODEL", _KIE_SONNET_LITELLM_MODEL)),
-        provider=os.getenv("DEEP_ANALYSIS_LLM_PROVIDER", os.getenv("PERSONA_LLM_PROVIDER", "litellm")),
+        name=os.getenv("DEEP_ANALYSIS_LLM_MODEL", os.getenv("PERSONA_LLM_MODEL", _KIE_SONNET_DIRECT_MODEL)),
+        provider=os.getenv("DEEP_ANALYSIS_LLM_PROVIDER", os.getenv("PERSONA_LLM_PROVIDER", "kie")),
         tier="balanced",
-        base_url=_LITELLM_BASE_URL,
+        base_url=os.getenv("KIE_BASE_URL", "https://api.kie.ai/claude"),
         max_tokens=1024,
         temperature=0.3,
-        api_key_env="LITELLM_API_KEY",
+        api_key_env="KIE_API_KEY",
     ),
 
-    # General LLM tasks (news scoring, etc.) — Kie Sonnet via LiteLLM
+    # General LLM tasks (news scoring, etc.) — Kie Sonnet directly
     "general": ModelConfig(
-        name=os.getenv("GENERAL_LLM_MODEL", _KIE_SONNET_LITELLM_MODEL),
-        provider=os.getenv("GENERAL_LLM_PROVIDER", "litellm"),
+        name=os.getenv("GENERAL_LLM_MODEL", _KIE_SONNET_DIRECT_MODEL),
+        provider=os.getenv("GENERAL_LLM_PROVIDER", "kie"),
         tier="balanced",
-        base_url=_LITELLM_BASE_URL,
+        base_url=os.getenv("KIE_BASE_URL", "https://api.kie.ai/claude"),
         max_tokens=1024,
         temperature=0.4,
-        api_key_env="LITELLM_API_KEY",
+        api_key_env="KIE_API_KEY",
     ),
 
     # Direct OpenRouter fallback (bypasses LiteLLM proxy)
