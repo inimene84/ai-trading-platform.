@@ -56,10 +56,10 @@ class TradingLoopService:
         self._interval_minutes = 15
         env_syms = os.getenv('TRADING_SYMBOLS', '')
         self._symbols = [s.strip() for s in env_syms.split(',') if s.strip()] if env_syms else [
-            'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT',
+            'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT',
             'ADAUSDT', 'DOGEUSDT', 'AVAXUSDT', 'DOTUSDT', 'LINKUSDT',
             'POLUSDT', 'LTCUSDT', 'UNIUSDT', 'ATOMUSDT', 'NEARUSDT',
-            'OPUSDT', 'ARBUSDT', 'APTUSDT', 'INJUSDT', 'SUIUSDT'
+            'OPUSDT', 'ARBUSDT', 'APTUSDT', 'INJUSDT'
         ]
         self._strategy_name = "combined"
         self._last_cycle: Optional[str] = None
@@ -83,6 +83,11 @@ class TradingLoopService:
         # reconstructed lazily from entry/current price on first sight.
         self._high_water: dict = {}
         self._last_digest_date = None
+        # Cycle-level cache for exchange positions (populated once per cycle,
+        # avoids calling get_positions() per symbol which returns ALL positions)
+        self._cycle_positions: list = []
+        # Semaphore: process max 3 symbols concurrently to stagger API calls
+        self._symbol_semaphore = asyncio.Semaphore(3)
 
     @staticmethod
     def _is_live_binance() -> bool:
@@ -470,6 +475,15 @@ class TradingLoopService:
         finally:
             db.close()
 
+        # ── Cache all exchange positions ONCE per cycle ──────────────────
+        # get_positions() returns ALL symbols; caching here avoids redundant
+        # per-symbol API calls in _process_symbol() (was the #1 rate-limit cause).
+        try:
+            self._cycle_positions = binance_futures_broker.get_positions(raise_on_error=True)
+        except Exception as _pos_e:
+            logger.warning(f"Could not cache exchange positions: {_pos_e}")
+            self._cycle_positions = []
+
         # ── STEP 1A: Position Manager — Review ALL open positions for exits ──
         _exits_triggered = 0
         try:
@@ -681,6 +695,14 @@ class TradingLoopService:
 
     async def _process_symbol(self, symbol: str, min_confidence: float, ai_threshold: float, max_positions: int):
         """Analyze a single symbol and execute a trade if conditions are met."""
+        # Stagger: at most N symbols processed concurrently (set in __init__)
+        async with self._symbol_semaphore:
+            return await self._process_symbol_inner(
+                symbol, min_confidence, ai_threshold, max_positions,
+            )
+
+    async def _process_symbol_inner(self, symbol: str, min_confidence: float, ai_threshold: float, max_positions: int):
+        """Inner implementation — runs under the symbol semaphore."""
         import structlog
         structlog.contextvars.bind_contextvars(symbol=symbol)
         from backend.services.decision_engine import DecisionEngine
@@ -700,18 +722,12 @@ class TradingLoopService:
                 Trade.status.in_(["open", "filled"])
             ).first()
 
-            exchange_legs = []
-            try:
-                # Use module-level singleton — avoids creating a new
-                # BinanceFuturesService() which calls futures_exchange_info().
-                exchange_legs = [
-                    p for p in binance_futures_broker.get_positions(raise_on_error=True)
-                    if p.get("symbol") == symbol and float(p.get("quantity") or 0) > 0
-                ]
-            except Exception as ex_e:
-                logger.error(f"  [ {symbol} ] Exchange position check failed: {ex_e}. Skipping symbol processing for this cycle.")
-                db.close()
-                return {"signals": 0, "trades": 0}
+            # Use cycle-level cached positions instead of per-symbol API call.
+            # get_positions() returns ALL symbols; filtering is cheap.
+            exchange_legs = [
+                p for p in self._cycle_positions
+                if p.get("symbol") == symbol and float(p.get("quantity") or 0) > 0
+            ]
 
             if exchange_legs and not existing:
                 sides = [p.get("side") for p in exchange_legs]

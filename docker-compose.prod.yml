@@ -26,6 +26,7 @@ services:
       GROQ_API_KEY: sk-1234 # LiteLLM master key
       PERSONA_LLM_BASE_URL: ${PERSONA_LLM_BASE_URL:-https://api.kie.ai/v1}
       KIE_MODEL: claude-sonnet-4-6
+      KIE_OPUS_MODEL: ${KIE_OPUS_MODEL:-claude-opus-4-6}
       # Safety: risk guard ENABLED by default. Only disable for explicit testing by setting DISABLE_RISK_GUARD=true in .env
       DISABLE_RISK_GUARD: ${DISABLE_RISK_GUARD:-false}
       # MiCA/EEA: trade USDC-margined perpetuals (USDT restricted for EU users).

@@ -195,49 +195,19 @@ class CryptoNewsService:
         return all_items
 
     async def get_crypto_news(self, symbols: list[str] = None) -> list[dict]:
-        """Get crypto news from CryptoCompare with sentiment classification. Falls back to RSS."""
-        import os
+        """Get crypto news with sentiment classification.
+
+        Uses RSS feeds directly (CoinDesk, CoinTelegraph, Reddit, etc.).
+        CryptoCompare API was removed — the free tier is exhausted and the
+        11 RSS feeds already provide excellent coverage without any API key.
+        """
         cache_key = f"news:{','.join(symbols) if symbols else 'all'}"
         cached = self._get_cached(cache_key)
         if cached is not None:
             return cached
 
-        articles = []
-        try:
-            api_key = os.getenv("CRYPTOCOMPARE_API_KEY", "")
-            headers = {"authorization": f"Apikey {api_key}"} if api_key else {}
-            
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                resp = await client.get(
-                    'https://min-api.cryptocompare.com/data/v2/news/',
-                    params={'lang': 'EN', 'sortOrder': 'latest'},
-                    headers=headers
-                )
-                resp.raise_for_status()
-                data = resp.json()
-
-            for item in data.get('Data', []):
-                title = item.get('title', '')
-                body = item.get('body', '')
-                sentiment = self._classify_sentiment(f"{title} {body}")
-
-                article = {
-                    'title': title,
-                    'body': body[:300],
-                    'source': item.get('source', ''),
-                    'url': item.get('url', ''),
-                    'published_at': item.get('published_on', 0),
-                    'categories': item.get('categories', ''),
-                    'sentiment': sentiment,
-                }
-                articles.append(article)
-                
-        except Exception as e:
-            logger.warning(f"CryptoCompare news error: {e}. Falling back to RSS feeds.")
-            
-        # Fallback to RSS if CryptoCompare fails or returns no data
-        if not articles:
-            articles = await self.get_rss_news()
+        # Fetch from RSS feeds (no API key required)
+        articles = await self.get_rss_news()
             
         # Filter by symbols if provided
         filtered_articles = []

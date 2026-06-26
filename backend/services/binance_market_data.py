@@ -11,6 +11,8 @@ import os
 import time
 from typing import Optional
 
+import atexit
+
 import httpx
 from dotenv import load_dotenv
 from pathlib import Path
@@ -24,11 +26,15 @@ logger = logging.getLogger(__name__)
 BINANCE_FAPI_BASE = "https://fapi.binance.com"
 CACHE_TTL = 300  # 5 minutes
 
+# Max concurrent outbound requests to Binance public API.
+# Prevents burst overload that triggers IP bans (2400 req/min limit).
+_REQUEST_SEMAPHORE = asyncio.Semaphore(10)
+
 DEFAULT_SYMBOLS = [
-    'BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT',
+    'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT',
     'ADAUSDT', 'DOGEUSDT', 'AVAXUSDT', 'DOTUSDT', 'LINKUSDT',
     'POLUSDT', 'LTCUSDT', 'UNIUSDT', 'ATOMUSDT', 'NEARUSDT',
-    'OPUSDT', 'ARBUSDT', 'APTUSDT', 'INJUSDT', 'SUIUSDT',
+    'OPUSDT', 'ARBUSDT', 'APTUSDT', 'INJUSDT',
 ]
 
 
@@ -46,6 +52,9 @@ class BinanceMarketDataService:
             self.symbols = [s.strip().upper() for s in env_symbols.split(',') if s.strip()]
         else:
             self.symbols = DEFAULT_SYMBOLS
+        # Shared HTTP client — connection pooling avoids per-request TCP overhead
+        # and lets us reuse keep-alive connections.
+        self._http_client: Optional[httpx.AsyncClient] = None
 
     # ── Cache helpers ─────────────────────────────────────────────────────
     def _get_cached(self, key: str) -> Optional[any]:
@@ -58,6 +67,21 @@ class BinanceMarketDataService:
         self._cache[key] = {'ts': time.time(), 'data': data}
 
     # ── HTTP helper ───────────────────────────────────────────────────────
+    async def _get_client(self) -> httpx.AsyncClient:
+        """Return (and lazily create) a shared httpx.AsyncClient."""
+        if self._http_client is None or self._http_client.is_closed:
+            self._http_client = httpx.AsyncClient(
+                timeout=15.0,
+                limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+            )
+        return self._http_client
+
+    async def close(self):
+        """Close the shared HTTP client (call on shutdown)."""
+        if self._http_client and not self._http_client.is_closed:
+            await self._http_client.aclose()
+            self._http_client = None
+
     async def _request(
         self,
         endpoint: str,
@@ -65,25 +89,48 @@ class BinanceMarketDataService:
         use_api_key: bool = False,
         timeout: float = 15.0,
     ) -> Optional[any]:
-        """Make a GET request to Binance Futures API."""
+        """Make a GET request to Binance Futures API.
+
+        Uses a shared connection-pooled client and an asyncio.Semaphore
+        to cap concurrent requests.  On HTTP 429 (rate-limited), honours
+        the Retry-After header and retries once.
+        """
         url = f"{BINANCE_FAPI_BASE}{endpoint}"
         headers = {}
         if use_api_key and self._api_key:
             headers['X-MBX-APIKEY'] = self._api_key
-        try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                resp = await client.get(url, params=params, headers=headers)
-                resp.raise_for_status()
-                return resp.json()
-        except httpx.TimeoutException:
-            logger.error(f"Binance API timeout: {endpoint}")
-            return None
-        except httpx.HTTPStatusError as e:
-            logger.error(f"Binance API HTTP {e.response.status_code}: {endpoint} - {e.response.text[:200]}")
-            return None
-        except Exception as e:
-            logger.error(f"Binance API error: {endpoint} - {e}")
-            return None
+
+        async with _REQUEST_SEMAPHORE:
+            client = await self._get_client()
+            for attempt in range(2):  # at most 1 retry on 429
+                try:
+                    resp = await client.get(
+                        url, params=params, headers=headers, timeout=timeout,
+                    )
+                    # ── Handle 429 / rate-limit with back-off ──
+                    if resp.status_code == 429 and attempt == 0:
+                        retry_after = int(resp.headers.get('Retry-After', '5'))
+                        retry_after = min(retry_after, 60)  # cap at 60s
+                        logger.warning(
+                            f"Binance API 429 on {endpoint} — backing off {retry_after}s"
+                        )
+                        await asyncio.sleep(retry_after)
+                        continue
+                    resp.raise_for_status()
+                    return resp.json()
+                except httpx.TimeoutException:
+                    logger.error(f"Binance API timeout: {endpoint}")
+                    return None
+                except httpx.HTTPStatusError as e:
+                    logger.error(
+                        f"Binance API HTTP {e.response.status_code}: "
+                        f"{endpoint} - {e.response.text[:200]}"
+                    )
+                    return None
+                except Exception as e:
+                    logger.error(f"Binance API error: {endpoint} - {e}")
+                    return None
+        return None  # unreachable, keeps linters happy
 
     # ══════════════════════════════════════════════════════════════════════
     # 1. OHLCV Klines

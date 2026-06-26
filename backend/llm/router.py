@@ -39,9 +39,10 @@ class ModelConfig:
 # ── Default model registry ───────────────────────────────────────────────────
 # These can be overridden via environment variables per task type.
 
-# LiteLLM model alias → Kie.ai claude-sonnet-4-6 (see litellm-config.yaml)
-_KIE_SONNET_LITELLM_MODEL = os.getenv("KIE_LITELLM_MODEL", "claude-sonnet")
+# Kie.ai direct model IDs
 _KIE_SONNET_DIRECT_MODEL = os.getenv("KIE_MODEL", "claude-sonnet-4-6")
+_KIE_OPUS_DIRECT_MODEL = os.getenv("KIE_OPUS_MODEL", "claude-opus-4-6")
+_KIE_BASE_URL = os.getenv("KIE_BASE_URL", "https://api.kie.ai/claude")
 _LITELLM_BASE_URL = os.getenv("LITELLM_BASE_URL", os.getenv("PERSONA_LLM_BASE_URL", "http://litellm:4000/v1"))
 
 _DEFAULT_REGISTRY: dict[str, ModelConfig] = {
@@ -50,19 +51,30 @@ _DEFAULT_REGISTRY: dict[str, ModelConfig] = {
         name=os.getenv("PERSONA_LLM_MODEL", _KIE_SONNET_DIRECT_MODEL),
         provider=os.getenv("PERSONA_LLM_PROVIDER", "kie"),
         tier="balanced",
-        base_url=os.getenv("KIE_BASE_URL", "https://api.kie.ai/claude"),
+        base_url=_KIE_BASE_URL,
         max_tokens=1024,
         temperature=0.3,
         api_key_env="KIE_API_KEY",
     ),
 
-    # Deep trading analysis — same Kie Sonnet 4.6 route as personas
+    # Deep trading analysis — Kie Sonnet 4.6 by default; flip to Opus for complex reasoning
     "deep_analysis": ModelConfig(
         name=os.getenv("DEEP_ANALYSIS_LLM_MODEL", os.getenv("PERSONA_LLM_MODEL", _KIE_SONNET_DIRECT_MODEL)),
         provider=os.getenv("DEEP_ANALYSIS_LLM_PROVIDER", os.getenv("PERSONA_LLM_PROVIDER", "kie")),
         tier="balanced",
-        base_url=os.getenv("KIE_BASE_URL", "https://api.kie.ai/claude"),
+        base_url=_KIE_BASE_URL,
         max_tokens=1024,
+        temperature=0.3,
+        api_key_env="KIE_API_KEY",
+    ),
+
+    # Premium/complex reasoning tier — Kie.ai Claude Opus 4.6
+    "premium_analysis": ModelConfig(
+        name=_KIE_OPUS_DIRECT_MODEL,
+        provider="kie",
+        tier="premium",
+        base_url=_KIE_BASE_URL,
+        max_tokens=2048,
         temperature=0.3,
         api_key_env="KIE_API_KEY",
     ),
@@ -72,7 +84,7 @@ _DEFAULT_REGISTRY: dict[str, ModelConfig] = {
         name=os.getenv("GENERAL_LLM_MODEL", _KIE_SONNET_DIRECT_MODEL),
         provider=os.getenv("GENERAL_LLM_PROVIDER", "kie"),
         tier="balanced",
-        base_url=os.getenv("KIE_BASE_URL", "https://api.kie.ai/claude"),
+        base_url=_KIE_BASE_URL,
         max_tokens=1024,
         temperature=0.4,
         api_key_env="KIE_API_KEY",

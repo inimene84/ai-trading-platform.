@@ -25,6 +25,8 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
       KIE_API_KEY: ${KIE_API_KEY}
+      KIE_MODEL: claude-sonnet-4-6
+      KIE_OPUS_MODEL: ${KIE_OPUS_MODEL:-claude-opus-4-6}
       LITELLM_API_KEY: ${LITELLM_API_KEY}
       # PRIMARY LLM: Kie.ai Claude Sonnet 4.6 via LiteLLM proxy
       PERSONA_LLM_PROVIDER: ${PERSONA_LLM_PROVIDER:-kie}
@@ -98,6 +100,8 @@ services:
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
       KIE_API_KEY: ${KIE_API_KEY}
       KIE_BEARER_TOKEN: "Bearer ${KIE_API_KEY}"
+      KIE_MODEL: claude-sonnet-4-6
+      KIE_OPUS_MODEL: ${KIE_OPUS_MODEL:-claude-opus-4-6}
       LITELLM_MODEL_FALLBACK: true
       LITELLM_MASTER_KEY: ${LITELLM_API_KEY}
     command: --config /tmp/litellm-config.yaml --port 4000
