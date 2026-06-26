@@ -32,7 +32,6 @@ services:
       PERSONA_LLM_PROVIDER: ${PERSONA_LLM_PROVIDER:-kie}
       PERSONA_LLM_MODEL: ${PERSONA_LLM_MODEL:-claude-sonnet-4-6}
       PERSONA_LLM_BASE_URL: ${PERSONA_LLM_BASE_URL:-https://api.kie.ai/claude}
-      KIE_MODEL: claude-sonnet-4-6
       # Safety: risk guard ENABLED by default. Only disable for explicit testing by setting DISABLE_RISK_GUARD=true in .env
       DISABLE_RISK_GUARD: ${DISABLE_RISK_GUARD:-false}
       # MiCA/EEA: trade USDC-margined perpetuals (USDT restricted for EU users).
