@@ -53,9 +53,12 @@ async def _poll_loop():
     # Poll loop
     while True:
         try:
+            from backend.services.sentry_state import is_trading_allowed
+
+            if not is_trading_allowed():
+                logger.debug("Wallet poller: sentry halt active — skipping Binance poll")
             # Only run when Binance Futures is the active broker
-            broker_name = os.getenv("ACTIVE_BROKER", "ctrader")
-            if broker_name == "binance_futures":
+            elif os.getenv("ACTIVE_BROKER", "ctrader") == "binance_futures":
                 await _write_wallet_and_positions(svc, influx)
         except Exception as e:
             logger.warning(f"Wallet poller cycle error: {e}")

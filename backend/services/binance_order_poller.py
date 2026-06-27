@@ -49,9 +49,11 @@ async def _poll_loop():
 
     while True:
         try:
-            # Only run when Binance Futures is the active broker
-            broker_name = os.getenv("ACTIVE_BROKER", "ctrader")
-            if broker_name == "binance_futures":
+            from backend.services.sentry_state import is_trading_allowed
+
+            if not is_trading_allowed():
+                logger.debug("Order poller: sentry halt active — skipping Binance sync")
+            elif os.getenv("ACTIVE_BROKER", "ctrader") == "binance_futures":
                 await _sync_open_orders(svc)
                 await _cancel_orphaned_orders(svc)
         except Exception as e:

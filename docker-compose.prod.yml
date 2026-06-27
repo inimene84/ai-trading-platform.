@@ -190,6 +190,48 @@ services:
       - trading-net
     depends_on:
       - backend
+  sentry-watchdog:
+    build:
+      context: .
+      dockerfile: sentry_watchdog/Dockerfile
+    container_name: ai-trading-sentry-watchdog
+    env_file:
+      - .env
+    environment:
+      BACKEND_URL: http://backend:8000
+      SENTRY_POLL_INTERVAL_SEC: ${SENTRY_POLL_INTERVAL_SEC:-10}
+      SENTRY_FAIL_THRESHOLD: ${SENTRY_FAIL_THRESHOLD:-3}
+      SENTRY_EMERGENCY_COOLDOWN_SEC: ${SENTRY_EMERGENCY_COOLDOWN_SEC:-300}
+      SENTRY_STATE_DIR: /app/data/sentry
+      ACTIVE_BROKER: ${ACTIVE_BROKER:-binance_futures}
+      BINANCE_API_KEY: ${BINANCE_API_KEY}
+      BINANCE_SECRET_KEY: ${BINANCE_SECRET_KEY}
+      BINANCE_TESTNET: ${BINANCE_TESTNET:-false}
+      PAPER_TRADING: ${PAPER_TRADING:-false}
+      BINANCE_DRY_RUN: ${BINANCE_DRY_RUN:-false}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
+      SENTRY_WATCHDOG_TOKEN: ${SENTRY_WATCHDOG_TOKEN}
+      SENTRY_AUTO_RESUME_ENABLED: ${SENTRY_AUTO_RESUME_ENABLED:-true}
+      SENTRY_RESUME_AFTER_SEC: ${SENTRY_RESUME_AFTER_SEC:-120}
+      SENTRY_RESUME_HEALTH_CHECKS: ${SENTRY_RESUME_HEALTH_CHECKS:-6}
+    volumes:
+      - app-data:/app/data
+    depends_on:
+      - backend
+    restart: unless-stopped
+    networks:
+      - trading-net
+    logging:
+      driver: json-file
+      options:
+        max-size: 5m
+        max-file: 3
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 256M
 networks:
   trading-net:
     external: true
