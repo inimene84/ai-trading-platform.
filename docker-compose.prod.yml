@@ -215,10 +215,12 @@ services:
       SENTRY_AUTO_RESUME_ENABLED: ${SENTRY_AUTO_RESUME_ENABLED:-true}
       SENTRY_RESUME_AFTER_SEC: ${SENTRY_RESUME_AFTER_SEC:-120}
       SENTRY_RESUME_HEALTH_CHECKS: ${SENTRY_RESUME_HEALTH_CHECKS:-6}
+      SENTRY_STARTUP_GRACE_SEC: ${SENTRY_STARTUP_GRACE_SEC:-120}
     volumes:
       - app-data:/app/data
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     restart: unless-stopped
     networks:
       - trading-net

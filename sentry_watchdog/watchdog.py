@@ -158,21 +158,26 @@ async def run() -> None:
     auto_resume = _env_bool("SENTRY_AUTO_RESUME_ENABLED", True)
     resume_after_sec = _env_int("SENTRY_RESUME_AFTER_SEC", 120)
     resume_health_checks = _env_int("SENTRY_RESUME_HEALTH_CHECKS", 6)
+    startup_grace_sec = _env_int("SENTRY_STARTUP_GRACE_SEC", 120)
 
     logger.info(
-        "Starting sentry watchdog base_url=%s poll=%ss auto_resume=%s",
+        "Starting sentry watchdog base_url=%s poll=%ss auto_resume=%s startup_grace=%ss",
         base_url,
         poll_sec,
         auto_resume,
+        startup_grace_sec,
     )
 
     consecutive_failures = 0
     consecutive_healthy = 0
     last_emergency_at: datetime | None = None
+    started_at = datetime.now(timezone.utc)
+    seen_healthy = False
 
     while True:
         healthy = await _check_health(base_url)
         if healthy:
+            seen_healthy = True
             consecutive_failures = 0
             consecutive_healthy += 1
             if auto_resume:
@@ -188,21 +193,25 @@ async def run() -> None:
                     consecutive_healthy = 0
         else:
             consecutive_healthy = 0
-            consecutive_failures += 1
-            logger.warning("Unhealthy backend (%s/%s)", consecutive_failures, fail_threshold)
-            if consecutive_failures >= fail_threshold:
-                now = datetime.now(timezone.utc)
-                if last_emergency_at and (now - last_emergency_at).total_seconds() < cooldown_sec:
-                    logger.info("Emergency cooldown active — skipping duplicate halt")
-                else:
-                    await _trigger_emergency(
-                        base_url,
-                        token,
-                        reason=f"heartbeat_failed_{consecutive_failures}x",
-                    )
-                    last_emergency_at = now
-                    consecutive_failures = 0
-                    consecutive_healthy = 0
+            in_grace = (datetime.now(timezone.utc) - started_at).total_seconds() < startup_grace_sec
+            if not seen_healthy and in_grace:
+                logger.info("Startup grace: backend not ready yet — not counting failures")
+            else:
+                consecutive_failures += 1
+                logger.warning("Unhealthy backend (%s/%s)", consecutive_failures, fail_threshold)
+                if consecutive_failures >= fail_threshold:
+                    now = datetime.now(timezone.utc)
+                    if last_emergency_at and (now - last_emergency_at).total_seconds() < cooldown_sec:
+                        logger.info("Emergency cooldown active — skipping duplicate halt")
+                    else:
+                        await _trigger_emergency(
+                            base_url,
+                            token,
+                            reason=f"heartbeat_failed_{consecutive_failures}x",
+                        )
+                        last_emergency_at = now
+                        consecutive_failures = 0
+                        consecutive_healthy = 0
 
         await asyncio.sleep(poll_sec)
 
