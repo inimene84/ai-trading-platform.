@@ -111,3 +111,23 @@ async def get_trending():
     except Exception as e:
         logger.error(f"Trending error: {e}")
         return JSONResponse(status_code=500, content={"error": str(e)})
+
+from fastapi import Request
+
+@router.get("/proxy/binance/{path:path}")
+async def proxy_binance(path: str, request: Request):
+    """Proxy Binance REST API requests via the internal BinanceMarketDataService."""
+    try:
+        from backend.services.binance_market_data import binance_market_data
+        params = dict(request.query_params)
+        if not path.startswith('/'):
+            path = '/' + path
+            
+        data = await binance_market_data._request(endpoint=path, params=params)
+        if data is None:
+            return JSONResponse(status_code=502, content={"error": "Binance request failed or rate limited"})
+            
+        return JSONResponse(content=data)
+    except Exception as e:
+        logger.error(f"Binance proxy error for {path}: {e}")
+        return JSONResponse(status_code=500, content={"error": str(e)})

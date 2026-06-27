@@ -504,18 +504,17 @@ class BinanceFuturesService:
                     f"on {futures_sym}: {ce}"
                 )
         return cancelled
-
-    def _live_position_qty(self, futures_sym: str, position_side: str, raise_on_error: bool = False) -> float:
-        """Exchange position size for emergency closes (full leg, not pyramid add qty)."""
+    def _live_position_info(self, futures_sym: str, position_side: str, raise_on_error: bool = False) -> tuple[float, float]:
+        """Exchange position size and entry price for emergency closes (full leg, not pyramid add qty)."""
         for p in self.get_positions(raise_on_error):
             if p.get('symbol') != futures_sym:
                 continue
             side = (p.get('side') or '').upper()
             if position_side == 'LONG' and side in ('BUY', 'LONG'):
-                return float(p.get('quantity') or 0)
+                return float(p.get('quantity') or 0), float(p.get('entry_price') or 0)
             if position_side == 'SHORT' and side in ('SELL', 'SHORT'):
-                return float(p.get('quantity') or 0)
-        return 0.0
+                return float(p.get('quantity') or 0), float(p.get('entry_price') or 0)
+        return 0.0, 0.0
 
     def _has_exchange_stop(self, futures_sym: str, position_side: str, raise_on_error: bool = False) -> bool:
         return any(
@@ -550,23 +549,26 @@ class BinanceFuturesService:
 
         position_side = 'LONG' if direction.upper() == 'BUY' else 'SHORT'
         try:
-            qty = self._live_position_qty(futures_sym, position_side, raise_on_error=True)
+            qty, entry_price = self._live_position_info(futures_sym, position_side, raise_on_error=True)
         except Exception as e:
-            logger.error(f"  [PROTECT-RESTORE] {futures_sym} failed to check position qty: {e}")
+            logger.error(f"  [PROTECT-RESTORE] {futures_sym} failed to check position info: {e}")
             return {'status': 'error', 'message': str(e), 'symbol': futures_sym}
 
         if qty <= 0:
             return {'status': 'skipped', 'reason': 'no open position'}
 
         try:
-            has_sl = self._has_exchange_stop(futures_sym, position_side, raise_on_error=True)
+            protective_orders = self._collect_protective_orders(futures_sym, position_side, raise_on_error=True)
+            has_sl = any('STOP' in (o.get('type') or '') and 'TRAILING' not in (o.get('type') or '') for o in protective_orders)
             needs_tp = bool(take_profit and take_profit > 0)
-            has_tp = self._has_exchange_take_profit(futures_sym, position_side, raise_on_error=True) if needs_tp else True
+            has_tp = any('TAKE_PROFIT' in (o.get('type') or '') for o in protective_orders) if needs_tp else True
+            native_trailing = self._native_trailing_enabled()
+            has_trail = any('TRAILING' in (o.get('type') or '') for o in protective_orders) if native_trailing else True
         except Exception as e:
             logger.error(f"  [PROTECT-RESTORE] {futures_sym} failed to check exchange orders: {e}")
             return {'status': 'error', 'message': str(e), 'symbol': futures_sym}
 
-        if has_sl and has_tp:
+        if has_sl and has_tp and has_trail:
             return {'status': 'ok', 'symbol': futures_sym}
 
         client = self._get_client()
@@ -631,6 +633,14 @@ class BinanceFuturesService:
                     logger.warning(
                         f"  [PROTECT-RESTORE] {futures_sym} failed to restore TP @ {take_profit}: {tp_e}"
                     )
+
+        if native_trailing and not has_trail:
+            try:
+                self._place_native_trailing_stop(client, futures_sym, direction, qty, entry_price, position_side)
+                restored.append("TRAILING_STOP")
+                logger.warning(f"  [PROTECT-RESTORE] {futures_sym} replaced missing native trailing stop")
+            except Exception as tr_e:
+                logger.error(f"  [PROTECT-RESTORE] {futures_sym} failed to restore native trailing stop: {tr_e}")
 
         if restored:
             return {'status': 'restored', 'symbol': futures_sym, 'restored': restored}
