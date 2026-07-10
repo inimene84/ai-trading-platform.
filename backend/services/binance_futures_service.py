@@ -717,7 +717,10 @@ class BinanceFuturesService:
             # ── Notional floor enforcement ──────────────────────────────────────
             # Even when quantity is supplied externally (e.g. by DecisionEngine),
             # ensure the order meets Binance's MIN_NOTIONAL filter to avoid -4164.
-            if price > 0 and action != 'close':
+            passed_reduce_only = bool(kwargs.get('reduce_only', False))
+            is_close = action == 'close' or passed_reduce_only
+
+            if price > 0 and not is_close:
                 _min_not = MIN_NOTIONAL.get(futures_sym, 20.0)
                 _actual_notional = quantity * price
                 if _actual_notional < _min_not:
@@ -731,7 +734,6 @@ class BinanceFuturesService:
                         f"(${_actual_notional:.2f} < min ${_min_not:.0f})"
                     )
 
-            passed_reduce_only = kwargs.get('reduce_only', False)
             target_side = direction.upper()
 
             # ── Hedge-mode guard + pyramiding ─────────────────────────────────
@@ -739,7 +741,7 @@ class BinanceFuturesService:
             # (pyramid/DCA) when is_pyramid=True from the decision engine OR when
             # the exchange already has a position in the same direction.
             is_pyramid = bool(kwargs.get('is_pyramid', False))
-            if action != 'close' and not passed_reduce_only:
+            if not is_close:
                 live_on_symbol = [
                     p for p in self.get_positions()
                     if p.get('symbol') == futures_sym and float(p.get('quantity') or 0) > 0
@@ -772,7 +774,9 @@ class BinanceFuturesService:
             notional = quantity * price
             # Isolated margin requirement ≈ notional / leverage
             required_margin = notional / self.leverage
-            if action != 'close' and available < required_margin:
+            # A reduce-only close releases margin; it must never be blocked by
+            # the entry affordability gate when the account is fully deployed.
+            if not is_close and available < required_margin:
                 logger.warning(
                     f"[Binance Futures] SKIP {futures_sym}: available={available:.4f} < "
                     f"required_margin={required_margin:.4f} (notional={notional:.2f} / "
@@ -788,7 +792,7 @@ class BinanceFuturesService:
                 }
 
             # Determine side and reduceOnly flag
-            if passed_reduce_only or action == 'close':
+            if is_close:
                 # Closing a position: flip side vs original direction
                 side        = 'SELL' if direction.upper() == 'BUY' else 'BUY'
                 reduce_only = True

@@ -648,13 +648,24 @@ class UnifiedTrading:
             return UnifiedOrderResponse(False, "", f"Broker not registered: {session.broker}", "live")
 
         try:
-            # Map UnifiedOrder to existing broker signature
-            broker_dir = "BUY" if order.side == OrderSide.BUY else "SELL"
+            # Broker close contract uses the ORIGINAL POSITION direction, while
+            # UnifiedOrder.side is the actual order side. Callers correctly send
+            # SELL to close a LONG and BUY to close a SHORT, so recover the
+            # position direction here and explicitly mark the action as close.
+            # Without this, BinanceFuturesService flips the side a second time
+            # and targets the opposite hedge leg (-2022 / false "already flat").
+            if order.reduce_only:
+                broker_dir = "SELL" if order.side == OrderSide.BUY else "BUY"
+                broker_action = "close"
+            else:
+                broker_dir = "BUY" if order.side == OrderSide.BUY else "SELL"
+                broker_action = "open"
             sl = order.stop_loss if order.stop_loss and order.stop_loss > 0 else None
             tp = order.take_profit if order.take_profit and order.take_profit > 0 else None
             result = broker.place_order(
                 symbol=order.symbol,
                 direction=broker_dir,
+                action=broker_action,
                 quantity=order.quantity,
                 price=order.price,
                 stop_loss=sl,
@@ -663,7 +674,9 @@ class UnifiedTrading:
                 is_pyramid=order.is_pyramid,
             )
             status = result.get("status", "error")
-            ok = status in ("simulated", "sent", "filled")
+            # already_flat is an idempotent successful close: the exchange has
+            # no matching leg left (usually because SL/TP won the race).
+            ok = status in ("simulated", "sent", "filled", "already_flat")
             message = (
                 result.get("message")
                 or result.get("reason")
