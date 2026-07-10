@@ -32,7 +32,7 @@ async def test_manual_close_sends_reduce_only_exchange_order_before_db_close():
     router = MagicMock()
     router.place_order.return_value = UnifiedOrderResponse(
         True, "close-1", "filled", "live", filled_price=105.0,
-        filled_qty=0.1,
+        filled_qty=0.1, commission=0.02, realized_pnl=0.6,
     )
 
     with patch("backend.routes.trading.SessionLocal", return_value=db), \
@@ -44,7 +44,7 @@ async def test_manual_close_sends_reduce_only_exchange_order_before_db_close():
     assert order.side.value == "sell"
     assert trade.status == "closed"
     assert trade.exit_price == 105.0
-    assert trade.pnl == pytest.approx(0.5)
+    assert trade.pnl == pytest.approx(0.58)
     db.commit.assert_called_once()
     assert result["success"] is True
 

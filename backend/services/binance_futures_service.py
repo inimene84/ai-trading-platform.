@@ -862,6 +862,30 @@ class BinanceFuturesService:
                 price = filled_price
             logger.info(f"  ✓ Order {order_id} filled @ {filled_price}")
 
+            # Capture exchange-authoritative realized P&L and commission for
+            # this fill. Callers otherwise compute from a stale bar close and
+            # omit fees, corrupting expectancy and learning metrics.
+            commission = 0.0
+            exchange_realized_pnl = None
+            if order_id:
+                try:
+                    fills = client.futures_account_trades(
+                        symbol=futures_sym, orderId=int(order_id),
+                    )
+                    commission = sum(
+                        abs(float(f.get("commission", 0) or 0))
+                        for f in fills
+                    )
+                    exchange_realized_pnl = sum(
+                        float(f.get("realizedPnl", 0) or 0)
+                        for f in fills
+                    )
+                except Exception as fill_error:
+                    logger.warning(
+                        f"  [ACCOUNTING] {futures_sym} could not load fill costs "
+                        f"for order {order_id}: {fill_error}"
+                    )
+
             # Treat 0 / negative as missing — manual API calls often send stop_loss=0
             if stop_loss is not None and stop_loss <= 0:
                 stop_loss = None
@@ -1026,6 +1050,8 @@ class BinanceFuturesService:
                 'side':         side,
                 'quantity':     quantity,
                 'filled_price': filled_price,
+                'commission': commission,
+                'realized_pnl': exchange_realized_pnl,
                 'action':       action,
                 'raw':          result,
             }

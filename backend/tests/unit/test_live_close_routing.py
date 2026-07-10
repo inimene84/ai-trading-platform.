@@ -6,6 +6,7 @@ from backend.services.binance_futures_service import BinanceFuturesService
 from backend.services.unified_trading import (
     OrderSide,
     OrderType,
+    PaperTradingEngine,
     UnifiedOrder,
     UnifiedTrading,
 )
@@ -187,4 +188,42 @@ def test_safe_create_order_recovers_filled_duplicate_by_client_id():
     client.futures_get_order.assert_called_once_with(
         symbol="ETHUSDT", origClientOrderId="xETHBUYe123",
     )
+
+
+def test_paper_market_entry_without_price_is_rejected_not_filled_at_1000():
+    engine = PaperTradingEngine()
+    portfolio_id = engine.create_portfolio("test", balance=10_000)
+    response = engine.place_order(portfolio_id, UnifiedOrder(
+        symbol="ETHUSDT",
+        side=OrderSide.BUY,
+        order_type=OrderType.MARKET,
+        quantity=1.0,
+        price=0.0,
+    ))
+    assert response.success is False
+    assert "requires an explicit price" in response.message
+
+
+def test_paper_price_less_reduce_close_uses_position_basis_not_1000():
+    engine = PaperTradingEngine()
+    portfolio_id = engine.create_portfolio("test", balance=10_000)
+    opened = engine.place_order(portfolio_id, UnifiedOrder(
+        symbol="ETHUSDT",
+        side=OrderSide.BUY,
+        order_type=OrderType.MARKET,
+        quantity=1.0,
+        price=100.0,
+    ))
+    assert opened.success is True
+
+    closed = engine.place_order(portfolio_id, UnifiedOrder(
+        symbol="ETHUSDT",
+        side=OrderSide.SELL,
+        order_type=OrderType.MARKET,
+        quantity=1.0,
+        price=0.0,
+        reduce_only=True,
+    ))
+    assert closed.success is True
+    assert closed.filled_price == 100.0
 

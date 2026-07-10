@@ -33,6 +33,23 @@ def is_plausible_exit_price(entry_price, exit_price) -> bool:
     return abs(exit_price - entry_price) / entry_price <= MAX_EXIT_PRICE_DEVIATION
 
 
+def remove_closed_pyramid_layer(pyramid_layers: dict, trade) -> None:
+    """Remove only the closed pyramid layer; never reset sibling history."""
+    layers = pyramid_layers.get(trade.symbol)
+    if not layers:
+        return
+    notes = (getattr(trade, "notes", None) or "").lower()
+    if "pyramid" not in notes:
+        return  # closing a base row must not erase still-open add layers
+    entry = float(getattr(trade, "entry_price", 0) or 0)
+    for index, layer_price in enumerate(layers):
+        if abs(float(layer_price) - entry) <= max(abs(entry), 1.0) * 1e-9:
+            layers.pop(index)
+            break
+    if not layers:
+        pyramid_layers.pop(trade.symbol, None)
+
+
 class EmergencyExitManager:
     """Manages Step 0 pre-sync emergency exit checks."""
 
@@ -92,13 +109,19 @@ class EmergencyExitManager:
                         ))
                         if res.success:
                             trade.exit_price = res.filled_price or live_px
-                            trade.pnl = (pnl_pct / 100) * entry_px * trade.quantity
+                            if res.realized_pnl is not None:
+                                trade.pnl = float(res.realized_pnl) - res.commission
+                            else:
+                                if direction == "BUY":
+                                    gross = (trade.exit_price - entry_px) * trade.quantity
+                                else:
+                                    gross = (entry_px - trade.exit_price) * trade.quantity
+                                trade.pnl = gross - res.commission
                             trade.status = "closed"
                             trade.closed_at = datetime.now(timezone.utc)
                             trade.notes = (trade.notes or "") + f" | EMERGENCY EXIT: PnL={pnl_pct:.1f}%"
                             db.add(trade)
-                            if trade.symbol in pyramid_layers:
-                                del pyramid_layers[trade.symbol]
+                            remove_closed_pyramid_layer(pyramid_layers, trade)
                             sl_cooldown[trade.symbol] = datetime.now(timezone.utc)
                             exits_triggered += 1
                             logger.warning(f"  [EMERGENCY EXIT] {trade.symbol} CLOSED. PnL={pnl_pct:.1f}%")
@@ -109,8 +132,7 @@ class EmergencyExitManager:
                                 trade.closed_at = datetime.now(timezone.utc)
                                 trade.notes = (trade.notes or '') + ' | EMERGENCY-EXIT: already flat on exchange'
                                 db.add(trade)
-                                if trade.symbol in pyramid_layers:
-                                    del pyramid_layers[trade.symbol]
+                                remove_closed_pyramid_layer(pyramid_layers, trade)
                                 sl_cooldown[trade.symbol] = datetime.now(timezone.utc)
                                 exits_triggered += 1
                             else:
@@ -301,8 +323,7 @@ class BrokerPositionSyncService:
                         except Exception as _ce:
                             logger.warning(f"  [ {t.symbol} ] orphan order cleanup failed: {_ce}")
 
-                    if t.symbol in pyramid_layers:
-                        del pyramid_layers[t.symbol]
+                    remove_closed_pyramid_layer(pyramid_layers, t)
                     sl_cooldown[t.symbol] = datetime.now(timezone.utc)
                     updated += 1
 

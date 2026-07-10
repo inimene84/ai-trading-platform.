@@ -28,6 +28,7 @@ from backend.services.trading_loop_helpers import (
     PartialTPManager,
     ExchangeProtectionManager,
     PerformanceMetricsWriter,
+    remove_closed_pyramid_layer,
 )
 
 load_dotenv()
@@ -573,16 +574,20 @@ class TradingLoopService:
                             ))
                             if res.success:
                                 trade.exit_price = res.filled_price or curr_price
-                                if trade.direction == "BUY":
-                                    trade.pnl = (curr_price - trade.entry_price) * trade.quantity
+                                if res.realized_pnl is not None:
+                                    trade.pnl = float(res.realized_pnl) - res.commission
                                 else:
-                                    trade.pnl = (trade.entry_price - curr_price) * trade.quantity
+                                    if trade.direction == "BUY":
+                                        gross = (trade.exit_price - trade.entry_price) * trade.quantity
+                                    else:
+                                        gross = (trade.entry_price - trade.exit_price) * trade.quantity
+                                    trade.pnl = gross - res.commission
                                 trade.status = "closed"
                                 trade.closed_at = datetime.now(timezone.utc)
                                 trade.notes = (trade.notes or "") + f" | AI EXIT: {exit_opinion.reasoning[:120]}"
                                 db_check.add(trade)
-                                if self._pyramid_mode and trade.symbol in self._pyramid_layers:
-                                    del self._pyramid_layers[trade.symbol]
+                                if self._pyramid_mode:
+                                    remove_closed_pyramid_layer(self._pyramid_layers, trade)
                                 _exits_triggered += 1
                                 logger.info(f"  -> {trade.symbol} CLOSED via Position Manager. PnL={trade.pnl:+.2f}")
                             else:
@@ -593,13 +598,13 @@ class TradingLoopService:
                                     trade.closed_at = datetime.now(timezone.utc)
                                     trade.notes = (trade.notes or '') + ' | AI-EXIT: already flat on exchange'
                                     db_check.add(trade)
-                                    if self._pyramid_mode and trade.symbol in self._pyramid_layers:
-                                        del self._pyramid_layers[trade.symbol]
+                                    if self._pyramid_mode:
+                                        remove_closed_pyramid_layer(self._pyramid_layers, trade)
                                     _exits_triggered += 1
                                 else:
                                     logger.error(f"  -> FAILED to close {trade.symbol}: {res.message}")
-                                trade.notes = (trade.notes or "") + f" | AI EXIT FAILED: {res.message}"
-                                db_check.add(trade)
+                                    trade.notes = (trade.notes or "") + f" | AI EXIT FAILED: {res.message}"
+                                    db_check.add(trade)
                     except Exception as e:
                         logger.error(f"  Position review error for {trade.symbol}: {e}")
                 if _exits_triggered > 0:
@@ -1182,11 +1187,6 @@ class TradingLoopService:
                     trade.notes = (trade.notes or "") + " | TP hit (short)"
 
             if hit:
-                if trade.direction == "BUY":
-                    pnl = (current_price - trade.entry_price) * trade.quantity
-                else:
-                    pnl = (trade.entry_price - current_price) * trade.quantity
-
                 # Send close order via UnifiedTrading BEFORE updating DB
                 ut = UnifiedTrading()
                 close_side = OrderSide.SELL if trade.direction == "BUY" else OrderSide.BUY
@@ -1200,14 +1200,21 @@ class TradingLoopService:
 
                 if res.success:
                     trade.exit_price = res.filled_price or current_price
+                    if res.realized_pnl is not None:
+                        pnl = float(res.realized_pnl) - res.commission
+                    else:
+                        if trade.direction == "BUY":
+                            gross = (trade.exit_price - trade.entry_price) * trade.quantity
+                        else:
+                            gross = (trade.entry_price - trade.exit_price) * trade.quantity
+                        pnl = gross - res.commission
                     trade.pnl = pnl
                     trade.status = "closed"
                     trade.closed_at = datetime.now(timezone.utc)
                     trade.notes = (trade.notes or "") + f" | Closed via SL/TP ({res.mode})"
                     self._high_water.pop(trade.id, None)
-                    if self._pyramid_mode and trade.symbol in self._pyramid_layers:
-                        del self._pyramid_layers[trade.symbol]
-                        logger.info(f"  [ {trade.symbol} ] Pyramid layers cleared (SL/TP hit)")
+                    if self._pyramid_mode:
+                        remove_closed_pyramid_layer(self._pyramid_layers, trade)
                     logger.info(
                         f"  -> {symbol} position closed (SL/TP), PnL={pnl:+.2f}"
                     )
@@ -1218,8 +1225,8 @@ class TradingLoopService:
                         trade.status = 'closed'
                         trade.closed_at = datetime.now(timezone.utc)
                         trade.notes = (trade.notes or '') + ' | SL/TP: already flat on exchange'
-                        if self._pyramid_mode and trade.symbol in self._pyramid_layers:
-                            del self._pyramid_layers[trade.symbol]
+                        if self._pyramid_mode:
+                            remove_closed_pyramid_layer(self._pyramid_layers, trade)
                     else:
                         logger.error(f"  -> Failed to close {symbol} via SL/TP: {res.message}")
                     trade.notes = (trade.notes or "") + f" | SL/TP close FAILED: {res.message}"

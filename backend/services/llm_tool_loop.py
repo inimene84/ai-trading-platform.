@@ -206,7 +206,11 @@ class LlmToolClient:
 # Trading Tool Builder — wires LLM to your trading system
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def build_trading_tools(unified_trading, market_data_service=None) -> ToolRegistry:
+def build_trading_tools(
+    unified_trading,
+    market_data_service=None,
+    paper_session_id: str | None = None,
+) -> ToolRegistry:
     """
     Register the tools your AI needs to trade.
     Pass your UnifiedTrading singleton and optional market data fetcher.
@@ -225,7 +229,7 @@ def build_trading_tools(unified_trading, market_data_service=None) -> ToolRegist
         "description": "Get current paper trading portfolio state including cash and positions",
         "properties": {},
         "required": []
-    }, lambda: _get_portfolio_helper(unified_trading))
+    }, lambda: _get_portfolio_helper(unified_trading, paper_session_id))
 
     # ── Order Management ──
     registry.register("place_paper_order", {
@@ -246,19 +250,22 @@ def build_trading_tools(unified_trading, market_data_service=None) -> ToolRegist
         },
         "required": ["symbol", "side", "quantity"]
     }, lambda symbol, side, quantity, order_type="market", price=0.0, stop_loss=0.0, take_profit=0.0:
-        _place_order_helper(unified_trading, symbol, side, quantity, order_type, price, stop_loss, take_profit))
+        _place_order_helper(
+            unified_trading, symbol, side, quantity, order_type, price,
+            stop_loss, take_profit, paper_session_id,
+        ))
 
     registry.register("cancel_paper_order", {
         "description": "Cancel a paper order by its order ID",
         "properties": {"order_id": {"type": "string"}},
         "required": ["order_id"]
-    }, lambda order_id: _cancel_order_helper(unified_trading, order_id))
+    }, lambda order_id: _cancel_order_helper(unified_trading, order_id, paper_session_id))
 
     registry.register("get_paper_orders", {
         "description": "List paper orders, optionally filtered by status",
         "properties": {"status": {"type": "string", "enum": ["", "pending", "partial", "filled", "cancelled"]}},
         "required": []
-    }, lambda status="": _get_orders_helper(unified_trading, status))
+    }, lambda status="": _get_orders_helper(unified_trading, status, paper_session_id))
 
     return registry
 
@@ -277,10 +284,10 @@ def _get_price_helper(symbol: str, market_data_service) -> dict:
     return {"symbol": symbol, "price": None, "error": "No price source available"}
 
 
-def _get_portfolio_helper(unified_trading) -> dict:
-    pf = unified_trading.get_paper_portfolio()
-    positions = unified_trading.get_paper_positions()
-    stats = unified_trading.get_paper_stats()
+def _get_portfolio_helper(unified_trading, session_id=None) -> dict:
+    pf = unified_trading.get_paper_portfolio(session_id)
+    positions = unified_trading.get_paper_positions(session_id)
+    stats = unified_trading.get_paper_stats(session_id)
     return {
         "cash": pf["cash"] if pf else 0.0,
         "positions": [
@@ -291,7 +298,10 @@ def _get_portfolio_helper(unified_trading) -> dict:
     }
 
 
-def _place_order_helper(ut, symbol, side, quantity, order_type, price, stop_loss, take_profit) -> dict:
+def _place_order_helper(
+    ut, symbol, side, quantity, order_type, price, stop_loss, take_profit,
+    session_id=None,
+) -> dict:
     from backend.services.unified_trading import UnifiedOrder, OrderSide, OrderType
     try:
         order = UnifiedOrder(
@@ -303,7 +313,7 @@ def _place_order_helper(ut, symbol, side, quantity, order_type, price, stop_loss
             stop_loss=float(stop_loss) if stop_loss else 0.0,
             take_profit=float(take_profit) if take_profit else 0.0,
         )
-        resp = ut.place_order(order)
+        resp = ut.place_order(order, session_id=session_id)
         return {
             "success": resp.success,
             "order_id": resp.order_id,
@@ -316,11 +326,11 @@ def _place_order_helper(ut, symbol, side, quantity, order_type, price, stop_loss
         return {"success": False, "error": str(e)}
 
 
-def _cancel_order_helper(ut, order_id: str) -> dict:
-    resp = ut.cancel_order(order_id)
+def _cancel_order_helper(ut, order_id: str, session_id=None) -> dict:
+    resp = ut.cancel_order(order_id, session_id=session_id)
     return {"success": resp.success, "message": resp.message, "mode": resp.mode}
 
 
-def _get_orders_helper(ut, status: str) -> dict:
-    orders = ut.get_paper_orders(status)
+def _get_orders_helper(ut, status: str, session_id=None) -> dict:
+    orders = ut.get_paper_orders(status, session_id=session_id)
     return {"count": len(orders), "orders": orders}

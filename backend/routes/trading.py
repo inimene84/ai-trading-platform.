@@ -64,6 +64,12 @@ class LiveOrderRequest(BaseModel):
     stop_loss: Optional[float] = Field(default=None, gt=0)
     take_profit: Optional[float] = Field(default=None, gt=0)
 
+
+class AgentTradeRequest(BaseModel):
+    prompt: str = Field(min_length=1, max_length=8_000)
+    model: Optional[str] = Field(default=None, max_length=120)
+    provider: Literal["xai", "openai", "groq", "ollama"] = "xai"
+
 load_dotenv()
 
 router = APIRouter(prefix="/trading", tags=["trading"])
@@ -915,10 +921,14 @@ async def close_position(position_id: int):
 
         from backend.services.trading_loop_helpers import is_plausible_exit_price
         if is_plausible_exit_price(trade.entry_price, exit_price):
-            if trade.direction == "BUY":
-                pnl = (exit_price - trade.entry_price) * trade.quantity
+            if response.realized_pnl is not None:
+                pnl = float(response.realized_pnl) - response.commission
             else:
-                pnl = (trade.entry_price - exit_price) * trade.quantity
+                if trade.direction == "BUY":
+                    pnl = (exit_price - trade.entry_price) * trade.quantity
+                else:
+                    pnl = (trade.entry_price - exit_price) * trade.quantity
+                pnl -= response.commission
             trade.exit_price = exit_price
             trade.pnl = round(pnl, 4)
         else:
@@ -1407,7 +1417,7 @@ async def paper_stats():
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @router.post("/ai/agent-trade")
-async def ai_agent_trade(request: dict):
+async def ai_agent_trade(request: AgentTradeRequest):
     """
     Let the LLM trade autonomously via tool calls.
     Uses the Fincept-style tool execution loop.
@@ -1417,9 +1427,9 @@ async def ai_agent_trade(request: dict):
     from backend.services.unified_trading import UnifiedTrading
     from backend.services.binance_market_data import binance_market_data
 
-    prompt = request.get("prompt", "")
-    model = request.get("model", os.getenv("XAI_MODEL", "grok-beta"))
-    provider = request.get("provider", "xai")
+    prompt = request.prompt
+    model = request.model or os.getenv("XAI_MODEL", "grok-beta")
+    provider = request.provider
 
     # Pick API key based on provider
     api_key = ""
@@ -1441,7 +1451,19 @@ async def ai_agent_trade(request: dict):
         return {"error": f"API key not configured for {provider}"}
 
     ut = UnifiedTrading()
-    tools = build_trading_tools(ut, binance_market_data)
+    # The tool is explicitly paper-only. Never let the LLM inherit the
+    # process-wide default session, which is live in production.
+    paper_session_id = "ai-agent-paper"
+    if not ut.get_session(paper_session_id):
+        ut.init_session(
+            "binance_futures",
+            mode="paper",
+            paper_balance=100_000.0,
+            session_id=paper_session_id,
+        )
+    tools = build_trading_tools(
+        ut, binance_market_data, paper_session_id=paper_session_id,
+    )
 
     client = LlmToolClient(
         api_key=api_key,

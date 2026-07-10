@@ -94,6 +94,8 @@ class UnifiedOrderResponse:
     mode: str = ""           # "paper" or "live"
     filled_price: Optional[float] = None
     filled_qty: Optional[float] = None
+    commission: float = 0.0
+    realized_pnl: Optional[float] = None
 
 
 @dataclass
@@ -250,7 +252,13 @@ class PaperTradingEngine:
                     if ref <= 0 and order.order_type == OrderType.MARKET:
                         # Try to use last filled price as reference if available
                         last_fills = [t.price for t in pf["trades"] if t.symbol == order.symbol]
-                        ref = last_fills[-1] if last_fills else 1000.0  # better than 1000.0 but still fallback
+                        if not last_fills:
+                            return UnifiedOrderResponse(
+                                False, oid,
+                                "Paper market entry requires an explicit price or prior market fill",
+                                "paper",
+                            )
+                        ref = last_fills[-1]
                     required = net_new * ref / meta["leverage"]
                     if required > pf["cash"]:
                         return UnifiedOrderResponse(False, oid,
@@ -286,7 +294,23 @@ class PaperTradingEngine:
 
             # Auto-fill market orders
             if order.order_type == OrderType.MARKET:
-                fill_price = order.price if order.price > 0 else 1000.0
+                fill_price = order.price
+                if fill_price <= 0 and order.reduce_only:
+                    # A safety-fallback close may not carry a quote. Use the
+                    # actual paper position basis rather than the old hardcoded
+                    # $1000 fill, which corrupted every non-$1000 asset.
+                    pos = pf["positions"].get(order.symbol, {})
+                    closing_side = "long" if order.side == OrderSide.SELL else "short"
+                    if pos.get(closing_side, 0) > 0:
+                        fill_price = float(
+                            pos.get(f"{closing_side}_cost_basis", 0) or 0
+                        )
+                if fill_price <= 0:
+                    rec["status"] = "rejected"
+                    return UnifiedOrderResponse(
+                        False, oid, "Paper market order has no valid fill price",
+                        "paper",
+                    )
                 self._fill_order_locked(pf, rec, fill_price)
                 return UnifiedOrderResponse(
                     True, oid, f"Paper market order filled @ {fill_price}", "paper",
@@ -690,6 +714,8 @@ class UnifiedTrading:
                 mode="live",
                 filled_price=result.get("filled_price"),
                 filled_qty=result.get("quantity"),
+                commission=float(result.get("commission") or 0.0),
+                realized_pnl=result.get("realized_pnl"),
             )
         except Exception as e:
             logger.exception("Live order failed")

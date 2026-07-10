@@ -132,3 +132,25 @@ async def test_reviewer_outage_env_override_fails_open_in_live(monkeypatch):
         approved, reasoning = await review_trade_decision(**_review_kwargs())
     assert approved is True
     assert "fail-open" in reasoning.lower()
+
+
+def test_unparseable_reviewer_response_fails_closed_in_live(monkeypatch):
+    from backend.services.risk_reviewer import _parse_reviewer_response
+
+    monkeypatch.setenv("TRADING_MODE", "live")
+    monkeypatch.delenv("RISK_REVIEWER_FAIL_OPEN", raising=False)
+    approved, reasoning = _parse_reviewer_response(
+        "I think this might be okay, but I cannot return JSON."
+    )
+    assert approved is False
+    assert "fail-closed" in reasoning.lower()
+
+
+def test_empty_reviewer_response_fails_closed_in_live(monkeypatch):
+    from backend.services.risk_reviewer import _parse_reviewer_response
+
+    monkeypatch.setenv("TRADING_MODE", "live")
+    monkeypatch.delenv("RISK_REVIEWER_FAIL_OPEN", raising=False)
+    approved, reasoning = _parse_reviewer_response("")
+    assert approved is False
+    assert "fail-closed" in reasoning.lower()
