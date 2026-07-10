@@ -42,6 +42,13 @@ class RiskConfig(BaseSettings):
         validation_alias=AliasChoices("max_same_direction_positions", "MAX_SAME_DIRECTION_POSITIONS"),
     )
     funding_rate_cap: float = 0.0005  # 0.05%
+    # Max confidence nudge (absolute) the funding rate may apply to a signal.
+    # Unclamped funding adjustment (rate*1000) flipped marginal signals toward
+    # shorts and produced a measured 22.7% BUY win rate vs 53% SELL.
+    funding_conf_adj_cap: float = PydanticField(
+        default=0.05,
+        validation_alias=AliasChoices("funding_conf_adj_cap", "FUNDING_CONF_ADJ_CAP"),
+    )
     # ── Position sizing ──
     # When enabled, size each entry so a stop-loss hit loses ~risk_per_trade_pct
     # of account equity (proper risk-based sizing) instead of a flat $ notional.

@@ -392,9 +392,21 @@ class BinanceFuturesService:
         try:
             trades = client.futures_account_trades(symbol=sym, limit=1)
             if trades:
-                px = float(trades[-1].get('price', 0) or 0)
-                if px > 0:
+                # futures_account_trades returns the most recent fill EVER for
+                # the symbol — it may be days old and unrelated to the close we
+                # are reconciling. Only trust it when it's recent; otherwise
+                # fall through to the live mark price.
+                fill = trades[-1]
+                px = float(fill.get('price', 0) or 0)
+                fill_time_ms = float(fill.get('time', 0) or 0)
+                age_sec = (datetime.now(timezone.utc).timestamp() - fill_time_ms / 1000.0) if fill_time_ms else None
+                if px > 0 and age_sec is not None and age_sec < 24 * 3600:
                     return px
+                if px > 0:
+                    logger.warning(
+                        f"[{sym}] get_exit_price: last fill is stale "
+                        f"(age={age_sec if age_sec is not None else 'unknown'}s) — using mark price instead"
+                    )
         except Exception as e:
             logger.warning(f"[{sym}] get_exit_price (fills) failed: {e}")
         try:

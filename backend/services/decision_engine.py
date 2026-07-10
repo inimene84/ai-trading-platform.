@@ -5,6 +5,7 @@ from typing import Optional, Dict, Any, List
 from dataclasses import dataclass
 
 from backend.services.risk_config import RiskConfig
+from backend.services.trading_mode import TradingMode, get_trading_mode
 from backend.strategies.combined import CombinedStrategy
 from backend.strategies.market_regime import MarketRegimeDetector
 from backend.services.opinion_layer import analyze_symbol as opinion_analyze
@@ -12,6 +13,18 @@ from backend.services.kronos_gate import apply_kronos_gate
 from backend.services import kronos_service
 
 logger = logging.getLogger(__name__)
+
+
+def _reviewer_gate_fail_open() -> bool:
+    """Whether an unexpected error in the risk-reviewer GATE may let a trade through.
+
+    Mirrors risk_reviewer._reviewer_outage_fail_open: fail-open is fine for
+    paper/backtest, but in LIVE mode an errored veto gate must block the trade
+    instead of silently approving it. RISK_REVIEWER_FAIL_OPEN=true overrides.
+    """
+    if os.getenv("RISK_REVIEWER_FAIL_OPEN", "false").lower() == "true":
+        return True
+    return get_trading_mode() != TradingMode.LIVE
 
 
 def compute_sl_tp_levels(
@@ -175,6 +188,10 @@ class DecisionEngine:
                                 decision.reasoning += f" | Risk Reviewer: {reasoning}"
                             except Exception as e:
                                 logger.error(f"[{symbol}] Error in LLM Risk Reviewer gate for pyramid add: {e}")
+                                if not _reviewer_gate_fail_open():
+                                    self._record_eval(symbol, decision.action, decision.confidence,
+                                                      "pyramid add blocked: risk reviewer gate errored (fail-closed in live)")
+                                    return None
                         return decision
             return None
 
@@ -214,7 +231,13 @@ class DecisionEngine:
 
         # Adjust signal confidence based on the perp funding rate
         # Funding rate units on Binance: 0.0001 = 0.01% per 8h.
+        # Clamp the adjustment: unclamped, a routine 0.01% funding moved
+        # confidence by ±0.10, systematically flipping marginal signals toward
+        # shorts (measured live: BUY win rate 22.7% vs SELL 53%). Funding is a
+        # carry-cost nudge, not a directional signal — cap its influence.
         funding_adj = current_funding_rate * 1000.0
+        funding_cap = getattr(self.config, "funding_conf_adj_cap", 0.05)
+        funding_adj = max(-funding_cap, min(funding_cap, funding_adj))
         if signal.signal == "SELL":
             # Boost shorts if positive funding (we get paid to hold)
             old_conf = signal.confidence
@@ -351,6 +374,10 @@ class DecisionEngine:
                     decision.reasoning += f" | Risk Reviewer: {reasoning}"
             except Exception as e:
                 logger.error(f"[{symbol}] Error in LLM Risk Reviewer gate: {e}")
+                if not _reviewer_gate_fail_open():
+                    self._record_eval(symbol, decision.action, decision.confidence,
+                                      "entry blocked: risk reviewer gate errored (fail-closed in live)")
+                    return None
 
         if decision:
             self._record_eval(symbol, decision.action, decision.confidence, "entry decision",

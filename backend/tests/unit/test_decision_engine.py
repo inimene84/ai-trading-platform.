@@ -137,20 +137,46 @@ async def test_evaluate_symbol_funding_rate_adjustments(risk_config):
     engine.config.enable_personas = False
     engine.config.use_risk_reviewer_llm = False
     bars = _make_bars(200)
-    
-    # SELL signal with positive funding should boost confidence
+
+    # SELL signal with positive funding boosts confidence, but the boost is
+    # clamped to funding_conf_adj_cap (default 0.05): a routine 0.01% funding
+    # must nudge, not flip, a signal (raw adj would be +0.10 here).
     signal = StrategySignal(
-        symbol="ETHUSDT", signal="SELL", confidence=0.40,
+        symbol="ETHUSDT", signal="SELL", confidence=0.42,
         entry_price=bars[-1]["close"], strategy="trend_following",
     )
     engine.strategy.generate_signal = MagicMock(return_value=signal)
     engine.regime_detector.detect = MagicMock(return_value=MagicMock(
         regime="TRENDING", weights=MagicMock(return_value={})
     ))
-    
+
     result = await engine.evaluate_symbol("ETHUSDT", bars, None, 0, [], False, current_funding_rate=0.0001)
     assert result is not None
-    assert result.confidence == pytest.approx(0.50)
+    assert result.confidence == pytest.approx(0.47)  # 0.42 + capped 0.05
+
+
+@pytest.mark.asyncio
+async def test_funding_adjustment_clamped_for_extreme_rates(risk_config):
+    """A huge funding rate must not add more than funding_conf_adj_cap."""
+    engine = DecisionEngine(risk_config)
+    engine.enable_kronos = False
+    engine.config.enable_personas = False
+    engine.config.use_risk_reviewer_llm = False
+    bars = _make_bars(200)
+
+    signal = StrategySignal(
+        symbol="ETHUSDT", signal="SELL", confidence=0.50,
+        entry_price=bars[-1]["close"], strategy="trend_following",
+    )
+    engine.strategy.generate_signal = MagicMock(return_value=signal)
+    engine.regime_detector.detect = MagicMock(return_value=MagicMock(
+        regime="TRENDING", weights=MagicMock(return_value={})
+    ))
+
+    # 0.1% funding -> raw adjustment would be +1.0 (saturating confidence)
+    result = await engine.evaluate_symbol("ETHUSDT", bars, None, 0, [], False, current_funding_rate=0.001)
+    assert result is not None
+    assert result.confidence == pytest.approx(0.55)  # 0.50 + capped 0.05
 
 @pytest.mark.asyncio
 async def test_ranging_regime_sizing_and_gate(risk_config):
