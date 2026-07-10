@@ -1226,16 +1226,17 @@ class BinanceFuturesService:
         advances — giving back all locked profit during the inter-cycle sleep or
         if the container dies.
 
-        SAFETY CONTRACT (fail-safe, never leave a position naked):
+        SAFETY CONTRACT:
           * Resolve the existing reduce-only STOP_MARKET for this symbol+side.
           * Only act if `new_stop_price` is strictly TIGHTER than the live
             exchange stop (closer to price) — never loosen, never churn.
           * Reject a stop that sits on the wrong side of current price (would
             trigger instantly, Binance -2021) — skip safely.
-          * Place the NEW stop FIRST, then cancel the OLD one. There is never a
-            window with zero exchange-side protection. If the new placement
-            fails, the old stop stays in force untouched.
-          * Any exception → return without changing the exchange stop.
+          * Binance permits only one closePosition STOP per position side
+            (-4130), so replacement must cancel the old stop before creating
+            the new one. If the new placement fails, immediately restore the
+            previous stop. If restoration also fails, emergency-close the leg
+            at market rather than leave it naked.
 
         Returns a dict with 'status': 'replaced'|'skipped'|'simulated'|'error'.
         """
@@ -1279,7 +1280,12 @@ class BinanceFuturesService:
             # Only tighten: compare against the current exchange stop level
             if existing:
                 cur_levels = [float(o.get('price') or 0) for o in existing if float(o.get('price') or 0) > 0]
-                if direction.upper() == 'BUY':
+                if not cur_levels:
+                    logger.warning(
+                        f"  [TRAIL-SL] {futures_sym} existing stop has no readable trigger price; "
+                        "replacing without tightness comparison"
+                    )
+                elif direction.upper() == 'BUY':
                     cur_stop = max(cur_levels)  # highest = least loose for a long
                     if rounded_new <= cur_stop:
                         return {'status': 'skipped',
@@ -1307,9 +1313,35 @@ class BinanceFuturesService:
             if qty <= 0:
                 return {'status': 'skipped', 'reason': 'no open position quantity to protect'}
 
-            # ── Place the NEW stop FIRST (never go naked) ──────────────────────
-            # Use closePosition="true" without quantity or timeInForce so it automatically
-            # and dynamically covers the entire position size on the exchange.
+            # Binance rejects a second closePosition stop with -4130. Cancel
+            # old STOP orders first, then place the tighter stop immediately.
+            cancelled = []
+            old_stop_levels = [
+                float(o.get('price') or 0)
+                for o in existing
+                if float(o.get('price') or 0) > 0
+            ]
+            for o in existing:
+                oid = o.get('order_id') or o.get('algo_id')
+                try:
+                    if o.get('algo_id'):
+                        client.futures_cancel_algo_order(algoId=o['algo_id'])
+                    else:
+                        client.futures_cancel_order(symbol=futures_sym, orderId=int(o['order_id']))
+                    cancelled.append(str(oid))
+                except Exception as ce:
+                    logger.error(
+                        f"  [TRAIL-SL] {futures_sym} refused to replace stop: "
+                        f"could not cancel old stop {oid}: {ce}"
+                    )
+                    return {
+                        'status': 'error',
+                        'reason': 'old_stop_cancel_failed',
+                        'message': str(ce),
+                    }
+
+            # Use closePosition=true so protection automatically tracks the
+            # entire pyramided leg.
             new_params = {
                 "symbol": futures_sym,
                 "side": sl_side,
@@ -1318,25 +1350,65 @@ class BinanceFuturesService:
                 "closePosition": "true",
                 "positionSide": position_side,
             }
-            new_order = self._safe_create_order(client, new_params)
-            new_id = str(new_order.get('orderId', ''))
-
-            # ── Then cancel the OLD stop(s) ────────────────────────────────────
-            cancelled = []
-            for o in existing:
-                try:
-                    if o.get('algo_id'):
-                        client.futures_cancel_algo_order(algoId=o['algo_id'])
-                    else:
-                        client.futures_cancel_order(symbol=futures_sym, orderId=int(o['order_id']))
-                    cancelled.append(str(o.get('order_id') or o.get('algo_id')))
-                except Exception as ce:
-                    # New stop is already live; a lingering looser stop is harmless
-                    # (reduce-only, same direction) — log and move on.
-                    logger.warning(
-                        f"  [TRAIL-SL] {futures_sym} could not cancel old stop "
-                        f"{o.get('order_id') or o.get('algo_id')}: {ce}"
+            try:
+                new_order = self._safe_create_order(client, new_params)
+                new_id = str(new_order.get('algoId') or new_order.get('orderId', ''))
+            except Exception as new_error:
+                # Restore the previous exchange stop before returning. Use the
+                # tightest known previous level if duplicate stale stops existed.
+                restore_level = None
+                if old_stop_levels:
+                    restore_level = (
+                        max(old_stop_levels)
+                        if direction.upper() == 'BUY'
+                        else min(old_stop_levels)
                     )
+                try:
+                    if restore_level is None:
+                        raise RuntimeError("previous stop trigger price unavailable")
+                    restore_params = dict(new_params)
+                    restore_params["stopPrice"] = restore_level
+                    restored = self._safe_create_order(client, restore_params)
+                    logger.error(
+                        f"  [TRAIL-SL] {futures_sym} new stop failed ({new_error}); "
+                        f"restored previous stop @ {restore_level} "
+                        f"(id={restored.get('algoId') or restored.get('orderId')})"
+                    )
+                    return {
+                        'status': 'error',
+                        'reason': 'new_stop_failed_old_restored',
+                        'message': str(new_error),
+                        'restored_stop': restore_level,
+                    }
+                except Exception as restore_error:
+                    logger.critical(
+                        f"  [TRAIL-SL] {futures_sym} STOP REPLACEMENT AND RESTORE FAILED: "
+                        f"new={new_error}; restore={restore_error} — emergency closing position"
+                    )
+                    emergency = {
+                        "symbol": futures_sym,
+                        "side": sl_side,
+                        "type": "MARKET",
+                        "quantity": qty,
+                        "positionSide": position_side,
+                    }
+                    try:
+                        close_order = self._safe_create_order(client, emergency)
+                        return {
+                            'status': 'emergency_closed',
+                            'reason': 'stop_replace_and_restore_failed',
+                            'order_id': str(close_order.get('orderId', '')),
+                        }
+                    except Exception as close_error:
+                        logger.critical(
+                            f"  [TRAIL-SL] {futures_sym} EMERGENCY CLOSE FAILED: {close_error} "
+                            "— MANUAL INTERVENTION REQUIRED"
+                        )
+                        return {
+                            'status': 'critical',
+                            'reason': 'position_unprotected',
+                            'message': str(close_error),
+                        }
 
             logger.info(
                 f"  [TRAIL-SL] {futures_sym} exchange stop -> {rounded_new} "
@@ -1348,8 +1420,7 @@ class BinanceFuturesService:
 
         except Exception as e:
             logger.warning(
-                f"  [TRAIL-SL] {symbol} exchange-stop move FAILED (existing stop "
-                f"left in force): {e}"
+                f"  [TRAIL-SL] {symbol} exchange-stop move FAILED before replacement completed: {e}"
             )
             return {'status': 'error', 'message': str(e)}
 

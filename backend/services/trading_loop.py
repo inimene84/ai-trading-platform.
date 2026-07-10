@@ -619,12 +619,9 @@ class TradingLoopService:
         # Skip symbol evaluation if available balance is below minimum layer cost ($5)
         # to avoid API cost, LLM/Kronos latency, and log/DB spam.
         # Uses the cached _cycle_balance from above (no redundant API call).
-        margin_sufficient = True
-
         if self._cycle_available < 5.0:
             logger.warning(f"[MARGIN GATE] Insufficient available balance (${self._cycle_available:.2f} < $5.00). Skipping symbol evaluation.")
-            margin_sufficient = False
-            
+
             # Write a single ACCOUNT-level signal to DB
             db_sig = SessionLocal()
             try:
@@ -643,21 +640,20 @@ class TradingLoopService:
             finally:
                 db_sig.close()
 
-        results = []
-        if margin_sufficient:
-            # ── SYMBOL-QUALITY GATE: drop blacklisted + illiquid symbols ──
-            # Kills the realized-PnL loss tail caused by low-liquidity / new-listing
-            # symbols (SIREN, AIGENSYN, MAGMA, SPK ...) before any analysis runs.
-            tradeable = await self._filter_tradeable_symbols(self._symbols)
-
-            # Run all symbols in parallel
-            tasks = [
-                self._process_symbol(
-                    symbol, min_confidence, ai_threshold, max_positions
-                )
-                for symbol in tradeable
-            ]
-            results = await asyncio.gather(*tasks, return_exceptions=True)
+        # Always process symbols, even when entries are margin-blocked. The
+        # per-symbol path sees `_entries_blocked` and skips strategy/entry work,
+        # but still runs exchange protection restore and trailing maintenance.
+        # Previously a transient balance failure (available=0) skipped every
+        # symbol task and suspended protection maintenance for the full cycle.
+        # ── SYMBOL-QUALITY GATE: drop blacklisted + illiquid symbols ──
+        tradeable = await self._filter_tradeable_symbols(self._symbols)
+        tasks = [
+            self._process_symbol(
+                symbol, min_confidence, ai_threshold, max_positions
+            )
+            for symbol in tradeable
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
 
         _signals_generated = 0
         _trades_executed = 0

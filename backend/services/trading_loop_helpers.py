@@ -145,6 +145,20 @@ class BrokerPositionSyncService:
             }
 
             db_trades = db.query(Trade).filter(Trade.status.in_(["open", "filled"])).all()
+            # An entirely empty exchange snapshot while SQL still has open
+            # trades is ambiguous: it may mean every position closed, but it
+            # also occurs on permissions/testnet/API degradation. Never flatten
+            # the whole DB and cancel every protective order from one empty
+            # response. A non-empty snapshot can safely reconcile symbols that
+            # are individually absent; an all-empty snapshot requires operator
+            # confirmation or a later explicit reconciliation path.
+            if db_trades and not broker_raw:
+                logger.error(
+                    "Broker returned an empty positions snapshot while DB has "
+                    f"{len(db_trades)} open trade row(s); refusing bulk close/order cancellation"
+                )
+                return 0
+
             exit_price_cache: dict = {}
             cancelled_orphans: set = set()
 

@@ -47,7 +47,10 @@ def _db_with(trades):
 
 def _broker(exit_price):
     broker = MagicMock()
-    broker.get_positions.return_value = []  # position gone from exchange
+    # Non-empty, authoritative snapshot where the tested symbol is absent.
+    broker.get_positions.return_value = [
+        {"symbol": "OTHERUSDT", "quantity": 1.0},
+    ]
     broker.get_exit_price.return_value = exit_price
     return broker
 
@@ -95,3 +98,21 @@ async def test_sync_handles_missing_exit_price():
     assert trade.status == "closed"
     assert trade.pnl is None
     assert "unavailable" in trade.notes or "implausible" in trade.notes
+
+
+@pytest.mark.asyncio
+async def test_sync_refuses_bulk_close_on_empty_exchange_snapshot():
+    """One degraded [] response must not flatten DB and cancel all protection."""
+    trade = _trade()
+    db = _db_with([trade])
+    broker = _broker(exit_price=0.074)
+    broker.get_positions.return_value = []
+
+    updated = await BrokerPositionSyncService.sync_positions(db, broker, {}, {})
+
+    assert updated == 0
+    assert trade.status == "open"
+    assert trade.closed_at is None
+    broker.get_exit_price.assert_not_called()
+    broker.cancel_all_orders.assert_not_called()
+    db.commit.assert_not_called()
