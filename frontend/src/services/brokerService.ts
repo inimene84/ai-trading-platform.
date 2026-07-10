@@ -8,6 +8,8 @@ export interface OrderParams {
   type: 'market' | 'limit';
   price?: number;
   side: 'buy' | 'sell';
+  stopLoss?: number;
+  takeProfit?: number;
 }
 
 export interface ExecutionResult {
@@ -15,6 +17,8 @@ export interface ExecutionResult {
   orderId?: string;
   error?: string;
   timestamp: number;
+  filledPrice?: number;
+  tradeId?: number;
 }
 
 class BrokerService {
@@ -26,10 +30,21 @@ class BrokerService {
   async executeBinance(params: OrderParams): Promise<ExecutionResult> {
     // Forward to backend live broker endpoint
     try {
-      const res = await apiService.placeOrder(params.symbol, params.side, params.quantity, params.price || 0);
+      const res = await apiService.placeOrder(
+        params.symbol,
+        params.side,
+        params.quantity,
+        params.type,
+        params.price || 0,
+        params.stopLoss,
+        params.takeProfit,
+      );
+      if (!res.order_id) throw new Error('Backend returned no exchange order ID');
       const result: ExecutionResult = {
         success: true,
-        orderId: res.order_id || `BN-${Math.random().toString(36).substr(2, 9).toUpperCase()}`,
+        orderId: res.order_id,
+        filledPrice: res.filled_price,
+        tradeId: res.trade_id,
         timestamp: Date.now()
       };
       await this.logAndTrack(params, result, 'binance');
@@ -47,10 +62,16 @@ class BrokerService {
 
   async executeCTrader(params: OrderParams): Promise<ExecutionResult> {
     try {
-      const res = await apiService.placeOrder(params.symbol, params.side, params.quantity, params.price || 0);
+      const res = await apiService.placeOrder(
+        params.symbol, params.side, params.quantity, params.type,
+        params.price || 0, params.stopLoss, params.takeProfit,
+      );
+      if (!res.order_id) throw new Error('Backend returned no exchange order ID');
       const result: ExecutionResult = {
         success: true,
-        orderId: res.order_id || `CT-${Math.random().toString(36).substr(2, 9).toUpperCase()}`,
+        orderId: res.order_id,
+        filledPrice: res.filled_price,
+        tradeId: res.trade_id,
         timestamp: Date.now()
       };
       await this.logAndTrack(params, result, 'ctrader');

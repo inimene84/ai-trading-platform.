@@ -134,3 +134,92 @@ def test_ensure_protective_orders_skips_when_sl_present():
          patch.object(broker, "_has_exchange_stop", return_value=True):
         res = broker.ensure_protective_orders("XRPUSDT", "SELL", stop_loss=1.18)
     assert res["status"] == "ok"
+
+
+def test_replace_stop_cancels_existing_close_position_before_creating_new():
+    """Binance allows only one closePosition stop; cancel old before new."""
+    broker = _broker()
+    client = MagicMock()
+    client.futures_symbol_ticker.return_value = {"price": "100"}
+    cancelled = {"done": False}
+
+    def cancel_algo(**_kwargs):
+        cancelled["done"] = True
+
+    def create(_client, params):
+        assert cancelled["done"] is True
+        assert params["stopPrice"] == 95.0
+        return {"algoId": 999}
+
+    client.futures_cancel_algo_order.side_effect = cancel_algo
+    with patch.object(broker, "_to_futures_symbol", return_value="ETHUSDT"), \
+         patch.object(broker, "_get_client", return_value=client), \
+         patch.object(broker, "_round_price", side_effect=lambda s, p: p), \
+         patch.object(broker, "_round_qty", side_effect=lambda s, q, **kw: q), \
+         patch.object(broker, "_collect_protective_orders", return_value=[{
+             "type": "STOP_MARKET", "price": 90.0, "algo_id": 123,
+             "order_id": "123",
+         }]), \
+         patch.object(broker, "_safe_create_order", side_effect=create):
+        result = broker.replace_stop_loss(
+            "ETHUSDT", "BUY", 95.0, quantity=1.0,
+        )
+
+    assert result["status"] == "replaced"
+    client.futures_cancel_algo_order.assert_called_once_with(algoId=123)
+
+
+def test_replace_stop_restores_old_level_when_new_stop_fails():
+    broker = _broker()
+    client = MagicMock()
+    client.futures_symbol_ticker.return_value = {"price": "100"}
+
+    with patch.object(broker, "_to_futures_symbol", return_value="ETHUSDT"), \
+         patch.object(broker, "_get_client", return_value=client), \
+         patch.object(broker, "_round_price", side_effect=lambda s, p: p), \
+         patch.object(broker, "_round_qty", side_effect=lambda s, q, **kw: q), \
+         patch.object(broker, "_collect_protective_orders", return_value=[{
+             "type": "STOP_MARKET", "price": 90.0, "algo_id": 123,
+             "order_id": "123",
+         }]), \
+         patch.object(broker, "_safe_create_order", side_effect=[
+             Exception("new stop rejected"),
+             {"algoId": 456},
+         ]) as create:
+        result = broker.replace_stop_loss(
+            "ETHUSDT", "BUY", 95.0, quantity=1.0,
+        )
+
+    assert result["status"] == "error"
+    assert result["reason"] == "new_stop_failed_old_restored"
+    assert result["restored_stop"] == 90.0
+    assert create.call_args_list[1].args[1]["stopPrice"] == 90.0
+
+
+def test_replace_stop_emergency_closes_when_new_and_restore_both_fail():
+    broker = _broker()
+    client = MagicMock()
+    client.futures_symbol_ticker.return_value = {"price": "100"}
+
+    with patch.object(broker, "_to_futures_symbol", return_value="ETHUSDT"), \
+         patch.object(broker, "_get_client", return_value=client), \
+         patch.object(broker, "_round_price", side_effect=lambda s, p: p), \
+         patch.object(broker, "_round_qty", side_effect=lambda s, q, **kw: q), \
+         patch.object(broker, "_collect_protective_orders", return_value=[{
+             "type": "STOP_MARKET", "price": 90.0, "algo_id": 123,
+             "order_id": "123",
+         }]), \
+         patch.object(broker, "_safe_create_order", side_effect=[
+             Exception("new rejected"),
+             Exception("restore rejected"),
+             {"orderId": 789},
+         ]) as create:
+        result = broker.replace_stop_loss(
+            "ETHUSDT", "BUY", 95.0, quantity=1.0,
+        )
+
+    assert result["status"] == "emergency_closed"
+    emergency = create.call_args_list[2].args[1]
+    assert emergency["type"] == "MARKET"
+    assert emergency["side"] == "SELL"
+    assert emergency["positionSide"] == "LONG"

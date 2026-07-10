@@ -22,13 +22,25 @@ class SaveJsonRequest(BaseModel):
 async def save_json_file(request: SaveJsonRequest):
     """Save JSON data to the project's /outputs directory."""
     try:
-        # Create outputs directory if it doesn't exist
-        project_root = Path(__file__).parent.parent.parent.parent  # Navigate to project root
+        # Only a plain JSON basename is allowed. Resolve and re-check the parent
+        # as defense in depth against ../ traversal and absolute paths.
+        requested = Path(request.filename)
+        if (
+            requested.name != request.filename
+            or requested.suffix.lower() != ".json"
+            or requested.name in {".json", "..json"}
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="filename must be a plain .json basename",
+            )
+        # backend/routes/storage.py -> repository root
+        project_root = Path(__file__).resolve().parents[2]
         outputs_dir = project_root / "outputs"
         outputs_dir.mkdir(exist_ok=True)
-        
-        # Construct file path
-        file_path = outputs_dir / request.filename
+        file_path = (outputs_dir / requested.name).resolve()
+        if file_path.parent != outputs_dir.resolve():
+            raise HTTPException(status_code=400, detail="invalid output path")
         
         # Save JSON data to file
         with open(file_path, 'w', encoding='utf-8') as f:
@@ -40,5 +52,7 @@ async def save_json_file(request: SaveJsonRequest):
             "filename": request.filename
         }
         
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to save file: {str(e)}") 
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=500, detail="Failed to save JSON file")

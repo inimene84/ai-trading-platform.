@@ -15,6 +15,17 @@ from backend.services import kronos_service
 logger = logging.getLogger(__name__)
 
 
+def pyramid_price_improved(
+    direction: str, current_price: float, last_layer_price: float, minimum: float,
+) -> bool:
+    """Pyramid only in the profitable direction by at least `minimum`."""
+    if direction == "BUY":
+        return current_price >= last_layer_price * (1 + minimum)
+    if direction == "SELL":
+        return current_price <= last_layer_price * (1 - minimum)
+    return False
+
+
 def _reviewer_gate_fail_open() -> bool:
     """Whether an unexpected error in the risk-reviewer GATE may let a trade through.
 
@@ -145,12 +156,9 @@ class DecisionEngine:
                             imp = self.config.pyramid_min_improvement
                             # LONG pyramid: add on strength (price higher).
                             # SHORT pyramid/DCA: add when price moved vs last layer.
-                            blocked = False
-                            if signal.signal == "BUY" and cur_px < last_px * (1 + imp):
-                                blocked = True
-                            elif signal.signal == "SELL" and cur_px > last_px * (1 + imp):
-                                # Short DCA: add when price rises (averaging into move)
-                                blocked = True
+                            blocked = not pyramid_price_improved(
+                                signal.signal, cur_px, last_px, imp,
+                            )
                             if blocked:
                                 self._record_eval(
                                     symbol, signal.signal, signal.confidence,

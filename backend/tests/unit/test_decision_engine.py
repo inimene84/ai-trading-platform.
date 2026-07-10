@@ -1,7 +1,11 @@
 import pytest
 from unittest.mock import MagicMock
 
-from backend.services.decision_engine import DecisionEngine, compute_sl_tp_levels
+from backend.services.decision_engine import (
+    DecisionEngine,
+    compute_sl_tp_levels,
+    pyramid_price_improved,
+)
 from backend.services.risk_config import RiskConfig
 from backend.strategies.base import StrategySignal
 
@@ -48,6 +52,12 @@ def test_compute_sl_tp_sell_direction(risk_config):
     sl, tp = compute_sl_tp_levels(bars, "SELL", 100.0, risk_config)
     assert sl > 100.0
     assert tp < 100.0
+
+
+def test_short_pyramid_requires_price_decline():
+    assert pyramid_price_improved("SELL", 99.4, 100.0, 0.005)
+    assert not pyramid_price_improved("SELL", 100.0, 100.0, 0.005)
+    assert not pyramid_price_improved("SELL", 101.0, 100.0, 0.005)
 
 
 def test_create_entry_floors_notional_at_20_usdt(risk_config):

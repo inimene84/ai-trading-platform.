@@ -16,7 +16,7 @@ check() {
 restart_service() {
   local svc="$1"
   echo "$LOG_TAG restarting $svc"
-  cd "$PROJECT_DIR" && docker compose restart "$svc" 2>&1 || true
+  cd "$PROJECT_DIR" && docker compose -f docker-compose.prod.yml restart "$svc" 2>&1 || true
 }
 
 if ! check "$BACKEND_URL"; then

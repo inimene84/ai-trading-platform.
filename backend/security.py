@@ -21,6 +21,7 @@ SENSITIVE_PREFIXES = (
     "/ollama",
     "/api/ollama",
 )
+SENTRY_PREFIXES = ("/sentry",)
 TRADING_PREFIXES = ("/trading", "/api/trading")
 PUBLIC_TRADING_PATHS = {
     "/trading/strategies",
@@ -47,6 +48,10 @@ def is_sensitive_request(request: Request) -> bool:
 
     if path.startswith(SENSITIVE_PREFIXES):
         return True
+
+    if path.startswith(SENTRY_PREFIXES):
+        # Sentry POST routes use their dedicated X-Sentry-Token validator.
+        return method not in {"GET", "HEAD", "POST", "OPTIONS"}
 
     if path.startswith(TRADING_PREFIXES):
         if path in PUBLIC_TRADING_PATHS:

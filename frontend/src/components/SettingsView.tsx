@@ -110,8 +110,24 @@ export const SettingsView = () => {
 
   useEffect(() => {
     const saved = localStorage.getItem('quantum_trade_settings');
-    if (saved) {
-      const parsed = JSON.parse(saved);
+    const sessionSecrets = sessionStorage.getItem('quantum_trade_session_secrets');
+    if (saved || sessionSecrets) {
+      const parsed = {
+        ...(saved ? JSON.parse(saved) : {}),
+        ...(sessionSecrets ? JSON.parse(sessionSecrets) : {}),
+      };
+      // Migrate legacy persisted secrets out of localStorage.
+      const isSecret = (key: string) => (
+        key.includes('KEY') || key.includes('TOKEN')
+        || key.includes('SECRET') || key.includes('PASSWORD')
+      );
+      const persistent: Record<string, string> = {};
+      const secrets: Record<string, string> = {};
+      Object.entries(parsed).forEach(([key, value]) => {
+        (isSecret(key) ? secrets : persistent)[key] = value as string;
+      });
+      localStorage.setItem('quantum_trade_settings', JSON.stringify(persistent));
+      sessionStorage.setItem('quantum_trade_session_secrets', JSON.stringify(secrets));
       setSettings(parsed);
       
       // Initial validation
@@ -194,9 +210,21 @@ export const SettingsView = () => {
       showToast('Please fix errors before saving.', 'error');
       return;
     }
-    localStorage.setItem('quantum_trade_settings', JSON.stringify(settings));
+    const isSecret = (key: string) => (
+      key.includes('KEY')
+      || key.includes('TOKEN')
+      || key.includes('SECRET')
+      || key.includes('PASSWORD')
+    );
+    const persistent: Record<string, string> = {};
+    const secrets: Record<string, string> = {};
+    Object.entries(settings).forEach(([key, value]) => {
+      (isSecret(key) ? secrets : persistent)[key] = value;
+    });
+    localStorage.setItem('quantum_trade_settings', JSON.stringify(persistent));
+    sessionStorage.setItem('quantum_trade_session_secrets', JSON.stringify(secrets));
     setIsSaved(true);
-    showToast('Configuration and secrets saved successfully.', 'success');
+    showToast('Configuration saved; secrets are session-only.', 'success');
     setTimeout(() => setIsSaved(false), 3000);
   };
 

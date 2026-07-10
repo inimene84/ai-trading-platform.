@@ -24,9 +24,11 @@ def _reviewer_outage_fail_open() -> bool:
 
 
 def _parse_reviewer_response(content: str) -> tuple[bool, str]:
-    """Parse LLM reviewer output; fail-open (approve) when format is ambiguous."""
+    """Parse reviewer output; ambiguous output fails closed in live mode."""
     if not content or not content.strip():
-        return True, "Approved (empty LLM response — fail-open)."
+        if _reviewer_outage_fail_open():
+            return True, "Approved (empty LLM response — fail-open)."
+        return False, "Rejected (empty LLM response — fail-closed in live mode)."
 
     text = content.strip()
     # Strip markdown code fences if the model wrapped JSON
@@ -56,8 +58,11 @@ def _parse_reviewer_response(content: str) -> tuple[bool, str]:
         reasoning = reason_match.group(1) if reason_match else "Parsed approved field from non-JSON response."
         return approved, reasoning
 
-    logger.warning("Could not parse risk reviewer response; defaulting to APPROVED. Content: %s", text[:500])
-    return True, "Approved (unparseable LLM response — fail-open)."
+    if _reviewer_outage_fail_open():
+        logger.warning("Could not parse reviewer response; fail-open outside live mode. Content: %s", text[:500])
+        return True, "Approved (unparseable LLM response — fail-open)."
+    logger.error("Could not parse reviewer response; rejecting in live mode. Content: %s", text[:500])
+    return False, "Rejected (unparseable LLM response — fail-closed in live mode)."
 
 async def fetch_news_summary(symbol: str) -> str:
     """Fetch recent news analyses for a symbol from Qdrant vector store."""

@@ -2,15 +2,20 @@
  * API Service — Central bridge between the React frontend and FastAPI backend.
  * All backend communication flows through this module.
  *
- * The backend URL is resolved in order:
- *   1. localStorage setting  `BACKEND_URL`
- *   2. Vite dev-proxy         `/api/backend`  (default)
+ * Backend routing is deployment-controlled, never user/localStorage-controlled.
+ * This prevents different services in one browser session talking to different
+ * trading backends. Vite/nginx both expose the same `/api/backend` path.
  */
 
 const LOCAL_STORAGE_KEY = 'quantum_trade_settings';
 
 function getAdminApiKey(): string {
   try {
+    const sessionSecrets = sessionStorage.getItem('quantum_trade_session_secrets');
+    if (sessionSecrets) {
+      const secrets = JSON.parse(sessionSecrets);
+      if (secrets.ADMIN_API_KEY) return secrets.ADMIN_API_KEY;
+    }
     const stored = localStorage.getItem(LOCAL_STORAGE_KEY);
     if (stored) {
       const settings = JSON.parse(stored);
@@ -21,14 +26,7 @@ function getAdminApiKey(): string {
 }
 
 function getBackendUrl(): string {
-  try {
-    const stored = localStorage.getItem(LOCAL_STORAGE_KEY);
-    if (stored) {
-      const settings = JSON.parse(stored);
-      if (settings.BACKEND_URL) return settings.BACKEND_URL.replace(/\/+$/, '');
-    }
-  } catch { /* ignore */ }
-  return '/api/backend';
+  return (import.meta.env.VITE_BACKEND_URL || '/api/backend').replace(/\/+$/, '');
 }
 
 async function request<T = any>(path: string, options?: RequestInit): Promise<T> {
@@ -322,11 +320,16 @@ export const apiService = {
 
   // ── Account & Balance ────────────────────────────────────────────────────
   async getAccountData(): Promise<{ equity: number; availableBalance: number; dailyPnL: number }> {
-    return request('/trading/account/summary').catch(() => ({
-      equity: 10000,
-      availableBalance: 10000,
-      dailyPnL: 0
-    }));
+    const data = await request<{
+      equity: number;
+      available_balance: number;
+      daily_pnl: number;
+    }>('/trading/account/summary');
+    return {
+      equity: data.equity,
+      availableBalance: data.available_balance,
+      dailyPnL: data.daily_pnl,
+    };
   },
 
   // ── Flow Runs ──────────────────────────────────────────────────────────────
@@ -386,10 +389,26 @@ export const apiService = {
     });
   },
 
-  async placeOrder(symbol: string, side: 'buy' | 'sell', quantity: number, price = 0) {
+  async placeOrder(
+    symbol: string,
+    side: 'buy' | 'sell',
+    quantity: number,
+    orderType: 'market' | 'limit' = 'market',
+    price = 0,
+    stopLoss?: number,
+    takeProfit?: number,
+  ) {
     return request('/trading/order', {
       method: 'POST',
-      body: JSON.stringify({ symbol, side, order_type: price > 0 ? 'limit' : 'market', quantity, price }),
+      body: JSON.stringify({
+        symbol,
+        side,
+        order_type: orderType,
+        quantity,
+        price: orderType === 'limit' ? price : 0,
+        stop_loss: stopLoss,
+        take_profit: takeProfit,
+      }),
     });
   },
 

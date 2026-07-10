@@ -49,42 +49,26 @@ export interface MarketSentimentData {
   total_tracked: number;
 }
 
-async function fetchWithFallback<T>(url: string, fallback: T): Promise<T> {
-  try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return (await res.json()) as T;
-  } catch (err) {
-    console.warn(`[newsDataService] Failed to fetch ${url}:`, err);
-    return fallback;
-  }
+async function fetchData<T>(url: string): Promise<T> {
+  const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
+  if (!res.ok) throw new Error(`News API ${res.status}`);
+  return (await res.json()) as T;
 }
 
 export const newsDataService = {
   async getNewsFeed(): Promise<{ items: NewsItem[]; count: number; cached_at: string }> {
-    return fetchWithFallback(`${BASE}/feed`, { items: [], count: 0, cached_at: '' });
+    return fetchData(`${BASE}/feed`);
   },
 
   async getFearGreed(): Promise<FearGreedData> {
-    return fetchWithFallback(`${BASE}/fear-greed`, {
-      value: 50,
-      value_classification: 'Neutral',
-      timestamp: String(Date.now()),
-      history: [],
-    });
+    return fetchData(`${BASE}/fear-greed`);
   },
 
   async getEconomicCalendar(): Promise<{ events: EconomicEvent[] }> {
-    return fetchWithFallback(`${BASE}/economic-calendar`, { events: [] });
+    return fetchData(`${BASE}/economic-calendar`);
   },
 
   async getMarketSentiment(): Promise<MarketSentimentData> {
-    return fetchWithFallback(`${BASE}/market-sentiment`, {
-      bull_pct: 50,
-      bear_pct: 50,
-      neutral_pct: 0,
-      top_movers: [],
-      total_tracked: 0,
-    });
+    return fetchData(`${BASE}/market-sentiment`);
   },
 };

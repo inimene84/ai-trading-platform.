@@ -9,6 +9,10 @@ on:
       - "frontend/**"
       - ".github/workflows/**"
       - "scripts/**"
+      - "docker-compose*.yml"
+      - "Dockerfile*"
+      - "nginx.conf"
+      - "litellm-config.yaml"
 
 jobs:
   deploy:

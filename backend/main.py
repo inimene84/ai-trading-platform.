@@ -63,6 +63,18 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+def validate_live_startup_security() -> None:
+    """Refuse to start a live trading process without admin authentication."""
+    from backend.security import admin_auth_enabled
+    from backend.services.trading_mode import TradingMode, get_trading_mode
+
+    if get_trading_mode() == TradingMode.LIVE and not admin_auth_enabled():
+        raise RuntimeError(
+            "Refusing LIVE startup without ADMIN_API_KEY/API_AUTH_TOKEN/"
+            "BACKEND_API_KEY. Configure a strong token before enabling live trading."
+        )
+
+
 async def run_supervised_task(task_name: str, coro_func, *args, **kwargs):
     """Helper to run a task with an auto-restart supervisor.
     
@@ -87,6 +99,12 @@ async def run_supervised_task(task_name: str, coro_func, *args, **kwargs):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifespan context manager for startup and shutdown events."""
+    validate_live_startup_security()
+    from backend.services.trading_mode import TradingMode, get_trading_mode
+    resolved_mode = get_trading_mode()
+    mode = "live" if resolved_mode == TradingMode.LIVE else "paper"
+    paper_trading = mode == "paper"
+
     # 0. Initialize Vector DB Collections
     try:
         from backend.services.qdrant_client import qdrant
@@ -123,9 +141,8 @@ async def lifespan(app: FastAPI):
         ut = UnifiedTrading()
         ut.register_broker("binance_futures", binance_futures_broker)
         ut.register_broker("ctrader", ctrader_broker)
-        # Auto-init paper session for immediate use
-        paper_trading = os.getenv("PAPER_TRADING", "false").lower() == "true"
-        mode = "paper" if paper_trading else "live"
+        # Use the canonical resolver so router/session/loop cannot disagree when
+        # TRADING_MODE or legacy PAPER_TRADING defaults are absent.
         init_kwargs = {
             "broker": "binance_futures",
             "mode": mode,
@@ -156,8 +173,7 @@ async def lifespan(app: FastAPI):
     interval = int(os.getenv("TRADING_LOOP_INTERVAL_MIN", "15"))
     task = asyncio.create_task(run_supervised_task("Trading Loop", trading_loop.start, interval_minutes=interval))
     background_tasks.append(task)
-    paper_trading = os.getenv("PAPER_TRADING", "false").lower() == "true"
-    mode_str = "PAPER" if paper_trading else "LIVE"
+    mode_str = mode.upper()
     logger.info(f"✓ Trading loop auto-started ({mode_str} MODE) under supervisor")
 
     # 4. Sentiment Loop
@@ -222,11 +238,13 @@ _cors_env = os.getenv("CORS_ALLOWED_ORIGINS", "").strip()
 if _cors_env:
     _allowed_origins = [origin.strip() for origin in _cors_env.split(",") if origin.strip()]
 else:
-    _allowed_origins = ["*"]
+    # Dashboard is same-origin through nginx; cross-origin access is opt-in.
+    # Wildcard + credentials is both invalid and unsafe in production.
+    _allowed_origins = []
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_allowed_origins,
-    allow_credentials=True,
+    allow_credentials=bool(_allowed_origins),
     allow_methods=["*"],
     allow_headers=["*"],
 )

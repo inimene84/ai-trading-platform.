@@ -37,9 +37,28 @@ git log -1 --oneline
 
 echo ""
 echo "=== 2. Env sanity (live trading + P0 gates) ==="
+if [ ! -f .env ]; then
+  echo "ERROR: .env is required for production deployment"
+  exit 1
+fi
+for required in ADMIN_API_KEY LITELLM_API_KEY QDRANT_API_KEY; do
+  if ! grep -qE "^${required}=.+$" .env; then
+    echo "ERROR: ${required} must be set in .env"
+    exit 1
+  fi
+done
+ADMIN_API_KEY=$(grep '^ADMIN_API_KEY=' .env | cut -d= -f2-)
+
+# Never silently turn a safe/paper config into live trading. A live deploy must
+# carry an explicit operator acknowledgement in the server-side .env.
+if grep -qE '^PAPER_TRADING=false$' .env \
+   && grep -qE '^DRY_RUN_ALL=false$' .env \
+   && ! grep -qE '^CONFIRM_LIVE_DEPLOY=true$' .env; then
+  echo "ERROR: live trading requested without CONFIRM_LIVE_DEPLOY=true"
+  exit 1
+fi
+
 if [ -f .env ]; then
-  sed -i 's/BINANCE_TESTNET=true/BINANCE_TESTNET=false/g' .env
-  sed -i 's/DRY_RUN_ALL=true/DRY_RUN_ALL=false/g' .env
   grep -q '^PYRAMID_MIN_IMPROVEMENT=' .env || echo 'PYRAMID_MIN_IMPROVEMENT=0.005' >> .env
   sed -i 's/^PYRAMID_MIN_IMPROVEMENT=0$/PYRAMID_MIN_IMPROVEMENT=0.005/' .env
   grep -q '^MIN_AVAILABLE_MARGIN_USDT=' .env || echo 'MIN_AVAILABLE_MARGIN_USDT=5' >> .env
@@ -49,25 +68,14 @@ if [ -f .env ]; then
     sed -i 's/^TRADING_KILL_FLOOR_USDT=20/TRADING_KILL_FLOOR_USDT=65/' .env
     echo "  Bumped TRADING_KILL_FLOOR_USDT 20 -> 65"
   fi
-  grep -q '^NATIVE_TRAILING_ENABLED=' .env || echo 'NATIVE_TRAILING_ENABLED=true' >> .env
+  grep -q '^NATIVE_TRAILING_ENABLED=' .env || echo 'NATIVE_TRAILING_ENABLED=false' >> .env
   grep -q '^EQUITY_SIZING_ENABLED=' .env || echo 'EQUITY_SIZING_ENABLED=true' >> .env
-  grep -q '^PAPER_TRADING=' .env || echo 'PAPER_TRADING=false' >> .env
-  grep -q '^DRY_RUN_ALL=' .env || echo 'DRY_RUN_ALL=false' >> .env
+  grep -q '^PAPER_TRADING=' .env || echo 'PAPER_TRADING=true' >> .env
+  grep -q '^DRY_RUN_ALL=' .env || echo 'DRY_RUN_ALL=true' >> .env
   grep -q '^JSON_LOGS=' .env || echo 'JSON_LOGS=true' >> .env
   if ! grep -q '^GRAFANA_URL=' .env; then
     VPS_IP=$(curl -sf --max-time 3 ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')
     echo "GRAFANA_URL=http://${VPS_IP:-localhost}:3000" >> .env
-  fi
-  # Expanded symbol universe (20 liquid USDT perps) — more pairs = more signal chances
-  EXPANDED_SYMBOLS='BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT,ADAUSDT,DOGEUSDT,AVAXUSDT,DOTUSDT,LINKUSDT,POLUSDT,LTCUSDT,UNIUSDT,ATOMUSDT,NEARUSDT,OPUSDT,ARBUSDT,APTUSDT,INJUSDT,SUIUSDT'
-  if grep -q '^TRADING_SYMBOLS=' .env; then
-    sym_count=$(grep '^TRADING_SYMBOLS=' .env | cut -d= -f2- | tr ',' '\n' | grep -c . || echo 0)
-    if [ "$sym_count" -lt 5 ]; then
-      sed -i "s|^TRADING_SYMBOLS=.*|TRADING_SYMBOLS=${EXPANDED_SYMBOLS}|" .env
-      echo "  Expanded TRADING_SYMBOLS to ${sym_count} -> 20 symbols"
-    fi
-  else
-    echo "TRADING_SYMBOLS=${EXPANDED_SYMBOLS}" >> .env
   fi
 fi
 
@@ -144,15 +152,19 @@ echo ""
 echo "=== 9. Runtime LLM toggles ==="
 curl -sf -X POST http://127.0.0.1:8001/trading/config/update \
   -H 'Content-Type: application/json' \
+  -H "X-API-Key: ${ADMIN_API_KEY}" \
   -d '{"use_risk_reviewer_llm": true, "enable_personas": false}' || true
 
 echo ""
 echo "=== 10. Ensure trading loop is running with current TRADING_SYMBOLS ==="
 SYMS_JSON=$(grep '^TRADING_SYMBOLS=' .env 2>/dev/null | cut -d= -f2- | python3 -c "import sys,json; print(json.dumps([s.strip() for s in sys.stdin.read().split(',') if s.strip()]))" 2>/dev/null || echo '[]')
-curl -sf -X POST http://127.0.0.1:8001/trading/loop/stop -H 'Content-Type: application/json' >/dev/null 2>&1 || true
+curl -sf -X POST http://127.0.0.1:8001/trading/loop/stop \
+  -H 'Content-Type: application/json' \
+  -H "X-API-Key: ${ADMIN_API_KEY}" >/dev/null 2>&1 || true
 sleep 1
 curl -sf -X POST http://127.0.0.1:8001/trading/loop/start \
   -H 'Content-Type: application/json' \
+  -H "X-API-Key: ${ADMIN_API_KEY}" \
   -d "{\"interval_minutes\":15,\"strategy\":\"combined\",\"symbols\":${SYMS_JSON}}" || true
 sleep 2
 curl -sf http://127.0.0.1:8001/trading/loop/status | python3 -c "
@@ -166,5 +178,5 @@ echo ""
 echo "=== Done ==="
 echo "  Dashboard:  http://<vps-ip>:8081/"
 echo "  Grafana:    http://<vps-ip>:8081/grafana/  (not :3000 — may be used by other stack)"
-echo "  InfluxDB:   http://<vps-ip>:8086"
-echo "  API health: http://<vps-ip>:8001/health"
+echo "  InfluxDB:   internal Docker network / localhost only"
+echo "  API health: http://<vps-ip>:8081/health"

@@ -5,22 +5,16 @@ class AutomationService {
     event: 'trade_executed' | 'trade_failed';
     payload: any;
   }) {
-    const webhookUrl = configService.getSecret('N8N_WEBHOOK_URL');
-
-    if (!webhookUrl) {
-      console.log('[AUTOMATION] n8n webhook URL not configured, skipping trigger.');
-      return;
-    }
-
     try {
       console.log(`[AUTOMATION] Triggering n8n webhook for ${data.event}...`);
+      const adminKey = configService.getSecret('ADMIN_API_KEY');
       const response = await fetch('/api/telemetry/n8n', {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
+          ...(adminKey ? { 'X-API-Key': adminKey } : {}),
         },
         body: JSON.stringify({
-          webhookUrl,
           event: data.event,
           payload: {
             ...data,

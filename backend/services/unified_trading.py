@@ -94,6 +94,8 @@ class UnifiedOrderResponse:
     mode: str = ""           # "paper" or "live"
     filled_price: Optional[float] = None
     filled_qty: Optional[float] = None
+    commission: float = 0.0
+    realized_pnl: Optional[float] = None
 
 
 @dataclass
@@ -250,7 +252,13 @@ class PaperTradingEngine:
                     if ref <= 0 and order.order_type == OrderType.MARKET:
                         # Try to use last filled price as reference if available
                         last_fills = [t.price for t in pf["trades"] if t.symbol == order.symbol]
-                        ref = last_fills[-1] if last_fills else 1000.0  # better than 1000.0 but still fallback
+                        if not last_fills:
+                            return UnifiedOrderResponse(
+                                False, oid,
+                                "Paper market entry requires an explicit price or prior market fill",
+                                "paper",
+                            )
+                        ref = last_fills[-1]
                     required = net_new * ref / meta["leverage"]
                     if required > pf["cash"]:
                         return UnifiedOrderResponse(False, oid,
@@ -286,7 +294,23 @@ class PaperTradingEngine:
 
             # Auto-fill market orders
             if order.order_type == OrderType.MARKET:
-                fill_price = order.price if order.price > 0 else 1000.0
+                fill_price = order.price
+                if fill_price <= 0 and order.reduce_only:
+                    # A safety-fallback close may not carry a quote. Use the
+                    # actual paper position basis rather than the old hardcoded
+                    # $1000 fill, which corrupted every non-$1000 asset.
+                    pos = pf["positions"].get(order.symbol, {})
+                    closing_side = "long" if order.side == OrderSide.SELL else "short"
+                    if pos.get(closing_side, 0) > 0:
+                        fill_price = float(
+                            pos.get(f"{closing_side}_cost_basis", 0) or 0
+                        )
+                if fill_price <= 0:
+                    rec["status"] = "rejected"
+                    return UnifiedOrderResponse(
+                        False, oid, "Paper market order has no valid fill price",
+                        "paper",
+                    )
                 self._fill_order_locked(pf, rec, fill_price)
                 return UnifiedOrderResponse(
                     True, oid, f"Paper market order filled @ {fill_price}", "paper",
@@ -648,13 +672,24 @@ class UnifiedTrading:
             return UnifiedOrderResponse(False, "", f"Broker not registered: {session.broker}", "live")
 
         try:
-            # Map UnifiedOrder to existing broker signature
-            broker_dir = "BUY" if order.side == OrderSide.BUY else "SELL"
+            # Broker close contract uses the ORIGINAL POSITION direction, while
+            # UnifiedOrder.side is the actual order side. Callers correctly send
+            # SELL to close a LONG and BUY to close a SHORT, so recover the
+            # position direction here and explicitly mark the action as close.
+            # Without this, BinanceFuturesService flips the side a second time
+            # and targets the opposite hedge leg (-2022 / false "already flat").
+            if order.reduce_only:
+                broker_dir = "SELL" if order.side == OrderSide.BUY else "BUY"
+                broker_action = "close"
+            else:
+                broker_dir = "BUY" if order.side == OrderSide.BUY else "SELL"
+                broker_action = "open"
             sl = order.stop_loss if order.stop_loss and order.stop_loss > 0 else None
             tp = order.take_profit if order.take_profit and order.take_profit > 0 else None
             result = broker.place_order(
                 symbol=order.symbol,
                 direction=broker_dir,
+                action=broker_action,
                 quantity=order.quantity,
                 price=order.price,
                 stop_loss=sl,
@@ -663,7 +698,9 @@ class UnifiedTrading:
                 is_pyramid=order.is_pyramid,
             )
             status = result.get("status", "error")
-            ok = status in ("simulated", "sent", "filled")
+            # already_flat is an idempotent successful close: the exchange has
+            # no matching leg left (usually because SL/TP won the race).
+            ok = status in ("simulated", "sent", "filled", "already_flat")
             message = (
                 result.get("message")
                 or result.get("reason")
@@ -677,6 +714,8 @@ class UnifiedTrading:
                 mode="live",
                 filled_price=result.get("filled_price"),
                 filled_qty=result.get("quantity"),
+                commission=float(result.get("commission") or 0.0),
+                realized_pnl=result.get("realized_pnl"),
             )
         except Exception as e:
             logger.exception("Live order failed")

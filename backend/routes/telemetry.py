@@ -16,13 +16,14 @@ async def write_influx(payload: dict):
     """
     Proxy a line-protocol write to InfluxDB.
 
-    Prefer server env vars when the client omits credentials; fall back to the
-    request body for dashboard-local dev setups.
+    Destination and credentials are server-controlled. Never accept a
+    caller-supplied URL/token: combining an arbitrary destination with the
+    server's fallback token enabled SSRF and credential exfiltration.
     """
-    url = payload.get("url") or os.getenv("INFLUXDB_URL", "")
-    token = payload.get("token") or os.getenv("INFLUXDB_TOKEN", "")
-    org = payload.get("org") or os.getenv("INFLUXDB_ORG", "-")
-    bucket = payload.get("bucket") or os.getenv("INFLUXDB_BUCKET", "trading-memory")
+    url = os.getenv("INFLUXDB_URL", "")
+    token = os.getenv("INFLUXDB_TOKEN", "")
+    org = os.getenv("INFLUXDB_ORG", "-")
+    bucket = os.getenv("INFLUXDB_BUCKET", "trading-memory")
     data = payload.get("data") or {}
 
     if not url or not token:
@@ -49,18 +50,18 @@ async def write_influx(payload: dict):
                 headers={"Authorization": f"Token {token}", "Content-Type": "text/plain"},
             )
         if resp.status_code not in (200, 204):
-            return JSONResponse(status_code=resp.status_code, content={"error": resp.text})
+            return JSONResponse(status_code=502, content={"error": "InfluxDB write failed"})
         return {"status": "ok"}
     except Exception as e:
         logger.error(f"Influx telemetry proxy error: {e}")
-        return JSONResponse(status_code=502, content={"error": str(e)})
+        return JSONResponse(status_code=502, content={"error": "InfluxDB unavailable"})
 
 
 @router.post("/telegram")
 async def send_telegram(payload: dict):
     """Send a trade alert via Telegram Bot API."""
-    token = payload.get("token") or os.getenv("TELEGRAM_BOT_TOKEN", "")
-    chat_id = payload.get("chatId") or os.getenv("TELEGRAM_CHAT_ID", "")
+    token = os.getenv("TELEGRAM_BOT_TOKEN", "")
+    chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
     text = payload.get("text", "")
 
     if not token or not chat_id:
@@ -82,13 +83,13 @@ async def send_telegram(payload: dict):
         return {"status": "ok", "result": body.get("result")}
     except Exception as e:
         logger.error(f"Telegram telemetry proxy error: {e}")
-        return JSONResponse(status_code=502, content={"error": str(e)})
+        return JSONResponse(status_code=502, content={"error": "Telegram unavailable"})
 
 
 @router.post("/n8n")
 async def trigger_n8n(payload: dict):
-    """Forward an event to an n8n webhook URL."""
-    webhook_url = payload.get("webhookUrl") or os.getenv("N8N_WEBHOOK_URL", "")
+    """Forward an event to the server-configured n8n webhook URL."""
+    webhook_url = os.getenv("N8N_WEBHOOK_URL", "")
     event = payload.get("event", "event")
     body = payload.get("payload") or {}
 
@@ -99,8 +100,8 @@ async def trigger_n8n(payload: dict):
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.post(webhook_url, json={"event": event, **body})
         if not resp.is_success:
-            return JSONResponse(status_code=resp.status_code, content={"error": resp.text})
+            return JSONResponse(status_code=502, content={"error": "n8n webhook failed"})
         return {"status": "ok"}
     except Exception as e:
         logger.error(f"n8n telemetry proxy error: {e}")
-        return JSONResponse(status_code=502, content={"error": str(e)})
+        return JSONResponse(status_code=502, content={"error": "n8n unavailable"})

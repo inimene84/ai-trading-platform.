@@ -332,7 +332,11 @@ class SkillMinerService:
         with SessionLocal() as db:
             trades = (
                 db.query(Trade)
-                .filter(sa.and_(Trade.status == "closed"))
+                .filter(sa.and_(
+                    Trade.status == "closed",
+                    Trade.pnl.isnot(None),
+                    Trade.exit_price.isnot(None),
+                ))
                 .order_by(Trade.closed_at.desc())
                 .limit(limit)
                 .all()
@@ -349,7 +353,7 @@ class SkillMinerService:
                 ctx["strategy"] = t.strategy
             out.append(TradeSample(
                 symbol=t.symbol, direction=t.direction or "",
-                pnl=float(t.pnl or 0.0), context=ctx,
+                pnl=float(t.pnl), context=ctx,
             ))
         return out
 

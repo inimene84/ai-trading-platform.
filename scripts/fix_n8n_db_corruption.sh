@@ -62,4 +62,16 @@ docker inspect "$N8N_CONTAINER" --format 'RestartCount: {{.RestartCount}}  Statu
 echo "=== Recent activation failures (should be empty) ==="
 docker logs "$N8N_CONTAINER" --since 20s 2>&1 | grep -i 'did fail with error' || echo "(none)"
 
+BACKUP_KEEP="${N8N_BACKUP_KEEP:-3}"
+echo "=== Pruning repair backups (keep newest $BACKUP_KEEP) ==="
+mapfile -t OLD_BACKUPS < <(
+  ls -1t "$DB_FILE".pre-* 2>/dev/null | awk -v keep="$BACKUP_KEEP" 'NR > keep'
+)
+if ((${#OLD_BACKUPS[@]})); then
+  rm -f -- "${OLD_BACKUPS[@]}"
+  echo "Removed ${#OLD_BACKUPS[@]} old repair backup(s)."
+else
+  echo "(nothing to prune)"
+fi
+
 echo "Done."

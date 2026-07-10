@@ -1270,6 +1270,14 @@ export default function App() {
     }
   };
 
+  useEffect(() => {
+    void fetchBackendPositions();
+    const interval = window.setInterval(() => {
+      void fetchBackendPositions();
+    }, 15_000);
+    return () => window.clearInterval(interval);
+  }, []);
+
   const localActiveTrades: ActiveTrade[] = openPositions.map((pos) => ({
     id: pos.id || String(Date.now()),
     symbol: pos.asset || symbol,
@@ -1325,7 +1333,6 @@ export default function App() {
 
   const handleQuickTrade = async (sym: string, side: 'buy' | 'sell') => {
     const broker = sym.endsWith('=X') ? 'ctrader' : 'binance';
-    const execPrice = parsePrice(price);
     const amount = parseFloat(manualAmount || '0.01');
     showToast(`Executing ${side.toUpperCase()} ${sym}...`, 'info');
     const result = await brokerService.executeTrade(broker, {
@@ -1333,21 +1340,10 @@ export default function App() {
       quantity: amount,
       type: 'market',
       side,
-      price: execPrice,
     });
     if (result.success) {
       showToast(`Trade executed: ${result.orderId}`, 'success');
-      setOpenPositions((prev) => [...prev, {
-        id: result.orderId,
-        asset: sym,
-        type: side === 'buy' ? 'Long' : 'Short',
-        entry: execPrice,
-        mark: execPrice,
-        pnl: 0,
-        roe: 0,
-        isPositive: true,
-        amount,
-      }]);
+      await fetchBackendPositions();
     } else {
       showToast(`Trade failed: ${result.error}`, 'error');
     }
@@ -1557,26 +1553,12 @@ export default function App() {
                       </button>
                     </div>
                     <div className="max-h-96 overflow-y-auto">
-                      {[
-                        { title: 'AI Workflow Executed', desc: 'RSI Reversal trigger fired for BTC/USDT. Order placed.', time: 'Just now', type: 'info' },
-                        { title: 'Risk Limit Warning', desc: 'Daily drawdown limit approaches 80%. Consider pausing agents.', time: '2h ago', type: 'warn' },
-                        { title: 'Deposit Confirmed', desc: 'Successfully deposited 5,000 USDT to Wallet.', time: '5h ago', type: 'success' },
-                        { title: 'API Disconnected', desc: 'Missing Binance API keys. Re-check settings.', time: '1d ago', type: 'error' },
-                      ].map((notif, i) => (
-                        <div key={i} className="p-4 border-b border-zinc-800/50 hover:bg-white/5 transition-colors cursor-pointer flex gap-3">
-                          <div className={cn(
-                            "w-2 h-2 rounded-full mt-1.5 flex-shrink-0",
-                            notif.type === 'info' ? "bg-blue-500" :
-                              notif.type === 'warn' ? "bg-amber-500" :
-                                notif.type === 'success' ? "bg-emerald-500" : "bg-rose-500"
-                          )} />
-                          <div>
-                            <p className="text-sm font-medium text-white">{notif.title}</p>
-                            <p className="text-xs text-zinc-400 mt-1">{notif.desc}</p>
-                            <p className="text-[10px] text-zinc-600 mt-2 font-mono uppercase tracking-widest">{notif.time}</p>
-                          </div>
-                        </div>
-                      ))}
+                      <div className="p-6 text-center">
+                        <p className="text-sm font-medium text-zinc-300">No live notifications</p>
+                        <p className="mt-1 text-xs text-zinc-500">
+                          Operational alerts are delivered through Telegram and Grafana.
+                        </p>
+                      </div>
                     </div>
                   </motion.div>
                 )}
@@ -1720,25 +1702,16 @@ export default function App() {
                             quantity: amount,
                             type: manualOrderType as 'market' | 'limit',
                             side: activeTab as 'buy' | 'sell',
-                            price: execPrice,
+                            price: manualOrderType === 'limit' ? execPrice : undefined,
+                            stopLoss: manualSl ? Number(manualSl) : undefined,
+                            takeProfit: manualTp ? Number(manualTp) : undefined,
                           });
                           if (result.success) {
                             showToast(`Order placed: ${result.orderId}`, 'success');
-                            const cost = amount * execPrice;
-                            setPortfolioBalance((prev) => prev - (activeTab === 'buy' ? cost : -cost));
-                            setOpenPositions((prev) => [...prev, {
-                              id: result.orderId,
-                              asset: selectedSymbol,
-                              type: activeTab === 'buy' ? 'Long' : 'Short',
-                              entry: execPrice,
-                              mark: execPrice,
-                              pnl: 0,
-                              roe: 0,
-                              isPositive: true,
-                              amount,
-                            }]);
+                            await fetchBackendPositions();
+                            const fillPrice = result.filledPrice || execPrice;
                             setRecentTrades((prev) => [{
-                              price: execPrice.toFixed(2),
+                              price: fillPrice.toFixed(2),
                               amount: amount.toFixed(4),
                               time: new Date().toLocaleTimeString(),
                               type: activeTab === 'buy' ? 'bid' : 'ask',

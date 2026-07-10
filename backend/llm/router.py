@@ -134,10 +134,10 @@ def pick_model(task_type: str) -> ModelConfig:
 def get_api_key(config: ModelConfig) -> str:
     """Resolve the API key for a model config from environment variables."""
     if config.api_key_env:
-        key = os.getenv(config.api_key_env, "")
-        if key:
-            return key
-    # Cascade through common key env vars
+        # Never substitute an unrelated provider's token. The old cascade sent
+        # LiteLLM/Kie keys to Anthropic and Gemini, producing repeated 401/400s.
+        return os.getenv(config.api_key_env, "")
+    # Legacy configs without an explicit key name may use the local proxy key.
     # LITELLM_API_KEY is the LiteLLM master key (also used for KieAI proxy)
     return (
         os.getenv("LITELLM_API_KEY", "")
@@ -350,21 +350,22 @@ async def call_llm_resilient(
     
     chain = [
         ("Primary (" + primary_cfg.provider + ")", primary_cfg),
-        ("Fallback 1 (Kie.ai)", _DEFAULT_REGISTRY["fallback_1"]),
+        ("Fallback 1 (OpenRouter)", _DEFAULT_REGISTRY["fallback_1"]),
         ("Fallback 2 (xAI)", ModelConfig(
-            name=os.getenv('XAI_MODEL', 'grok-2-1212'),
+            name=os.getenv('XAI_MODEL', 'grok-4-1-fast-reasoning'),
             provider='xai',
             base_url=os.getenv('XAI_BASE_URL', 'https://api.x.ai/v1'),
             api_key_env='XAI_API_KEY'
         )),
         ("Fallback 3 (Anthropic)", _DEFAULT_REGISTRY["fallback_2"]),
         ("Fallback 4 (Gemini)", _DEFAULT_REGISTRY["fallback_3"]),
-        ("Fallback 5 (Ollama)", ModelConfig(
+    ]
+    if os.getenv("OLLAMA_ENABLED", "false").lower() == "true":
+        chain.append(("Fallback 5 (Ollama)", ModelConfig(
             name=os.getenv('OLLAMA_PRIMARY_MODEL', 'phi3.5'),
             provider='ollama',
             base_url=os.getenv('OLLAMA_BASE_URL', 'http://localhost:11434'),
-        ))
-    ]
+        )))
     
     configs_to_try = []
     seen_providers = set()
@@ -377,6 +378,13 @@ async def call_llm_resilient(
         key = get_api_key(cfg)
         is_configured = True
         if cfg.provider not in ("ollama",) and not key:
+            is_configured = False
+        if key and any(marker in key.lower() for marker in (
+            "changeme", "placeholder", "your_", "xxx",
+        )):
+            is_configured = False
+        if cfg.provider == "anthropic" and key and not key.startswith("sk-ant-"):
+            logger.warning("LLM Router: skipping malformed Anthropic API key")
             is_configured = False
             
         if is_configured and cfg.provider not in seen_providers:

@@ -33,6 +33,23 @@ def is_plausible_exit_price(entry_price, exit_price) -> bool:
     return abs(exit_price - entry_price) / entry_price <= MAX_EXIT_PRICE_DEVIATION
 
 
+def remove_closed_pyramid_layer(pyramid_layers: dict, trade) -> None:
+    """Remove only the closed pyramid layer; never reset sibling history."""
+    layers = pyramid_layers.get(trade.symbol)
+    if not layers:
+        return
+    notes = (getattr(trade, "notes", None) or "").lower()
+    if "pyramid" not in notes:
+        return  # closing a base row must not erase still-open add layers
+    entry = float(getattr(trade, "entry_price", 0) or 0)
+    for index, layer_price in enumerate(layers):
+        if abs(float(layer_price) - entry) <= max(abs(entry), 1.0) * 1e-9:
+            layers.pop(index)
+            break
+    if not layers:
+        pyramid_layers.pop(trade.symbol, None)
+
+
 class EmergencyExitManager:
     """Manages Step 0 pre-sync emergency exit checks."""
 
@@ -92,13 +109,19 @@ class EmergencyExitManager:
                         ))
                         if res.success:
                             trade.exit_price = res.filled_price or live_px
-                            trade.pnl = (pnl_pct / 100) * entry_px * trade.quantity
+                            if res.realized_pnl is not None:
+                                trade.pnl = float(res.realized_pnl) - res.commission
+                            else:
+                                if direction == "BUY":
+                                    gross = (trade.exit_price - entry_px) * trade.quantity
+                                else:
+                                    gross = (entry_px - trade.exit_price) * trade.quantity
+                                trade.pnl = gross - res.commission
                             trade.status = "closed"
                             trade.closed_at = datetime.now(timezone.utc)
                             trade.notes = (trade.notes or "") + f" | EMERGENCY EXIT: PnL={pnl_pct:.1f}%"
                             db.add(trade)
-                            if trade.symbol in pyramid_layers:
-                                del pyramid_layers[trade.symbol]
+                            remove_closed_pyramid_layer(pyramid_layers, trade)
                             sl_cooldown[trade.symbol] = datetime.now(timezone.utc)
                             exits_triggered += 1
                             logger.warning(f"  [EMERGENCY EXIT] {trade.symbol} CLOSED. PnL={pnl_pct:.1f}%")
@@ -109,8 +132,7 @@ class EmergencyExitManager:
                                 trade.closed_at = datetime.now(timezone.utc)
                                 trade.notes = (trade.notes or '') + ' | EMERGENCY-EXIT: already flat on exchange'
                                 db.add(trade)
-                                if trade.symbol in pyramid_layers:
-                                    del pyramid_layers[trade.symbol]
+                                remove_closed_pyramid_layer(pyramid_layers, trade)
                                 sl_cooldown[trade.symbol] = datetime.now(timezone.utc)
                                 exits_triggered += 1
                             else:
@@ -145,6 +167,118 @@ class BrokerPositionSyncService:
             }
 
             db_trades = db.query(Trade).filter(Trade.status.in_(["open", "filled"])).all()
+            # An entirely empty exchange snapshot while SQL still has open
+            # trades is ambiguous: it may mean every position closed, but it
+            # also occurs on permissions/testnet/API degradation. Never flatten
+            # the whole DB and cancel every protective order from one empty
+            # response. A non-empty snapshot can safely reconcile symbols that
+            # are individually absent; an all-empty snapshot requires operator
+            # confirmation or a later explicit reconciliation path.
+            if db_trades and not broker_raw:
+                logger.error(
+                    "Broker returned an empty positions snapshot while DB has "
+                    f"{len(db_trades)} open trade row(s); refusing bulk close/order cancellation"
+                )
+                return 0
+
+            # Adopt exchange legs that have no SQL row (manual entry, lost
+            # response/DB commit, or restored DB). One aggregate row per symbol
+            # gives the loop ownership instead of blocking that symbol forever.
+            db_symbols = {t.symbol for t in db_trades}
+            adopted = 0
+            for bp in broker_raw:
+                symbol = bp.get("symbol")
+                qty = float(bp.get("quantity") or bp.get("positionAmt") or 0)
+                if not symbol or qty <= 0 or symbol in db_symbols:
+                    continue
+                entry = float(bp.get("entry_price") or bp.get("entryPrice") or 0)
+                if entry <= 0:
+                    logger.critical(
+                        f"  [ {symbol} ] orphan exchange leg has no entry price; "
+                        "cannot adopt safely"
+                    )
+                    continue
+                direction = (bp.get("side") or "BUY").upper()
+                if direction == "LONG":
+                    direction = "BUY"
+                elif direction == "SHORT":
+                    direction = "SELL"
+
+                # Recover live protective levels where available.
+                stop_loss = take_profit = None
+                try:
+                    orders = broker.get_open_orders(raise_on_error=True)
+                    close_side = "SELL" if direction == "BUY" else "BUY"
+                    relevant = [
+                        o for o in orders
+                        if o.get("symbol") == symbol and o.get("side") == close_side
+                    ]
+                    sl_levels = [
+                        float(o.get("price") or 0) for o in relevant
+                        if "STOP" in (o.get("type") or "")
+                        and "TAKE_PROFIT" not in (o.get("type") or "")
+                        and float(o.get("price") or 0) > 0
+                    ]
+                    tp_levels = [
+                        float(o.get("price") or 0) for o in relevant
+                        if "TAKE_PROFIT" in (o.get("type") or "")
+                        and float(o.get("price") or 0) > 0
+                    ]
+                    stop_loss = sl_levels[0] if sl_levels else None
+                    take_profit = tp_levels[0] if tp_levels else None
+                except Exception as order_error:
+                    logger.error(
+                        f"  [ {symbol} ] could not inspect orphan protection: {order_error}"
+                    )
+
+                # If the orphan is naked, install conservative fallback
+                # protection before adopting it into normal management.
+                if not stop_loss:
+                    fallback_dist = entry * 0.03
+                    stop_loss = (
+                        entry - fallback_dist
+                        if direction == "BUY"
+                        else entry + fallback_dist
+                    )
+                if not take_profit:
+                    fallback_tp = entry * 0.04
+                    take_profit = (
+                        entry + fallback_tp
+                        if direction == "BUY"
+                        else entry - fallback_tp
+                    )
+                protection = broker.ensure_protective_orders(
+                    symbol, direction, stop_loss, take_profit,
+                )
+                if protection.get("status") == "error":
+                    logger.critical(
+                        f"  [ {symbol} ] orphan adoption refused: protection failed "
+                        f"({protection.get('message')})"
+                    )
+                    continue
+
+                orphan = Trade(
+                    symbol=symbol,
+                    direction=direction,
+                    quantity=qty,
+                    entry_price=entry,
+                    filled_price=entry,
+                    stop_loss=stop_loss,
+                    take_profit=take_profit,
+                    status="filled",
+                    strategy="exchange_reconciliation",
+                    notes="Adopted orphan exchange position into DB",
+                    exchange="binance_futures",
+                )
+                db.add(orphan)
+                db_trades.append(orphan)
+                db_symbols.add(symbol)
+                adopted += 1
+                logger.critical(
+                    f"  [ {symbol} ] adopted orphan exchange leg: "
+                    f"{direction} qty={qty} entry={entry}"
+                )
+
             exit_price_cache: dict = {}
             cancelled_orphans: set = set()
 
@@ -189,18 +323,19 @@ class BrokerPositionSyncService:
                         except Exception as _ce:
                             logger.warning(f"  [ {t.symbol} ] orphan order cleanup failed: {_ce}")
 
-                    if t.symbol in pyramid_layers:
-                        del pyramid_layers[t.symbol]
+                    remove_closed_pyramid_layer(pyramid_layers, t)
                     sl_cooldown[t.symbol] = datetime.now(timezone.utc)
                     updated += 1
 
-            if updated > 0:
+            if updated > 0 or adopted > 0:
                 db.commit()
-                logger.info(f"Synced {updated} closed position(s) from broker.")
+                logger.info(
+                    f"Broker sync: closed={updated}, adopted_orphans={adopted}"
+                )
         except Exception as e:
             db.rollback()
             logger.warning(f"Failed to sync positions with broker: {e}")
-        return updated
+        return updated + adopted
 
 
 class TrailingStopManager:

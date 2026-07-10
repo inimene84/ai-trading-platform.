@@ -24,18 +24,15 @@ class MonitoringService {
   }
 
   private async writeToInflux(data: any) {
-    const url = configService.getSecret('INFLUXDB_URL');
-    const token = configService.getSecret('INFLUXDB_TOKEN');
-    const org = configService.getSecret('INFLUXDB_ORG');
-    const bucket = configService.getSecret('INFLUXDB_BUCKET');
-
-    if (!url || !token || !org || !bucket) return;
-
     try {
+      const adminKey = configService.getSecret('ADMIN_API_KEY');
       const response = await fetch('/api/telemetry/influx', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url, token, org, bucket, data })
+        headers: {
+          'Content-Type': 'application/json',
+          ...(adminKey ? { 'X-API-Key': adminKey } : {}),
+        },
+        body: JSON.stringify({ data })
       });
       if (!response.ok) {
         console.error('Error writing to InfluxDB:', await response.text());
@@ -46,11 +43,6 @@ class MonitoringService {
   }
 
   private async sendTelegramAlert(data: any) {
-    const token = configService.getSecret('TELEGRAM_BOT_TOKEN');
-    const chatId = configService.getSecret('TELEGRAM_CHAT_ID');
-
-    if (!token || !chatId) return;
-
     const emoji = data.success ? '✅' : '❌';
     const text = `${emoji} *Trade ${data.success ? 'Executed' : 'Failed'}*\n\n` +
       `*Symbol:* ${data.symbol}\n` +
@@ -62,10 +54,14 @@ class MonitoringService {
       `*Time:* ${new Date(data.timestamp).toLocaleString()}`;
 
     try {
+      const adminKey = configService.getSecret('ADMIN_API_KEY');
       const response = await fetch('/api/telemetry/telegram', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token, chatId, text })
+        headers: {
+          'Content-Type': 'application/json',
+          ...(adminKey ? { 'X-API-Key': adminKey } : {}),
+        },
+        body: JSON.stringify({ text })
       });
       if (!response.ok) {
         console.error('Telegram alerting failed:', await response.text());

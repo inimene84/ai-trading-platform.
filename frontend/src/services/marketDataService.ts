@@ -15,6 +15,8 @@ class MarketDataService {
   private apiKey: string = '';
   private connectionStatus: 'disconnected' | 'connecting' | 'connected' | 'error' = 'disconnected';
   private statusCallbacks: ((status: string) => void)[] = [];
+  private intentionalDisconnect = false;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
   setApiKey(key: string) {
     this.apiKey = key;
@@ -31,6 +33,7 @@ class MarketDataService {
   }
 
   connect() {
+    this.intentionalDisconnect = false;
     if (this.provider === 'binance') {
       this.connectBinance();
     } else if (this.provider === 'alphavantage') {
@@ -43,6 +46,14 @@ class MarketDataService {
 
     this.connectionStatus = 'connecting';
     this.notifyStatus();
+    // Production VPS is geo-blocked by Binance's public WebSocket. Default to
+    // the same-origin backend REST feed; direct WS is explicit opt-in only.
+    if (import.meta.env.VITE_BINANCE_DIRECT_WS !== 'true') {
+      this._startRestFallback();
+      this.connectionStatus = 'connected';
+      this.notifyStatus();
+      return;
+    }
     this.ws = new WebSocket(`wss://stream.binance.com:9443/stream?streams=${this.symbol}@kline_1m/${this.symbol}@depth10@100ms`);
 
     this.ws.onopen = () => {
@@ -80,7 +91,7 @@ class MarketDataService {
     };
 
     this.ws.onclose = () => {
-      if (this.provider === 'binance') {
+      if (this.provider === 'binance' && !this.intentionalDisconnect) {
         this.ws = null;
         // If the direct WS never connected (geo-block/CORS), fall back to
         // REST polling through the backend proxy instead of hammering reconnect.
@@ -89,12 +100,13 @@ class MarketDataService {
         } else {
           this.connectionStatus = 'connecting';
           this.notifyStatus();
-          setTimeout(() => this.connect(), 3000);
+          this.reconnectTimer = setTimeout(() => this.connect(), 3000);
         }
       }
     };
 
     this.ws.onerror = () => {
+      if (this.intentionalDisconnect) return;
       // stream.binance.com is geo-blocked from some regions; degrade to REST.
       console.warn('Binance WS error — falling back to backend REST polling');
       this.connectionStatus = 'error';
@@ -163,38 +175,29 @@ class MarketDataService {
 
   private async startAlphaVantagePolling() {
     if (this.pollInterval) return;
-    if (!this.apiKey) {
-      console.warn('Alpha Vantage API Key not set');
-      return;
-    }
 
     const fetchQuote = async () => {
       try {
-        // Global Quote for real-time-ish price
-        const response = await fetch(`https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol=${this.symbol.toUpperCase()}&apikey=${this.apiKey}`);
+        // Server-side provider routing keeps API credentials out of the browser.
+        const response = await fetch(
+          `/api/backend/trading/price?symbol=${encodeURIComponent(this.symbol.toUpperCase())}`,
+        );
+        if (!response.ok) throw new Error(`price API ${response.status}`);
         const data = await response.json();
-        const quote = data['Global Quote'];
-        
-        if (quote) {
+        const price = Number(data.price ?? data.current_price ?? data.last);
+        if (Number.isFinite(price) && price > 0) {
+          // This endpoint is a quote, not OHLC history: render an honest flat
+          // snapshot rather than inventing candles or order-book quantities.
           const candle = {
             time: Math.floor(Date.now() / 1000),
-            open: parseFloat(quote['02. open']),
-            high: parseFloat(quote['03. high']),
-            low: parseFloat(quote['04. low']),
-            close: parseFloat(quote['05. price']),
-            volume: parseFloat(quote['06. volume']),
-            isFinal: true
+            open: price,
+            high: price,
+            low: price,
+            close: price,
+            volume: 0,
+            isFinal: true,
           };
           this.klineCallbacks.forEach(cb => cb(candle));
-          
-          // Alpha Vantage doesn't provide a real-time order book in the free tier
-          // We'll simulate a tight spread around the price for the UI
-          const price = candle.close;
-          const depth = {
-            bids: Array.from({ length: 5 }, (_, i) => [price - (i + 1) * 0.01, Math.random() * 100]),
-            asks: Array.from({ length: 5 }, (_, i) => [price + (i + 1) * 0.01, Math.random() * 100])
-          };
-          this.depthCallbacks.forEach(cb => cb(depth));
         }
       } catch (err) {
         console.error('Alpha Vantage polling error:', err);
@@ -245,40 +248,31 @@ class MarketDataService {
         return [{ symbol: query.toUpperCase(), name: 'Binance Symbol', provider: 'binance' }];
       }
     } else if (this.provider === 'alphavantage') {
-      // If no API key is provided, gracefully downgrade and provide standard equity assets
-      if (!this.apiKey) {
-        const topEquities = [
-          { symbol: 'AAPL', name: 'Apple Inc.', type: 'Equity', provider: 'alphavantage' },
-          { symbol: 'MSFT', name: 'Microsoft Corp.', type: 'Equity', provider: 'alphavantage' },
-          { symbol: 'NVDA', name: 'NVIDIA Corp.', type: 'Equity', provider: 'alphavantage' },
-          { symbol: 'TSLA', name: 'Tesla Inc.', type: 'Equity', provider: 'alphavantage' },
-          { symbol: 'AMZN', name: 'Amazon.com Inc.', type: 'Equity', provider: 'alphavantage' },
-          { symbol: 'META', name: 'Meta Platforms Inc.', type: 'Equity', provider: 'alphavantage' },
-          { symbol: 'GOOGL', name: 'Alphabet Inc.', type: 'Equity', provider: 'alphavantage' }
-        ];
-        return topEquities.filter(s => s.symbol.includes(query.toUpperCase()) || s.name.toUpperCase().includes(query.toUpperCase()));
-      }
-      
-      try {
-        const response = await fetch(`https://www.alphavantage.co/query?function=SYMBOL_SEARCH&keywords=${query}&apikey=${this.apiKey}`);
-        const data = await response.json();
-        const matches = data['bestMatches'] || [];
-        return matches.map((m: any) => ({
-          symbol: m['1. symbol'],
-          name: m['2. name'],
-          type: m['3. type'],
-          region: m['4. region'],
-          provider: 'alphavantage'
-        }));
-      } catch (err) {
-        console.error('Alpha Vantage search error:', err);
-        return [{ symbol: query.toUpperCase(), name: 'Custom Equity Asset', provider: 'alphavantage' }];
-      }
+      // Never expose a provider API key in browser query strings. Discovery is
+      // local; server-side APIs provide actual prices.
+      const topEquities = [
+        { symbol: 'AAPL', name: 'Apple Inc.', type: 'Equity', provider: 'alphavantage' },
+        { symbol: 'MSFT', name: 'Microsoft Corp.', type: 'Equity', provider: 'alphavantage' },
+        { symbol: 'NVDA', name: 'NVIDIA Corp.', type: 'Equity', provider: 'alphavantage' },
+        { symbol: 'TSLA', name: 'Tesla Inc.', type: 'Equity', provider: 'alphavantage' },
+        { symbol: 'AMZN', name: 'Amazon.com Inc.', type: 'Equity', provider: 'alphavantage' },
+        { symbol: 'META', name: 'Meta Platforms Inc.', type: 'Equity', provider: 'alphavantage' },
+        { symbol: 'GOOGL', name: 'Alphabet Inc.', type: 'Equity', provider: 'alphavantage' },
+      ];
+      return topEquities.filter(
+        s => s.symbol.includes(query.toUpperCase())
+          || s.name.toUpperCase().includes(query.toUpperCase()),
+      );
     }
     return [];
   }
 
   disconnect() {
+    this.intentionalDisconnect = true;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
     if (this.ws) {
       this.ws.close();
       this.ws = null;

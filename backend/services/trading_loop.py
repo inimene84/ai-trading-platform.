@@ -21,6 +21,7 @@ from backend.services.binance_market_data import binance_market_data
 from backend.strategies.market_regime import MarketRegimeDetector
 from backend.services.unified_trading import UnifiedTrading, UnifiedOrder, OrderSide, OrderType
 from backend.services.position_manager import get_position_manager
+from backend.services.sentry_state import get_trading_status, is_trading_allowed
 from backend.services.trading_loop_helpers import (
     EmergencyExitManager,
     BrokerPositionSyncService,
@@ -28,6 +29,7 @@ from backend.services.trading_loop_helpers import (
     PartialTPManager,
     ExchangeProtectionManager,
     PerformanceMetricsWriter,
+    remove_closed_pyramid_layer,
 )
 
 load_dotenv()
@@ -154,6 +156,8 @@ class TradingLoopService:
             "cash": float(balance_info.get("available", balance_info.get("balance", 0.0))),
             "equity": float(balance_info.get("equity", balance_info.get("balance", 0.0))),
             "margin_used": float(balance_info.get("margin_used", 0.0)),
+            "trading_allowed": is_trading_allowed(),
+            "trading_status": get_trading_status().value,
         }
 
     async def start(
@@ -321,6 +325,21 @@ class TradingLoopService:
 
     async def _run_cycle(self):
         """Execute one trading cycle across all symbols in parallel."""
+        if not is_trading_allowed():
+            sentry_status = get_trading_status().value
+            logger.warning(
+                f"[SENTRY] Trading halted ({sentry_status}) — skipping cycle"
+            )
+            self._state = "halted"
+            return {
+                "signals": 0,
+                "trades": 0,
+                "sentry_halted": True,
+                "trading_status": sentry_status,
+            }
+        if self._state == "halted":
+            self._state = "running"
+
         # 0. Refresh RiskConfig from environment variables / .env
         from backend.services.risk_config import refresh_risk_config
         self.risk_config = refresh_risk_config()
@@ -383,6 +402,7 @@ class TradingLoopService:
         # ─────────────────────────────────────────────────────────────────────
 
         # ── C8: ACCOUNT-LEVEL KILL SWITCH ──────────────────────────────────
+        kill_switch_verified = True
         try:
             _acct = binance_futures_broker._get_client().futures_account()
             _kill_floor = self.risk_config.kill_floor_usdt
@@ -390,8 +410,9 @@ class TradingLoopService:
             # response — treat as "unknown" and skip rather than reading 0 and
             # either false-triggering or (worse) silently bypassing.
             if _acct is None or 'totalMarginBalance' not in _acct:
-                logger.warning(
-                    "[KILL SWITCH] Skipped: futures_account() returned no totalMarginBalance field"
+                kill_switch_verified = False
+                logger.error(
+                    "[KILL SWITCH] Equity unavailable; new entries will be blocked"
                 )
             else:
                 _equity = float(_acct.get('totalMarginBalance') or 0.0)
@@ -416,7 +437,10 @@ class TradingLoopService:
                     self._error = "KILL_SWITCH_TRIGGERED"
                     return {"signals": 0, "trades": 0, "kill_switch": True}
         except Exception as _ks_e:
-            logger.warning(f"[KILL SWITCH] Check skipped: {_ks_e}")
+            kill_switch_verified = False
+            logger.error(
+                f"[KILL SWITCH] Equity check failed; new entries will be blocked: {_ks_e}"
+            )
         # ─────────────────────────────────────────────────────────────────────
 
         # ── STEP 0: Emergency Position Manager BEFORE broker sync ──────────
@@ -464,11 +488,16 @@ class TradingLoopService:
 
         # ── P0 margin gates: decide ONCE per cycle whether new entries are
         # affordable, instead of letting every symbol fail at the broker.
-        self._entries_blocked = False
-        self._entries_blocked_reason = ""
+        self._entries_blocked = not kill_switch_verified
+        self._entries_blocked_reason = (
+            "kill-switch equity could not be verified"
+            if not kill_switch_verified else ""
+        )
         _min_avail = self.risk_config.min_available_margin_usdt
         _wallet_cap = self.risk_config.pyramid_max_wallet_pct
-        if self._cycle_available < _min_avail:
+        if not kill_switch_verified:
+            pass  # preserve the fail-closed reason above
+        elif self._cycle_available < _min_avail:
             self._entries_blocked = True
             self._entries_blocked_reason = (
                 f"available margin ${self._cycle_available:.2f} < floor ${_min_avail:.2f}"
@@ -573,16 +602,20 @@ class TradingLoopService:
                             ))
                             if res.success:
                                 trade.exit_price = res.filled_price or curr_price
-                                if trade.direction == "BUY":
-                                    trade.pnl = (curr_price - trade.entry_price) * trade.quantity
+                                if res.realized_pnl is not None:
+                                    trade.pnl = float(res.realized_pnl) - res.commission
                                 else:
-                                    trade.pnl = (trade.entry_price - curr_price) * trade.quantity
+                                    if trade.direction == "BUY":
+                                        gross = (trade.exit_price - trade.entry_price) * trade.quantity
+                                    else:
+                                        gross = (trade.entry_price - trade.exit_price) * trade.quantity
+                                    trade.pnl = gross - res.commission
                                 trade.status = "closed"
                                 trade.closed_at = datetime.now(timezone.utc)
                                 trade.notes = (trade.notes or "") + f" | AI EXIT: {exit_opinion.reasoning[:120]}"
                                 db_check.add(trade)
-                                if self._pyramid_mode and trade.symbol in self._pyramid_layers:
-                                    del self._pyramid_layers[trade.symbol]
+                                if self._pyramid_mode:
+                                    remove_closed_pyramid_layer(self._pyramid_layers, trade)
                                 _exits_triggered += 1
                                 logger.info(f"  -> {trade.symbol} CLOSED via Position Manager. PnL={trade.pnl:+.2f}")
                             else:
@@ -593,13 +626,13 @@ class TradingLoopService:
                                     trade.closed_at = datetime.now(timezone.utc)
                                     trade.notes = (trade.notes or '') + ' | AI-EXIT: already flat on exchange'
                                     db_check.add(trade)
-                                    if self._pyramid_mode and trade.symbol in self._pyramid_layers:
-                                        del self._pyramid_layers[trade.symbol]
+                                    if self._pyramid_mode:
+                                        remove_closed_pyramid_layer(self._pyramid_layers, trade)
                                     _exits_triggered += 1
                                 else:
                                     logger.error(f"  -> FAILED to close {trade.symbol}: {res.message}")
-                                trade.notes = (trade.notes or "") + f" | AI EXIT FAILED: {res.message}"
-                                db_check.add(trade)
+                                    trade.notes = (trade.notes or "") + f" | AI EXIT FAILED: {res.message}"
+                                    db_check.add(trade)
                     except Exception as e:
                         logger.error(f"  Position review error for {trade.symbol}: {e}")
                 if _exits_triggered > 0:
@@ -619,12 +652,9 @@ class TradingLoopService:
         # Skip symbol evaluation if available balance is below minimum layer cost ($5)
         # to avoid API cost, LLM/Kronos latency, and log/DB spam.
         # Uses the cached _cycle_balance from above (no redundant API call).
-        margin_sufficient = True
-
         if self._cycle_available < 5.0:
             logger.warning(f"[MARGIN GATE] Insufficient available balance (${self._cycle_available:.2f} < $5.00). Skipping symbol evaluation.")
-            margin_sufficient = False
-            
+
             # Write a single ACCOUNT-level signal to DB
             db_sig = SessionLocal()
             try:
@@ -643,21 +673,20 @@ class TradingLoopService:
             finally:
                 db_sig.close()
 
-        results = []
-        if margin_sufficient:
-            # ── SYMBOL-QUALITY GATE: drop blacklisted + illiquid symbols ──
-            # Kills the realized-PnL loss tail caused by low-liquidity / new-listing
-            # symbols (SIREN, AIGENSYN, MAGMA, SPK ...) before any analysis runs.
-            tradeable = await self._filter_tradeable_symbols(self._symbols)
-
-            # Run all symbols in parallel
-            tasks = [
-                self._process_symbol(
-                    symbol, min_confidence, ai_threshold, max_positions
-                )
-                for symbol in tradeable
-            ]
-            results = await asyncio.gather(*tasks, return_exceptions=True)
+        # Always process symbols, even when entries are margin-blocked. The
+        # per-symbol path sees `_entries_blocked` and skips strategy/entry work,
+        # but still runs exchange protection restore and trailing maintenance.
+        # Previously a transient balance failure (available=0) skipped every
+        # symbol task and suspended protection maintenance for the full cycle.
+        # ── SYMBOL-QUALITY GATE: drop blacklisted + illiquid symbols ──
+        tradeable = await self._filter_tradeable_symbols(self._symbols)
+        tasks = [
+            self._process_symbol(
+                symbol, min_confidence, ai_threshold, max_positions
+            )
+            for symbol in tradeable
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
 
         _signals_generated = 0
         _trades_executed = 0
@@ -750,6 +779,8 @@ class TradingLoopService:
         db = SessionLocal()
         _signals = 0
         _trades = 0
+        reserved_open_slot = False
+        open_slot_committed = False
 
         try:
             # 1. Fetch existing position (DB + live exchange — hedge mode can drift)
@@ -906,6 +937,11 @@ class TradingLoopService:
                         signal_status = "rejected"
                         signal_reason = f"{signal_reason} | SHORT exposure cap reached"
                         decision = None
+                    elif decision.action == "SELL" and getattr(self, "_cycle_equity", 0.0) > 0 and (_short_notional + _new_notional > self._cycle_equity * 0.8):
+                        logger.warning(f"  [ {symbol} ] SELL blocked: 80% Portfolio SHORT Correlation limit reached")
+                        signal_status = "rejected"
+                        signal_reason = f"{signal_reason} | 80% SHORT correlation cap reached"
+                        decision = None
                     else:
                         signal_status = "approved"
 
@@ -949,6 +985,7 @@ class TradingLoopService:
                         )
                         if order_result.success and not existing:
                             self._open_count += 1
+                            reserved_open_slot = True
                 if decision and order_result and order_result.success:
                     _trades = 1
                     filled_px = float(order_result.filled_price or decision.entry_price)
@@ -970,6 +1007,7 @@ class TradingLoopService:
                     )
                     db.add(trade)
                     db.commit()
+                    open_slot_committed = True
 
                     # Write to InfluxDB for Grafana dashboards
                     try:
@@ -1046,6 +1084,9 @@ class TradingLoopService:
         except Exception as e:
             logger.error(f"Error processing {symbol}: {e}")
             db.rollback()
+            if reserved_open_slot and not open_slot_committed:
+                # Undo the in-cycle reservation if SQL persistence failed.
+                self._open_count = max(0, self._open_count - 1)
             return {"signals": 0, "trades": 0}
         finally:
             db.close()
@@ -1066,7 +1107,8 @@ class TradingLoopService:
             open_trades = db.query(Trade).filter(Trade.status.in_(["open", "filled"])).all()
             
             # Get balance - use paper portfolio if in paper mode, otherwise live broker
-            paper_mode = os.getenv("PAPER_TRADING", "false").lower() == "true"
+            from backend.services.trading_mode import TradingMode, get_trading_mode
+            paper_mode = get_trading_mode() == TradingMode.PAPER
             
             if paper_mode:
                 # Get balance from paper portfolio
@@ -1100,19 +1142,21 @@ class TradingLoopService:
             )
 
             # Save snapshot
+            distinct_open_symbols = len({t.symbol for t in open_trades})
             snapshot = PortfolioSnapshot(
                 total_value=real_equity,
                 cash=real_cash,
                 positions_value=round(positions_val, 4),
                 total_pnl=round(float(realized_pnl), 4),
-                open_positions=len(open_trades),
+                open_positions=distinct_open_symbols,
                 cycle_number=self._cycle_count,
             )
             db.add(snapshot)
             db.commit()
             
             logger.info(
-                f"  Portfolio: cash=${real_cash:,.2f}, equity=${real_equity:,.2f}, open_pos={len(open_trades)}"
+                f"  Portfolio: cash=${real_cash:,.2f}, equity=${real_equity:,.2f}, "
+                f"open_symbols={distinct_open_symbols}"
             )
         except Exception as e:
             logger.warning(f"Failed to save portfolio snapshot: {e}")
@@ -1186,11 +1230,6 @@ class TradingLoopService:
                     trade.notes = (trade.notes or "") + " | TP hit (short)"
 
             if hit:
-                if trade.direction == "BUY":
-                    pnl = (current_price - trade.entry_price) * trade.quantity
-                else:
-                    pnl = (trade.entry_price - current_price) * trade.quantity
-
                 # Send close order via UnifiedTrading BEFORE updating DB
                 ut = UnifiedTrading()
                 close_side = OrderSide.SELL if trade.direction == "BUY" else OrderSide.BUY
@@ -1204,14 +1243,21 @@ class TradingLoopService:
 
                 if res.success:
                     trade.exit_price = res.filled_price or current_price
+                    if res.realized_pnl is not None:
+                        pnl = float(res.realized_pnl) - res.commission
+                    else:
+                        if trade.direction == "BUY":
+                            gross = (trade.exit_price - trade.entry_price) * trade.quantity
+                        else:
+                            gross = (trade.entry_price - trade.exit_price) * trade.quantity
+                        pnl = gross - res.commission
                     trade.pnl = pnl
                     trade.status = "closed"
                     trade.closed_at = datetime.now(timezone.utc)
                     trade.notes = (trade.notes or "") + f" | Closed via SL/TP ({res.mode})"
                     self._high_water.pop(trade.id, None)
-                    if self._pyramid_mode and trade.symbol in self._pyramid_layers:
-                        del self._pyramid_layers[trade.symbol]
-                        logger.info(f"  [ {trade.symbol} ] Pyramid layers cleared (SL/TP hit)")
+                    if self._pyramid_mode:
+                        remove_closed_pyramid_layer(self._pyramid_layers, trade)
                     logger.info(
                         f"  -> {symbol} position closed (SL/TP), PnL={pnl:+.2f}"
                     )
@@ -1222,8 +1268,8 @@ class TradingLoopService:
                         trade.status = 'closed'
                         trade.closed_at = datetime.now(timezone.utc)
                         trade.notes = (trade.notes or '') + ' | SL/TP: already flat on exchange'
-                        if self._pyramid_mode and trade.symbol in self._pyramid_layers:
-                            del self._pyramid_layers[trade.symbol]
+                        if self._pyramid_mode:
+                            remove_closed_pyramid_layer(self._pyramid_layers, trade)
                     else:
                         logger.error(f"  -> Failed to close {symbol} via SL/TP: {res.message}")
                     trade.notes = (trade.notes or "") + f" | SL/TP close FAILED: {res.message}"

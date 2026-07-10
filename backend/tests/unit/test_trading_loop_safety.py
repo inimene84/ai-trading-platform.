@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from backend.services.trading_loop import TradingLoopService
+from backend.services.trading_loop_helpers import remove_closed_pyramid_layer
 
 
 def _trade(symbol, trade_id, entry_price, notes=None):
@@ -34,6 +35,22 @@ def test_pyramid_prices_single_base_not_counted():
     trades = [_trade("ETHUSDT", 5, 3000.0, notes=None)]
     layers = TradingLoopService._pyramid_prices_from_trades(trades)
     assert layers == {}
+
+
+def test_closing_one_pyramid_row_removes_only_that_layer():
+    layers = {"ETHUSDT": [101.0, 102.0, 103.0]}
+    closed = _trade(
+        "ETHUSDT", 2, 102.0, notes="pyramid_layer_2",
+    )
+    remove_closed_pyramid_layer(layers, closed)
+    assert layers == {"ETHUSDT": [101.0, 103.0]}
+
+
+def test_closing_base_row_does_not_clear_pyramid_history():
+    layers = {"ETHUSDT": [101.0, 102.0]}
+    base = _trade("ETHUSDT", 1, 100.0, notes=None)
+    remove_closed_pyramid_layer(layers, base)
+    assert layers == {"ETHUSDT": [101.0, 102.0]}
 
 
 def test_status_uses_broker_balance():

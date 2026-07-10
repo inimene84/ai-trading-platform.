@@ -47,7 +47,10 @@ def _db_with(trades):
 
 def _broker(exit_price):
     broker = MagicMock()
-    broker.get_positions.return_value = []  # position gone from exchange
+    # Non-empty, authoritative snapshot where the tested symbol is absent.
+    broker.get_positions.return_value = [
+        {"symbol": "OTHERUSDT", "quantity": 1.0},
+    ]
     broker.get_exit_price.return_value = exit_price
     return broker
 
@@ -95,3 +98,49 @@ async def test_sync_handles_missing_exit_price():
     assert trade.status == "closed"
     assert trade.pnl is None
     assert "unavailable" in trade.notes or "implausible" in trade.notes
+
+
+@pytest.mark.asyncio
+async def test_sync_refuses_bulk_close_on_empty_exchange_snapshot():
+    """One degraded [] response must not flatten DB and cancel all protection."""
+    trade = _trade()
+    db = _db_with([trade])
+    broker = _broker(exit_price=0.074)
+    broker.get_positions.return_value = []
+
+    updated = await BrokerPositionSyncService.sync_positions(db, broker, {}, {})
+
+    assert updated == 0
+    assert trade.status == "open"
+    assert trade.closed_at is None
+    broker.get_exit_price.assert_not_called()
+    broker.cancel_all_orders.assert_not_called()
+    db.commit.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_sync_adopts_and_protects_orphan_exchange_leg():
+    db = _db_with([])
+    broker = MagicMock()
+    broker.get_positions.return_value = [{
+        "symbol": "ETHUSDT",
+        "side": "BUY",
+        "quantity": 0.1,
+        "entry_price": 100.0,
+    }]
+    broker.get_open_orders.return_value = []
+    broker.ensure_protective_orders.return_value = {"status": "restored"}
+
+    updated = await BrokerPositionSyncService.sync_positions(db, broker, {}, {})
+
+    assert updated == 1
+    adopted = db.add.call_args.args[0]
+    assert adopted.symbol == "ETHUSDT"
+    assert adopted.status == "filled"
+    assert adopted.strategy == "exchange_reconciliation"
+    assert adopted.stop_loss == pytest.approx(97.0)
+    assert adopted.take_profit == pytest.approx(104.0)
+    broker.ensure_protective_orders.assert_called_once_with(
+        "ETHUSDT", "BUY", pytest.approx(97.0), pytest.approx(104.0),
+    )
+    db.commit.assert_called_once()

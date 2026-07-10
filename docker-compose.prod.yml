@@ -23,7 +23,7 @@ services:
       GEMINI_API_KEY: ${GOOGLE_API_KEY}
       PERSONA_LLM_PROVIDER: ${PERSONA_LLM_PROVIDER:-kie}
       PERSONA_LLM_MODEL: ${PERSONA_LLM_MODEL:-claude-sonnet-4-6}
-      GROQ_API_KEY: sk-1234 # LiteLLM master key
+      GROQ_API_KEY: ${LITELLM_API_KEY:?LITELLM_API_KEY must be set}
       PERSONA_LLM_BASE_URL: ${PERSONA_LLM_BASE_URL:-https://api.kie.ai/v1}
       KIE_MODEL: claude-sonnet-4-6
       KIE_OPUS_MODEL: ${KIE_OPUS_MODEL:-claude-opus-4-6}
@@ -78,10 +78,11 @@ services:
     volumes:
       - app-data:/app/data
       - app-logs:/app/logs
+      - ./.env:/app/.env
     networks:
       - trading-net
     ports:
-      - "8001:8000"
+      - "127.0.0.1:8001:8000"
   litellm:
     image: ghcr.io/berriai/litellm:main-latest
     container_name: ai-trading-litellm
@@ -93,7 +94,7 @@ services:
       KIE_API_KEY: ${KIE_API_KEY:-}
       KIE_BEARER_TOKEN: "Bearer ${KIE_API_KEY:-}"
       LITELLM_MODEL_FALLBACK: true
-      LITELLM_MASTER_KEY: ${LITELLM_API_KEY:-sk-1234}
+      LITELLM_MASTER_KEY: ${LITELLM_API_KEY:?LITELLM_API_KEY must be set}
     command: --config /tmp/litellm-config.yaml --port 4000
     logging:
       driver: json-file
@@ -102,7 +103,7 @@ services:
         max-file: 5
     restart: unless-stopped
     ports:
-      - 4001:4000
+      - "127.0.0.1:4001:4000"
     volumes:
       - ./litellm-config.yaml:/tmp/litellm-config.yaml:ro
     networks:
@@ -141,7 +142,9 @@ services:
     container_name: vps-qdrant
     restart: unless-stopped
     ports:
-      - "6333:6333"
+      - "127.0.0.1:6333:6333"
+    environment:
+      QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY:?QDRANT_API_KEY must be set}
     volumes:
       - ./qdrant-storage:/qdrant/storage
     networks:
@@ -151,7 +154,7 @@ services:
     container_name: vps-influxdb
     restart: unless-stopped
     ports:
-      - "8086:8086"
+      - "127.0.0.1:8086:8086"
     volumes:
       # Reuse Hostinger stack volume with historical trading metrics
       - influxdb-2-ksyg_influxdb2-data:/var/lib/influxdb2
@@ -180,13 +183,14 @@ services:
     container_name: ai-trading-mcp
     restart: unless-stopped
     ports:
-      - "9100:9100"
+      - "127.0.0.1:9100:9100"
     environment:
       - BACKEND_BASE_URL=http://ai-trading-backend:8000
       - BACKEND_API_PREFIX=/api
       - MCP_TRANSPORT=http
       - MCP_HOST=0.0.0.0
       - MCP_PORT=9100
+      - MCP_API_TOKEN=${ADMIN_API_KEY:?ADMIN_API_KEY must be set}
     networks:
       - trading-net
     depends_on:

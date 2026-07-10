@@ -5,7 +5,9 @@ class RiskConfig(BaseSettings):
     """Centralized risk and trading configuration."""
     
     # Position management
-    emergency_drawdown_pct: float = -15.0
+    # 10x isolated liquidation is roughly a -9.5% underlying move; the
+    # catastrophe backstop must trigger before liquidation, not after it.
+    emergency_drawdown_pct: float = -8.0
     max_position_hold_hours: float = 72.0
     exit_opinion_threshold: float = 0.65
     min_position_hold_min: int = 20
@@ -168,7 +170,10 @@ class RiskConfig(BaseSettings):
     # When enabled, the per-cycle software ratchet is skipped to avoid two
     # competing trail mechanisms; the hard STOP_MARKET stays as a catastrophe floor.
     native_trailing_enabled: bool = PydanticField(
-        default=True,
+        # Disabled by default: a quantity-based native trail placed per pyramid
+        # layer creates duplicate partial-coverage orders. The software ATR
+        # trail now safely replaces the full closePosition STOP_MARKET.
+        default=False,
         validation_alias=AliasChoices("native_trailing_enabled", "NATIVE_TRAILING_ENABLED"),
     )
     # Binance callbackRate: trail distance as a percent of price (0.1–5.0).

@@ -7,6 +7,8 @@ import asyncio
 import logging
 import os
 
+from backend.services.trading_mode import TradingMode, get_trading_mode
+
 logger = logging.getLogger(__name__)
 
 _task = None
@@ -65,7 +67,7 @@ async def _poll_loop():
 
 async def _write_wallet_and_positions(svc, influx):
     """Fetch wallet + positions from Binance (or paper portfolio) and write to InfluxDB."""
-    paper_mode = os.getenv("PAPER_TRADING", "false").lower() == "true"
+    paper_mode = get_trading_mode() == TradingMode.PAPER
     
     if paper_mode:
         # Paper trading mode: read from paper portfolio

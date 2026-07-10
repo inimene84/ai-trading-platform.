@@ -16,19 +16,11 @@
  * request against api.binance.com.
  */
 
-const LOCAL_STORAGE_KEY = 'quantum_trade_settings';
 let directAccessBlocked = false;
 let directAccessProbe: Promise<void> | null = null;
 
 function getBackendBase(): string {
-  try {
-    const stored = localStorage.getItem(LOCAL_STORAGE_KEY);
-    if (stored) {
-      const settings = JSON.parse(stored);
-      if (settings.BACKEND_URL) return settings.BACKEND_URL.replace(/\/+$/, '');
-    }
-  } catch { /* ignore */ }
-  return '/api/backend';
+  return (import.meta.env.VITE_BACKEND_URL || '/api/backend').replace(/\/+$/, '');
 }
 
 function toProxyUrl(url: string): string | null {
