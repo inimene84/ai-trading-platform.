@@ -73,20 +73,9 @@ export const MarketsView = () => {
         setCoins(data);
       }
     } catch (err) {
-      console.warn(`Failed to fetch ${activeTab} prices, using fallback:`, err);
-      if (activeTab === 'crypto') {
-        // Fallback data
-        setCoins([
-          { symbol: 'BTCUSDT', baseAsset: 'BTC', quoteAsset: 'USDT', price: '64,250.40', change: '+2.45%', volume: '$32.4B', up: true },
-          { symbol: 'ETHUSDT', baseAsset: 'ETH', quoteAsset: 'USDT', price: '3,402.30', change: '+1.12%', volume: '$14.2B', up: true },
-          { symbol: 'SOLUSDT', baseAsset: 'SOL', quoteAsset: 'USDT', price: '142.50', change: '-3.20%', volume: '$4.1B', up: false },
-          { symbol: 'BNBUSDT', baseAsset: 'BNB', quoteAsset: 'USDT', price: '590.10', change: '+0.85%', volume: '$1.6B', up: true },
-          { symbol: 'XRPUSDT', baseAsset: 'XRP', quoteAsset: 'USDT', price: '0.58', change: '+0.45%', volume: '$1.2B', up: true },
-          { symbol: 'ADAUSDT', baseAsset: 'ADA', quoteAsset: 'USDT', price: '0.44', change: '-1.23%', volume: '$400M', up: false },
-        ]);
-      } else {
-        setCoins([]);
-      }
+      console.warn(`Failed to fetch ${activeTab} prices:`, err);
+      setCoins([]);
+      showToast(`${activeTab} market data unavailable`, 'error');
     } finally {
       setLoading(false);
     }

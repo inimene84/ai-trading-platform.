@@ -14,14 +14,15 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = Number(process.env.FRONTEND_PORT || process.env.PORT || 5173);
+const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:8000';
 
 app.use(cors());
 app.use(express.json());
 
 // --- PostgreSQL Setup (OPTIONAL) ---
 // The platform runs on SQLite in the backend by default; PostgreSQL here is an
-// OPTIONAL store for historical backtest candles. If no DB is configured we skip
-// it entirely and serve generated mock data — this is expected, not an error.
+// OPTIONAL store for historical backtest candles. If no DB is configured or
+// empty, requests fall through to the FastAPI historical-data provider.
 const { Pool } = pg;
 const PG_CONFIGURED = Boolean(process.env.DATABASE_URL || process.env.POSTGRES_HOST);
 let pool: InstanceType<typeof Pool> | null = null;
@@ -33,19 +34,19 @@ if (PG_CONFIGURED) {
 
   // Guard: an idle-client error must NOT crash the process.
   pool.on('error', (err) => {
-    console.warn('PostgreSQL pool error (backtest store unavailable, using mock data):', err.message);
+    console.warn('PostgreSQL pool error (backtest store unavailable):', err.message);
   });
 
   // Test DB connection
   pool.query('SELECT NOW()', (err) => {
     if (err) {
-      console.warn('PostgreSQL configured but unreachable. Using mock data for backtesting.', err.message);
+      console.warn('PostgreSQL configured but unreachable; using FastAPI historical provider.', err.message);
     } else {
       console.log('PostgreSQL connected successfully.');
     }
   });
 } else {
-  console.log('PostgreSQL not configured (no DATABASE_URL/POSTGRES_HOST). Serving mock backtest data — this is expected.');
+  console.log('PostgreSQL not configured; using FastAPI historical provider.');
 }
 
 // --- API Routes ---
@@ -70,122 +71,54 @@ app.get('/api/historical', async (req, res) => {
     console.error('DB fetch error, falling back to mock:', err);
   }
 
-  // Mock historical data if DB fails or is empty
-  const mockData = [];
-  let price = symbol.toString().includes('USD') ? 60000 : 1.10;
-  if (symbol.toString().includes('ETH')) price = 3000;
-  if (symbol.toString().includes('SOL')) price = 150;
-  
-  const now = Math.floor(Date.now() / 1000);
-  let step = 60; // 1 min default
-  if (interval === '1h') step = 3600;
-  if (interval === '4h') step = 14400;
-  if (interval === '1d') step = 86400;
-
-  // Simple volatility based on price
-  const volatility = price * 0.002;
-
-  for (let i = 0; i < Number(limit); i++) {
-    const change = (Math.random() - 0.5) * volatility;
-    const open = price;
-    const close = price + change;
-    const high = Math.max(open, close) + Math.random() * (volatility * 0.5);
-    const low = Math.min(open, close) - Math.random() * (volatility * 0.5);
-    
-    mockData.push({
-      time: now - (Number(limit) - i) * step,
-      open,
-      high,
-      low,
-      close,
-      volume: Math.random() * 1000
+  // Never present random candles as historical market data. Fall back to the
+  // FastAPI market-data implementation; if that is unavailable, fail clearly.
+  try {
+    const params = new URLSearchParams({
+      symbol: String(symbol || ''),
+      interval: String(interval || '1h'),
+      limit: String(limit),
     });
-    price = close;
-  }
-  
-  res.json(mockData);
-});
-
-import { InfluxDB, Point } from '@influxdata/influxdb-client';
-
-app.post('/api/telemetry/influx', async (req, res) => {
-  const { url, token, org, bucket, data } = req.body;
-  if (!url || !token || !org || !bucket) return res.status(400).json({ error: 'Missing config' });
-  
-  try {
-    const influxClient = new InfluxDB({ url, token });
-    const writeApi = influxClient.getWriteApi(org, bucket, 'ms');
-    
-    const point = new Point('trades')
-      .tag('symbol', data.symbol)
-      .tag('side', data.side)
-      .tag('broker', data.broker)
-      .tag('status', data.success ? 'success' : 'failure')
-      .floatField('price', data.price)
-      .floatField('quantity', data.quantity)
-      .stringField('orderId', data.orderId)
-      .timestamp(data.timestamp);
-    
-    writeApi.writePoint(point);
-    await writeApi.close();
-    res.json({ success: true });
-  } catch (error) {
-    console.error('Influx server proxy error:', error);
-    res.status(500).json({ error: 'Failed to write to InfluxDB' });
+    const backendRes = await fetch(`${BACKEND_URL}/api/historical?${params}`);
+    const body = await backendRes.text();
+    res.status(backendRes.status).set(
+      'Content-Type', backendRes.headers.get('content-type') || 'application/json',
+    );
+    res.send(body);
+  } catch (error: any) {
+    res.status(503).json({
+      error: 'Historical market data unavailable',
+      detail: error.message,
+    });
   }
 });
 
-app.post('/api/telemetry/telegram', async (req, res) => {
-  const { token, chatId, text } = req.body;
-  if (!token || !chatId || !text) return res.status(400).json({ error: 'Missing config' });
-  
+async function proxyTelemetry(req: express.Request, res: express.Response, path: string) {
   try {
-    const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    const apiKey = req.headers['x-api-key'];
+    const authorization = req.headers.authorization;
+    if (typeof apiKey === 'string') headers['X-API-Key'] = apiKey;
+    if (authorization) headers.Authorization = authorization;
+    const response = await fetch(`${BACKEND_URL}/api/telemetry/${path}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        chat_id: chatId,
-        text,
-        parse_mode: 'Markdown'
-      })
+      headers,
+      body: JSON.stringify(req.body),
     });
-    if (!response.ok) {
-      const errText = await response.text();
-      return res.status(response.status).json({ error: errText });
-    }
-    const result = await response.json();
-    res.json(result);
-  } catch (error) {
-    console.error('Telegram server proxy error:', error);
-    res.status(500).json({ error: 'Failed to send Telegram alert' });
+    res.status(response.status).set(
+      'Content-Type', response.headers.get('content-type') || 'application/json',
+    );
+    res.send(await response.text());
+  } catch (error: any) {
+    console.error(`Telemetry proxy error (${path}):`, error.message);
+    res.status(502).json({ error: 'Telemetry backend unavailable' });
   }
-});
+}
 
-app.post('/api/telemetry/n8n', async (req, res) => {
-  const { webhookUrl, event, payload } = req.body;
-  if (!webhookUrl || !event || !payload) return res.status(400).json({ error: 'Missing config' });
-  
-  try {
-    const response = await fetch(webhookUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Event-Type': event
-      },
-      body: JSON.stringify(payload)
-    });
-    if (!response.ok) {
-      const errText = await response.text();
-      return res.status(response.status).json({ error: errText });
-    }
-    res.json({ success: true });
-  } catch (error) {
-    console.error('n8n server proxy error:', error);
-    res.status(500).json({ error: 'Failed to trigger n8n webhook' });
-  }
-});
+app.post('/api/telemetry/influx', (req, res) => proxyTelemetry(req, res, 'influx'));
+app.post('/api/telemetry/telegram', (req, res) => proxyTelemetry(req, res, 'telegram'));
+app.post('/api/telemetry/n8n', (req, res) => proxyTelemetry(req, res, 'n8n'));
 // --- Backend API Proxy (works in both dev and production) ---
-const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:8000';
 
 // --- News API Proxy → FastAPI backend /api/news/* ---
 app.use('/api/news', async (req, res) => {
@@ -228,6 +161,10 @@ app.use('/api/backend', async (req, res) => {
   
   try {
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    const apiKey = req.headers['x-api-key'];
+    const authorization = req.headers.authorization;
+    if (typeof apiKey === 'string') headers['X-API-Key'] = apiKey;
+    if (authorization) headers.Authorization = authorization;
     const fetchOpts: RequestInit = {
       method: req.method,
       headers,

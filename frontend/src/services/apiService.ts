@@ -322,11 +322,16 @@ export const apiService = {
 
   // ── Account & Balance ────────────────────────────────────────────────────
   async getAccountData(): Promise<{ equity: number; availableBalance: number; dailyPnL: number }> {
-    return request('/trading/account/summary').catch(() => ({
-      equity: 10000,
-      availableBalance: 10000,
-      dailyPnL: 0
-    }));
+    const data = await request<{
+      equity: number;
+      available_balance: number;
+      daily_pnl: number;
+    }>('/trading/account/summary');
+    return {
+      equity: data.equity,
+      availableBalance: data.available_balance,
+      dailyPnL: data.daily_pnl,
+    };
   },
 
   // ── Flow Runs ──────────────────────────────────────────────────────────────

@@ -1270,6 +1270,14 @@ export default function App() {
     }
   };
 
+  useEffect(() => {
+    void fetchBackendPositions();
+    const interval = window.setInterval(() => {
+      void fetchBackendPositions();
+    }, 15_000);
+    return () => window.clearInterval(interval);
+  }, []);
+
   const localActiveTrades: ActiveTrade[] = openPositions.map((pos) => ({
     id: pos.id || String(Date.now()),
     symbol: pos.asset || symbol,

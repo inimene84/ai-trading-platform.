@@ -80,8 +80,27 @@ export const PortfolioView = () => {
     );
   }
 
-  const balance = portfolio?.balance ?? 10000;
-  const equity = portfolio?.equity ?? 10000;
+  if (error && !portfolio) {
+    return (
+      <div className="flex-1 flex items-center justify-center p-6">
+        <div className="max-w-md rounded-2xl border border-red-500/30 bg-red-500/10 p-6 text-center">
+          <h2 className="text-lg font-bold text-red-300">Portfolio unavailable</h2>
+          <p className="mt-2 text-sm text-zinc-400">
+            The backend could not be reached. No substitute balance is being displayed.
+          </p>
+          <button
+            onClick={() => { setLoading(true); fetchAll(); }}
+            className="mt-4 rounded-xl bg-zinc-800 px-4 py-2 text-xs font-bold hover:bg-zinc-700"
+          >
+            Retry
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  const balance = portfolio?.balance ?? 0;
+  const equity = portfolio?.equity ?? 0;
   const totalPnl = portfolio?.total_pnl ?? 0;
   const totalPnlPct = portfolio?.total_pnl_pct ?? 0;
   const positionsValue = portfolio?.positions_value ?? 0;

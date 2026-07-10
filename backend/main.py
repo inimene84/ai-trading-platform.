@@ -238,11 +238,13 @@ _cors_env = os.getenv("CORS_ALLOWED_ORIGINS", "").strip()
 if _cors_env:
     _allowed_origins = [origin.strip() for origin in _cors_env.split(",") if origin.strip()]
 else:
-    _allowed_origins = ["*"]
+    # Dashboard is same-origin through nginx; cross-origin access is opt-in.
+    # Wildcard + credentials is both invalid and unsafe in production.
+    _allowed_origins = []
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_allowed_origins,
-    allow_credentials=True,
+    allow_credentials=bool(_allowed_origins),
     allow_methods=["*"],
     allow_headers=["*"],
 )

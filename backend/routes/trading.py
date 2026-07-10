@@ -1588,11 +1588,28 @@ async def get_account_summary():
         bal = await asyncio.to_thread(binance_futures_broker.get_balance)
         equity = bal.get("equity", bal.get("balance", 0.0))
         available = bal.get("available", equity)
-        return {"equity": round(equity, 4), "balance": round(available, 4),
-                "currency": "USDT", "source": "binance_futures"}
-    except Exception as e:
-        return {"equity": 0.0, "balance": 0.0, "currency": "USDT",
-                "error": str(e), "source": "binance_futures"}
+        db = SessionLocal()
+        try:
+            from sqlalchemy import func
+            today = datetime.now(timezone.utc).replace(
+                hour=0, minute=0, second=0, microsecond=0,
+            )
+            daily_pnl = db.query(func.sum(Trade.pnl)).filter(
+                Trade.status == "closed",
+                Trade.closed_at >= today,
+                Trade.pnl.isnot(None),
+            ).scalar() or 0.0
+        finally:
+            db.close()
+        return {
+            "equity": round(equity, 4),
+            "available_balance": round(available, 4),
+            "daily_pnl": round(float(daily_pnl), 4),
+            "currency": "USDT",
+            "source": "binance_futures",
+        }
+    except Exception:
+        raise HTTPException(status_code=503, detail="Account data unavailable")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

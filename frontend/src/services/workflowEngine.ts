@@ -57,6 +57,7 @@ export interface ExecutionContext {
     rsi?: number;
     ema?: number;
     atr?: number;
+    closes?: number[];
   };
   account: {
     equity: number;
@@ -106,6 +107,30 @@ export interface TradeResult {
   timestamp: number;
 }
 
+interface ConditionConfig {
+  emaFast?: number;
+  emaSlow?: number;
+}
+
+function calculateEMA(values: number[], period: number): number {
+  const seed = values.slice(0, period).reduce((sum, value) => sum + value, 0) / period;
+  const multiplier = 2 / (period + 1);
+  return values.slice(period).reduce(
+    (ema, value) => (value - ema) * multiplier + ema,
+    seed,
+  );
+}
+
+function calculateRSI(values: number[], period: number): number {
+  const changes = values.slice(1).map((value, index) => value - values[index]);
+  const recent = changes.slice(-period);
+  const gains = recent.reduce((sum, value) => sum + Math.max(value, 0), 0) / period;
+  const losses = recent.reduce((sum, value) => sum + Math.max(-value, 0), 0) / period;
+  if (losses === 0) return gains === 0 ? 50 : 100;
+  const rs = gains / losses;
+  return 100 - 100 / (1 + rs);
+}
+
 class WorkflowEngine {
   private context: ExecutionContext;
   private trades: TradeResult[] = [];
@@ -148,13 +173,16 @@ class WorkflowEngine {
     // Fetch account data
     try {
       const accountData = await apiService.getAccountData();
-      this.context.account.equity = accountData.equity || 10000;
-      this.context.account.availableBalance = accountData.availableBalance || 10000;
-      this.context.account.dailyPnL = accountData.dailyPnL || 0;
+      this.context.account.equity = accountData.equity;
+      this.context.account.availableBalance = accountData.availableBalance;
+      this.context.account.dailyPnL = accountData.dailyPnL;
     } catch (err) {
-      this.log('system', 'system', 'Failed to fetch account data, using defaults', 'warning');
-      this.context.account.equity = 10000;
-      this.context.account.availableBalance = 10000;
+      this.context.account.equity = 0;
+      this.context.account.availableBalance = 0;
+      this.context.account.dailyPnL = 0;
+      this.context.halted = true;
+      this.context.haltReason = 'Account data unavailable — refusing workflow execution';
+      this.log('system', 'system', this.context.haltReason, 'error');
     }
 
     // Execute from each trigger
@@ -285,11 +313,29 @@ class WorkflowEngine {
 
     try {
       // Fetch market data via backend proxy (geo-block safe)
-      const response = await fetch(`/api/backend/trading/binance/ticker/24hr?symbol=${symbol.toUpperCase()}`);
+      const [response, klinesResponse] = await Promise.all([
+        fetch(`/api/backend/trading/binance/ticker/24hr?symbol=${symbol.toUpperCase()}`),
+        fetch(`/api/backend/trading/binance/klines?symbol=${symbol.toUpperCase()}&interval=1h&limit=100`),
+      ]);
+      if (!response.ok || !klinesResponse.ok) {
+        throw new Error(
+          `market data unavailable (ticker=${response.status}, klines=${klinesResponse.status})`,
+        );
+      }
       const data = await response.json();
+      const klines = await klinesResponse.json();
+      const closes = Array.isArray(klines)
+        ? klines.map((bar: any) => Number(bar[4])).filter(Number.isFinite)
+        : [];
       
       this.context.marketData.price = parseFloat(data.lastPrice);
       this.context.marketData.volume = parseFloat(data.volume);
+      this.context.marketData.closes = closes;
+      if (!Number.isFinite(this.context.marketData.price)
+          || !Number.isFinite(this.context.marketData.volume)
+          || closes.length < 20) {
+        throw new Error('invalid market data payload');
+      }
 
       // Check volume spike condition
       const volumeThreshold = config?.volumeThreshold || 0;
@@ -319,14 +365,18 @@ class WorkflowEngine {
   }
 
   private async executeConditionNode(node: Node): Promise<boolean> {
-    const config = node.data?.config;
+    const config = node.data?.config as ConditionConfig | undefined;
     this.log(node.id, 'condition', 'Evaluating condition', 'info');
 
-    // Simple trend check using EMA
+    // Trend check using actual candle closes.
     if (config?.emaFast && config?.emaSlow) {
-      // In real implementation, would fetch historical data and calculate EMAs
-      const fastEMA = this.context.marketData.price * 1.01; // Simulated
-      const slowEMA = this.context.marketData.price * 0.99;
+      const closes = this.context.marketData.closes || [];
+      if (closes.length < Math.max(config.emaFast, config.emaSlow)) {
+        this.log(node.id, 'condition', 'Insufficient candle history for EMA condition', 'error');
+        return false;
+      }
+      const fastEMA = calculateEMA(closes, config.emaFast);
+      const slowEMA = calculateEMA(closes, config.emaSlow);
       const result = fastEMA > slowEMA;
       
       this.log(node.id, 'condition', 
@@ -345,15 +395,20 @@ class WorkflowEngine {
     
     this.log(node.id, 'filter', `Evaluating ${indicator.toUpperCase()} filter`, 'info');
 
-    // Simulate RSI calculation (in production, fetch from backend or calculate from candles)
     let value: number = 50;
     
     if (indicator === 'rsi') {
-      // Simulate RSI based on recent price action
-      value = 30 + Math.random() * 40; // Random between 30-70
+      const closes = this.context.marketData.closes || [];
+      if (closes.length < 15) {
+        this.log(node.id, 'filter', 'Insufficient candle history for RSI', 'error');
+        return false;
+      }
+      value = calculateRSI(closes, 14);
       this.context.marketData.rsi = value;
     } else if (indicator === 'ema') {
-      value = this.context.marketData.price;
+      const closes = this.context.marketData.closes || [];
+      if (closes.length < 20) return false;
+      value = calculateEMA(closes, 20);
       this.context.marketData.ema = value;
     } else if (indicator === 'volume') {
       value = this.context.marketData.volume;
