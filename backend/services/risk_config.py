@@ -232,6 +232,38 @@ class RiskConfig(BaseSettings):
         validation_alias=AliasChoices("symbol_blacklist", "SYMBOL_BLACKLIST"),
     )
 
+    # ── New-bar gate ──
+    # The decision pipeline consumes 1h bars but the loop runs every 15 min,
+    # so the same bar was re-evaluated up to 4x — measured live as heavy churn
+    # (~18 closes/day; trades held <1h were net losers at a 37.5% win rate
+    # while >24h holds won 78.8%). When enabled, the entry/pyramid pipeline
+    # runs only when a NEW bar has opened since the last evaluation; exits,
+    # trailing and SL/TP management still run every cycle.
+    eval_on_new_bar_only: bool = PydanticField(
+        default=True,
+        validation_alias=AliasChoices("eval_on_new_bar_only", "EVAL_ON_NEW_BAR_ONLY"),
+    )
+
+    # ── Per-symbol expectancy gate ──
+    # Live measurement: AVAX/SOL/LINK/UNI/BNB/BTC bled consistently (18-42%
+    # win rates) while ADA/DOGE/XRP were net positive. Block NEW entries on
+    # symbols whose realized P&L over the lookback window is negative with a
+    # meaningful sample. Rolling window, so a blocked symbol is retried after
+    # its losses age out. Symbols with open positions are never blocked
+    # (management must continue). Set enabled=false to disable.
+    symbol_expectancy_gate_enabled: bool = PydanticField(
+        default=True,
+        validation_alias=AliasChoices("symbol_expectancy_gate_enabled", "SYMBOL_EXPECTANCY_GATE_ENABLED"),
+    )
+    symbol_expectancy_lookback_days: int = PydanticField(
+        default=30,
+        validation_alias=AliasChoices("symbol_expectancy_lookback_days", "SYMBOL_EXPECTANCY_LOOKBACK_DAYS"),
+    )
+    symbol_expectancy_min_trades: int = PydanticField(
+        default=20,
+        validation_alias=AliasChoices("symbol_expectancy_min_trades", "SYMBOL_EXPECTANCY_MIN_TRADES"),
+    )
+
     @property
     def symbol_blacklist(self) -> set[str]:
         return {
