@@ -159,6 +159,104 @@ class BrokerPositionSyncService:
                 )
                 return 0
 
+            # Adopt exchange legs that have no SQL row (manual entry, lost
+            # response/DB commit, or restored DB). One aggregate row per symbol
+            # gives the loop ownership instead of blocking that symbol forever.
+            db_symbols = {t.symbol for t in db_trades}
+            adopted = 0
+            for bp in broker_raw:
+                symbol = bp.get("symbol")
+                qty = float(bp.get("quantity") or bp.get("positionAmt") or 0)
+                if not symbol or qty <= 0 or symbol in db_symbols:
+                    continue
+                entry = float(bp.get("entry_price") or bp.get("entryPrice") or 0)
+                if entry <= 0:
+                    logger.critical(
+                        f"  [ {symbol} ] orphan exchange leg has no entry price; "
+                        "cannot adopt safely"
+                    )
+                    continue
+                direction = (bp.get("side") or "BUY").upper()
+                if direction == "LONG":
+                    direction = "BUY"
+                elif direction == "SHORT":
+                    direction = "SELL"
+
+                # Recover live protective levels where available.
+                stop_loss = take_profit = None
+                try:
+                    orders = broker.get_open_orders(raise_on_error=True)
+                    close_side = "SELL" if direction == "BUY" else "BUY"
+                    relevant = [
+                        o for o in orders
+                        if o.get("symbol") == symbol and o.get("side") == close_side
+                    ]
+                    sl_levels = [
+                        float(o.get("price") or 0) for o in relevant
+                        if "STOP" in (o.get("type") or "")
+                        and "TAKE_PROFIT" not in (o.get("type") or "")
+                        and float(o.get("price") or 0) > 0
+                    ]
+                    tp_levels = [
+                        float(o.get("price") or 0) for o in relevant
+                        if "TAKE_PROFIT" in (o.get("type") or "")
+                        and float(o.get("price") or 0) > 0
+                    ]
+                    stop_loss = sl_levels[0] if sl_levels else None
+                    take_profit = tp_levels[0] if tp_levels else None
+                except Exception as order_error:
+                    logger.error(
+                        f"  [ {symbol} ] could not inspect orphan protection: {order_error}"
+                    )
+
+                # If the orphan is naked, install conservative fallback
+                # protection before adopting it into normal management.
+                if not stop_loss:
+                    fallback_dist = entry * 0.03
+                    stop_loss = (
+                        entry - fallback_dist
+                        if direction == "BUY"
+                        else entry + fallback_dist
+                    )
+                if not take_profit:
+                    fallback_tp = entry * 0.04
+                    take_profit = (
+                        entry + fallback_tp
+                        if direction == "BUY"
+                        else entry - fallback_tp
+                    )
+                protection = broker.ensure_protective_orders(
+                    symbol, direction, stop_loss, take_profit,
+                )
+                if protection.get("status") == "error":
+                    logger.critical(
+                        f"  [ {symbol} ] orphan adoption refused: protection failed "
+                        f"({protection.get('message')})"
+                    )
+                    continue
+
+                orphan = Trade(
+                    symbol=symbol,
+                    direction=direction,
+                    quantity=qty,
+                    entry_price=entry,
+                    filled_price=entry,
+                    stop_loss=stop_loss,
+                    take_profit=take_profit,
+                    status="filled",
+                    strategy="exchange_reconciliation",
+                    notes="Adopted orphan exchange position into DB",
+                    exchange="binance_futures",
+                )
+                db.add(orphan)
+                db_trades.append(orphan)
+                db_symbols.add(symbol)
+                adopted += 1
+                logger.critical(
+                    f"  [ {symbol} ] adopted orphan exchange leg: "
+                    f"{direction} qty={qty} entry={entry}"
+                )
+
             exit_price_cache: dict = {}
             cancelled_orphans: set = set()
 
@@ -208,13 +306,15 @@ class BrokerPositionSyncService:
                     sl_cooldown[t.symbol] = datetime.now(timezone.utc)
                     updated += 1
 
-            if updated > 0:
+            if updated > 0 or adopted > 0:
                 db.commit()
-                logger.info(f"Synced {updated} closed position(s) from broker.")
+                logger.info(
+                    f"Broker sync: closed={updated}, adopted_orphans={adopted}"
+                )
         except Exception as e:
             db.rollback()
             logger.warning(f"Failed to sync positions with broker: {e}")
-        return updated
+        return updated + adopted
 
 
 class TrailingStopManager:

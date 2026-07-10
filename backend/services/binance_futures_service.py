@@ -1201,7 +1201,29 @@ class BinanceFuturesService:
                         continue
                 # Duplicate clientOrderId (-4015/-2010 "Duplicate") → idempotent no-op
                 if "duplicate" in err_str.lower() or "-4015" in err_str:
-                    logger.warning(f"  [idempotency] duplicate order suppressed: {err_str[:120]}")
+                    client_id = params.get("newClientOrderId")
+                    if client_id and params.get("symbol"):
+                        try:
+                            existing = client.futures_get_order(
+                                symbol=params["symbol"],
+                                origClientOrderId=client_id,
+                            )
+                            if existing and existing.get("status") in {
+                                "NEW", "PARTIALLY_FILLED", "FILLED",
+                            }:
+                                logger.warning(
+                                    f"  [idempotency] recovered duplicate order "
+                                    f"{client_id} status={existing.get('status')}"
+                                )
+                                return existing
+                        except Exception as lookup_error:
+                            logger.error(
+                                f"  [idempotency] duplicate {client_id} could not "
+                                f"be reconciled: {lookup_error}"
+                            )
+                    logger.warning(
+                        f"  [idempotency] duplicate order unresolved: {err_str[:120]}"
+                    )
                     raise e
                 # MIN_NOTIONAL violation — order is too small, no point retrying
                 if "-4164" in err_str or "MIN_NOTIONAL" in err_str:

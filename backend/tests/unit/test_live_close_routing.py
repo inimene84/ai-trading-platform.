@@ -160,3 +160,31 @@ def test_partial_close_keeps_exchange_protective_orders():
     client.futures_cancel_all_open_orders.assert_not_called()
     client.futures_cancel_algo_order.assert_not_called()
 
+
+def test_safe_create_order_recovers_filled_duplicate_by_client_id():
+    svc = _broker_service()
+    client = MagicMock()
+    client.futures_create_order.side_effect = Exception(
+        "APIError(code=-4015): Duplicate order sent."
+    )
+    client.futures_get_order.return_value = {
+        "orderId": 321,
+        "status": "FILLED",
+        "avgPrice": "100",
+        "executedQty": "0.1",
+    }
+    params = {
+        "symbol": "ETHUSDT",
+        "side": "BUY",
+        "type": "MARKET",
+        "quantity": 0.1,
+        "newClientOrderId": "xETHBUYe123",
+    }
+
+    result = svc._safe_create_order(client, params)
+
+    assert result["status"] == "FILLED"
+    client.futures_get_order.assert_called_once_with(
+        symbol="ETHUSDT", origClientOrderId="xETHBUYe123",
+    )
+
