@@ -30,7 +30,7 @@ def test_pyramid_reuses_existing_close_position_sl():
         {"symbol": "DOGEUSDT", "side": "SELL", "quantity": 298.0},
     ]), patch.object(broker, "_get_client", return_value=client), \
          patch.object(broker, "_setup_symbol"), \
-         patch.object(broker, "_round_qty", side_effect=lambda s, q: q), \
+         patch.object(broker, "_round_qty", side_effect=lambda s, q, **kw: q), \
          patch.object(broker, "_round_price", side_effect=lambda s, p: p), \
          patch.object(broker, "_has_exchange_stop", return_value=True), \
          patch.object(broker, "_has_exchange_take_profit", return_value=True), \
@@ -62,7 +62,7 @@ def test_pyramid_4130_with_live_stop_no_emergency_close():
         {"symbol": "DOGEUSDT", "side": "SELL", "quantity": 298.0},
     ]), patch.object(broker, "_get_client", return_value=client), \
          patch.object(broker, "_setup_symbol"), \
-         patch.object(broker, "_round_qty", side_effect=lambda s, q: q), \
+         patch.object(broker, "_round_qty", side_effect=lambda s, q, **kw: q), \
          patch.object(broker, "_round_price", side_effect=lambda s, p: p), \
          patch.object(broker, "_has_exchange_stop", side_effect=[False, True]), \
          patch.object(broker, "_has_exchange_take_profit", return_value=True), \
@@ -92,7 +92,7 @@ def test_sl_fail_emergency_close_uses_full_position_qty():
         {"symbol": "XRPUSDT", "side": "SELL", "quantity": 17.5},
     ]), patch.object(broker, "_get_client", return_value=client), \
          patch.object(broker, "_setup_symbol"), \
-         patch.object(broker, "_round_qty", side_effect=lambda s, q: q), \
+         patch.object(broker, "_round_qty", side_effect=lambda s, q, **kw: q), \
          patch.object(broker, "_round_price", side_effect=lambda s, p: p), \
          patch.object(broker, "_live_position_qty", return_value=17.5), \
          patch.object(broker, "_has_exchange_stop", return_value=False), \
