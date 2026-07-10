@@ -42,6 +42,13 @@ class RiskConfig(BaseSettings):
         validation_alias=AliasChoices("max_same_direction_positions", "MAX_SAME_DIRECTION_POSITIONS"),
     )
     funding_rate_cap: float = 0.0005  # 0.05%
+    # Max confidence nudge (absolute) the funding rate may apply to a signal.
+    # Unclamped funding adjustment (rate*1000) flipped marginal signals toward
+    # shorts and produced a measured 22.7% BUY win rate vs 53% SELL.
+    funding_conf_adj_cap: float = PydanticField(
+        default=0.05,
+        validation_alias=AliasChoices("funding_conf_adj_cap", "FUNDING_CONF_ADJ_CAP"),
+    )
     # ── Position sizing ──
     # When enabled, size each entry so a stop-loss hit loses ~risk_per_trade_pct
     # of account equity (proper risk-based sizing) instead of a flat $ notional.
@@ -223,6 +230,38 @@ class RiskConfig(BaseSettings):
     symbol_blacklist_raw: str = PydanticField(
         default="",
         validation_alias=AliasChoices("symbol_blacklist", "SYMBOL_BLACKLIST"),
+    )
+
+    # ── New-bar gate ──
+    # The decision pipeline consumes 1h bars but the loop runs every 15 min,
+    # so the same bar was re-evaluated up to 4x — measured live as heavy churn
+    # (~18 closes/day; trades held <1h were net losers at a 37.5% win rate
+    # while >24h holds won 78.8%). When enabled, the entry/pyramid pipeline
+    # runs only when a NEW bar has opened since the last evaluation; exits,
+    # trailing and SL/TP management still run every cycle.
+    eval_on_new_bar_only: bool = PydanticField(
+        default=True,
+        validation_alias=AliasChoices("eval_on_new_bar_only", "EVAL_ON_NEW_BAR_ONLY"),
+    )
+
+    # ── Per-symbol expectancy gate ──
+    # Live measurement: AVAX/SOL/LINK/UNI/BNB/BTC bled consistently (18-42%
+    # win rates) while ADA/DOGE/XRP were net positive. Block NEW entries on
+    # symbols whose realized P&L over the lookback window is negative with a
+    # meaningful sample. Rolling window, so a blocked symbol is retried after
+    # its losses age out. Symbols with open positions are never blocked
+    # (management must continue). Set enabled=false to disable.
+    symbol_expectancy_gate_enabled: bool = PydanticField(
+        default=True,
+        validation_alias=AliasChoices("symbol_expectancy_gate_enabled", "SYMBOL_EXPECTANCY_GATE_ENABLED"),
+    )
+    symbol_expectancy_lookback_days: int = PydanticField(
+        default=30,
+        validation_alias=AliasChoices("symbol_expectancy_lookback_days", "SYMBOL_EXPECTANCY_LOOKBACK_DAYS"),
+    )
+    symbol_expectancy_min_trades: int = PydanticField(
+        default=20,
+        validation_alias=AliasChoices("symbol_expectancy_min_trades", "SYMBOL_EXPECTANCY_MIN_TRADES"),
     )
 
     @property

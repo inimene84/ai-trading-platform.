@@ -43,6 +43,21 @@ def get_active_broker():
 logger = structlog.get_logger(__name__)
 
 
+def negative_expectancy_symbols(rows: list[tuple], min_trades: int) -> set[str]:
+    """Symbols whose realized P&L is negative on a meaningful sample.
+
+    `rows` are (symbol, trade_count, pnl_sum) aggregates over the lookback
+    window (NULL-pnl closes already excluded by the caller's query).
+    """
+    blocked = set()
+    for symbol, n, pnl_sum in rows:
+        if n is None or pnl_sum is None:
+            continue
+        if n >= min_trades and pnl_sum < 0:
+            blocked.add(str(symbol).upper())
+    return blocked
+
+
 class TradingLoopService:
     """Background trading loop that scans markets and generates paper trades."""
 
@@ -88,6 +103,27 @@ class TradingLoopService:
         self._cycle_positions: list = []
         # Semaphore: process max 3 symbols concurrently to stagger API calls
         self._symbol_semaphore = asyncio.Semaphore(3)
+        # New-bar gate: symbol → open-time of the last bar the entry pipeline
+        # evaluated. The loop cycles every 15 min on 1h bars, so without this
+        # the same bar was re-decided up to 4x (churn + redundant LLM cost).
+        self._last_eval_bar: dict = {}
+
+    def _should_evaluate_bar(self, symbol: str, bars: list[dict]) -> bool:
+        """Entry pipeline runs at most once per bar (exits still run every cycle).
+
+        Returns True when the latest bar is new since the last evaluation for
+        this symbol (and marks it evaluated). Fails open when bars carry no
+        timestamp or the gate is disabled.
+        """
+        if not getattr(self.risk_config, "eval_on_new_bar_only", True):
+            return True
+        last_bar_ts = bars[-1].get("date") if bars else None
+        if not last_bar_ts:
+            return True  # no timestamp info — don't block trading on it
+        if self._last_eval_bar.get(symbol) == last_bar_ts:
+            return False
+        self._last_eval_bar[symbol] = last_bar_ts
+        return True
 
     @staticmethod
     def _is_live_binance() -> bool:
@@ -780,6 +816,14 @@ class TradingLoopService:
                 db.commit()
                 return {"signals": 0, "trades": 0}
 
+            # 3c. New-bar gate — the entry pipeline consumes 1h bars; the same
+            # bar must not be re-decided every 15-min cycle. SL/TP, trailing
+            # and protection management still run each cycle.
+            if not self._should_evaluate_bar(symbol, bars):
+                self._check_sl_tp(db, symbol, bars)
+                db.commit()
+                return {"signals": 0, "trades": 0}
+
             # Fetch funding rate before evaluation to allow gating
             try:
                 from backend.services.binance_market_data import get_binance_market_data
@@ -1240,6 +1284,9 @@ class TradingLoopService:
         if blacklisted:
             logger.warning(f"  [SYMBOL GATE] blacklisted (skipped): {blacklisted}")
 
+        # 1b) Per-symbol expectancy gate: skip symbols that measurably bleed.
+        candidates = self._apply_expectancy_gate(candidates)
+
         if min_vol <= 0 or not candidates:
             return candidates
 
@@ -1282,6 +1329,58 @@ class TradingLoopService:
             f"(min 24h vol ${min_vol/1e6:.0f}M)"
         )
         return passed
+
+    def _apply_expectancy_gate(self, candidates: list[str]) -> list[str]:
+        """Skip NEW entries on symbols with proven negative expectancy.
+
+        Aggregates realized P&L per symbol over a rolling lookback window and
+        blocks symbols with >= min_trades closes and net-negative P&L. Symbols
+        with open positions are never blocked (management must continue), and
+        losses age out of the rolling window so blocked symbols get retried.
+        Fails OPEN on any DB error.
+        """
+        if not getattr(self.risk_config, "symbol_expectancy_gate_enabled", False):
+            return candidates
+        if not candidates:
+            return candidates
+        try:
+            from sqlalchemy import func
+            lookback_days = int(self.risk_config.symbol_expectancy_lookback_days)
+            min_trades = int(self.risk_config.symbol_expectancy_min_trades)
+            cutoff = datetime.now(timezone.utc) - timedelta(days=lookback_days)
+            db = SessionLocal()
+            try:
+                rows = (
+                    db.query(Trade.symbol, func.count(Trade.id), func.sum(Trade.pnl))
+                    .filter(
+                        Trade.status == "closed",
+                        Trade.pnl.isnot(None),
+                        Trade.closed_at >= cutoff,
+                    )
+                    .group_by(Trade.symbol)
+                    .all()
+                )
+                open_symbols = {
+                    s.upper() for (s,) in db.query(Trade.symbol)
+                    .filter(Trade.status.in_(["open", "filled"])).distinct().all()
+                }
+            finally:
+                db.close()
+
+            blocked = negative_expectancy_symbols(rows, min_trades) - open_symbols
+            if not blocked:
+                return candidates
+            kept = [s for s in candidates if s.upper() not in blocked]
+            skipped = [s for s in candidates if s.upper() in blocked]
+            if skipped:
+                logger.warning(
+                    f"  [SYMBOL GATE] negative expectancy over {lookback_days}d "
+                    f"(skipped): {skipped}"
+                )
+            return kept
+        except Exception as e:
+            logger.warning(f"  [SYMBOL GATE] expectancy gate error (failing open): {e}")
+            return candidates
 
     async def _fetch_bars(self, symbol: str) -> list[dict]:
         """Fetch OHLCV bars. Try Binance Futures API first, fallback to yfinance."""

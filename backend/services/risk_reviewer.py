@@ -1,10 +1,26 @@
 import json
 import logging
+import os
 import re
+
+from backend.services.trading_mode import TradingMode, get_trading_mode
 
 logger = logging.getLogger("risk_reviewer")
 
 _APPROVED_RE = re.compile(r'"approved"\s*:\s*(true|false)', re.IGNORECASE)
+
+
+def _reviewer_outage_fail_open() -> bool:
+    """Whether a risk-reviewer OUTAGE (LLM chain down) may approve trades.
+
+    Fail-open on outage is only acceptable in paper/backtest. In LIVE mode an
+    LLM outage must fail-closed: with all providers down, every trade was
+    previously auto-approved, silently removing the veto gate exactly when
+    conditions are most degraded. RISK_REVIEWER_FAIL_OPEN=true overrides.
+    """
+    if os.getenv("RISK_REVIEWER_FAIL_OPEN", "false").lower() == "true":
+        return True
+    return get_trading_mode() != TradingMode.LIVE
 
 
 def _parse_reviewer_response(content: str) -> tuple[bool, str]:
@@ -137,5 +153,10 @@ async def review_trade_decision(
         return _parse_reviewer_response(res_str)
     except Exception as e:
         logger.error(f"Error calling risk reviewer LLM: {type(e).__name__}: {e}")
-        return True, f"Approved (Error invoking reviewer: {type(e).__name__}: {e} — fail-open)"
+        if _reviewer_outage_fail_open():
+            return True, f"Approved (Error invoking reviewer: {type(e).__name__}: {e} — fail-open)"
+        return False, (
+            f"Rejected (risk reviewer unavailable: {type(e).__name__}: {e} — "
+            "fail-closed in live mode; set RISK_REVIEWER_FAIL_OPEN=true to override)"
+        )
 

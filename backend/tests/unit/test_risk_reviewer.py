@@ -90,3 +90,45 @@ async def test_parse_reviewer_fail_open_on_plain_prose_veto():
     )
     assert approved is True
     assert "fail-open" in reasoning.lower()
+
+
+def _review_kwargs():
+    return dict(
+        symbol="BTCUSDT", action="BUY", quantity=0.01, entry_price=90000.0,
+        stop_loss=88000.0, take_profit=95000.0, confidence=0.8,
+        funding_rate=0.0001, news_summary="Mixed news.",
+    )
+
+
+@pytest.mark.asyncio
+async def test_reviewer_outage_fails_closed_in_live_mode(monkeypatch):
+    """LLM chain down in LIVE mode must veto, not silently approve."""
+    monkeypatch.setenv("TRADING_MODE", "live")
+    monkeypatch.delenv("RISK_REVIEWER_FAIL_OPEN", raising=False)
+    with patch("backend.llm.router.call_llm_resilient", new_callable=AsyncMock) as mock_call:
+        mock_call.side_effect = RuntimeError("All LLM providers in the chain failed")
+        approved, reasoning = await review_trade_decision(**_review_kwargs())
+    assert approved is False
+    assert "fail-closed" in reasoning.lower()
+
+
+@pytest.mark.asyncio
+async def test_reviewer_outage_fails_open_in_paper_mode(monkeypatch):
+    monkeypatch.setenv("TRADING_MODE", "paper")
+    monkeypatch.delenv("RISK_REVIEWER_FAIL_OPEN", raising=False)
+    with patch("backend.llm.router.call_llm_resilient", new_callable=AsyncMock) as mock_call:
+        mock_call.side_effect = RuntimeError("All LLM providers in the chain failed")
+        approved, reasoning = await review_trade_decision(**_review_kwargs())
+    assert approved is True
+    assert "fail-open" in reasoning.lower()
+
+
+@pytest.mark.asyncio
+async def test_reviewer_outage_env_override_fails_open_in_live(monkeypatch):
+    monkeypatch.setenv("TRADING_MODE", "live")
+    monkeypatch.setenv("RISK_REVIEWER_FAIL_OPEN", "true")
+    with patch("backend.llm.router.call_llm_resilient", new_callable=AsyncMock) as mock_call:
+        mock_call.side_effect = RuntimeError("All LLM providers in the chain failed")
+        approved, reasoning = await review_trade_decision(**_review_kwargs())
+    assert approved is True
+    assert "fail-open" in reasoning.lower()

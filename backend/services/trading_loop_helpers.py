@@ -18,6 +18,20 @@ from backend.services.position_manager import get_position_manager
 
 logger = logging.getLogger(__name__)
 
+# An externally-closed perp position's exit fill is always near the entry
+# (SL/TP sit within a few ATR; even liquidation at 10x is ~±10%). Anything
+# further off is a bad price source, not a real fill — e.g. 35 historical
+# ARBUSDT rows were closed at a bogus 0.00075 vs ~$0.08 entries, fabricating
+# +$856 of phantom P&L that poisoned every stat and the AI feedback loop.
+MAX_EXIT_PRICE_DEVIATION = 0.5
+
+
+def is_plausible_exit_price(entry_price, exit_price) -> bool:
+    """True when exit_price is a believable close for a position opened at entry_price."""
+    if not exit_price or exit_price <= 0 or not entry_price or entry_price <= 0:
+        return False
+    return abs(exit_price - entry_price) / entry_price <= MAX_EXIT_PRICE_DEVIATION
+
 
 class EmergencyExitManager:
     """Manages Step 0 pre-sync emergency exit checks."""
@@ -146,13 +160,27 @@ class BrokerPositionSyncService:
 
                     t.status = "closed"
                     t.closed_at = datetime.now(timezone.utc)
-                    if exit_px and t.entry_price and t.quantity:
+                    if exit_px and t.entry_price and t.quantity and is_plausible_exit_price(t.entry_price, exit_px):
                         t.exit_price = exit_px
                         if str(t.direction).upper() == "BUY":
                             t.pnl = round((exit_px - t.entry_price) * t.quantity, 4)
                         else:
                             t.pnl = round((t.entry_price - exit_px) * t.quantity, 4)
-                    t.notes = (t.notes or "") + " | Closed externally (sync)"
+                        t.notes = (t.notes or "") + " | Closed externally (sync)"
+                    else:
+                        # Bad or missing exit price: record the close honestly as
+                        # unknown P&L rather than fabricating a number from a
+                        # corrupt price (which previously produced phantom gains).
+                        if exit_px:
+                            logger.error(
+                                f"  [ {t.symbol} ] implausible exit price {exit_px} "
+                                f"vs entry {t.entry_price} — recording close with unknown P&L"
+                            )
+                        t.exit_price = None
+                        t.pnl = None
+                        t.notes = (t.notes or "") + (
+                            f" | Closed externally (sync; exit price unavailable/implausible raw={exit_px})"
+                        )
 
                     if t.symbol not in cancelled_orphans:
                         try:
