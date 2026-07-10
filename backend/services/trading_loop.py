@@ -1089,7 +1089,8 @@ class TradingLoopService:
             open_trades = db.query(Trade).filter(Trade.status.in_(["open", "filled"])).all()
             
             # Get balance - use paper portfolio if in paper mode, otherwise live broker
-            paper_mode = os.getenv("PAPER_TRADING", "false").lower() == "true"
+            from backend.services.trading_mode import TradingMode, get_trading_mode
+            paper_mode = get_trading_mode() == TradingMode.PAPER
             
             if paper_mode:
                 # Get balance from paper portfolio
@@ -1123,19 +1124,21 @@ class TradingLoopService:
             )
 
             # Save snapshot
+            distinct_open_symbols = len({t.symbol for t in open_trades})
             snapshot = PortfolioSnapshot(
                 total_value=real_equity,
                 cash=real_cash,
                 positions_value=round(positions_val, 4),
                 total_pnl=round(float(realized_pnl), 4),
-                open_positions=len(open_trades),
+                open_positions=distinct_open_symbols,
                 cycle_number=self._cycle_count,
             )
             db.add(snapshot)
             db.commit()
             
             logger.info(
-                f"  Portfolio: cash=${real_cash:,.2f}, equity=${real_equity:,.2f}, open_pos={len(open_trades)}"
+                f"  Portfolio: cash=${real_cash:,.2f}, equity=${real_equity:,.2f}, "
+                f"open_symbols={distinct_open_symbols}"
             )
         except Exception as e:
             logger.warning(f"Failed to save portfolio snapshot: {e}")

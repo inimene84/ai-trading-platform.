@@ -7,6 +7,7 @@
  */
 
 const LOCAL_STORAGE_KEY = 'quantum_trade_settings';
+const SESSION_SECRETS_KEY = 'quantum_trade_session_secrets';
 
 export const configService = {
   getSecret(key: string): string | undefined {
@@ -42,7 +43,18 @@ export const configService = {
       return envValue;
     }
 
-    // 2. Check local storage
+    // 2. Session-only secrets (never persist credentials across browser restarts)
+    try {
+      const stored = sessionStorage.getItem(SESSION_SECRETS_KEY);
+      if (stored) {
+        const secrets = JSON.parse(stored);
+        if (secrets[key]) return secrets[key];
+      }
+    } catch (e) {
+      console.error('Error reading session secrets:', e);
+    }
+
+    // 3. Non-secret local settings
     try {
       const stored = localStorage.getItem(LOCAL_STORAGE_KEY);
       if (stored) {

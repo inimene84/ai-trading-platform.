@@ -87,6 +87,7 @@ services:
     volumes:
       - app-data:/app/data
       - app-logs:/app/logs
+      - ./.env:/app/.env
     networks:
       - trading-net
   litellm:

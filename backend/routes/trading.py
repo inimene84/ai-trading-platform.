@@ -6,6 +6,7 @@ from fastapi.responses import StreamingResponse, JSONResponse
 import json
 import asyncio
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field
 
@@ -13,6 +14,7 @@ from backend.database.connection import SessionLocal
 from backend.database.models import TradingSignal, Trade, PortfolioSnapshot
 from backend.services.trading_loop import trading_loop
 from backend.services.ai_analysis import ai_analysis_service
+from backend.services.risk_config import refresh_risk_config
 from backend.services.unified_trading import (
     UnifiedTrading, UnifiedOrder, OrderSide, OrderType,
 )
@@ -462,13 +464,30 @@ async def get_config():
 
 @router.post("/config/update")
 async def update_config(payload: ConfigUpdateRequest):
-    """Update risk/trading configuration toggles dynamically."""
-    from backend.services.risk_config import get_risk_config
-    config = get_risk_config()
+    """Persist supported toggles to the mounted production .env."""
+    updates = {}
     if payload.use_risk_reviewer_llm is not None:
-        config.use_risk_reviewer_llm = payload.use_risk_reviewer_llm
+        updates["USE_RISK_REVIEWER_LLM"] = str(payload.use_risk_reviewer_llm).lower()
     if payload.enable_personas is not None:
-        config.enable_personas = payload.enable_personas
+        updates["ENABLE_PERSONAS"] = str(payload.enable_personas).lower()
+    if updates:
+        env_path = Path(os.getenv("ENV_FILE_PATH", "/app/.env"))
+        existing = env_path.read_text().splitlines() if env_path.exists() else []
+        output = []
+        remaining = dict(updates)
+        for line in existing:
+            key = line.split("=", 1)[0] if "=" in line else ""
+            if key in remaining:
+                output.append(f"{key}={remaining.pop(key)}")
+            else:
+                output.append(line)
+        output.extend(f"{key}={value}" for key, value in remaining.items())
+        tmp_path = env_path.with_suffix(".tmp")
+        tmp_path.write_text("\n".join(output) + "\n")
+        tmp_path.replace(env_path)
+        os.environ.update(updates)
+
+    config = refresh_risk_config()
     return {
         "status": "success",
         "config": {

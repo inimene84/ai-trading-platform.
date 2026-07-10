@@ -11,6 +11,11 @@ const LOCAL_STORAGE_KEY = 'quantum_trade_settings';
 
 function getAdminApiKey(): string {
   try {
+    const sessionSecrets = sessionStorage.getItem('quantum_trade_session_secrets');
+    if (sessionSecrets) {
+      const secrets = JSON.parse(sessionSecrets);
+      if (secrets.ADMIN_API_KEY) return secrets.ADMIN_API_KEY;
+    }
     const stored = localStorage.getItem(LOCAL_STORAGE_KEY);
     if (stored) {
       const settings = JSON.parse(stored);

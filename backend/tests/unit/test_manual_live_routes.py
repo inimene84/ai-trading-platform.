@@ -6,11 +6,13 @@ import pytest
 from fastapi import HTTPException
 
 from backend.routes.trading import (
+    ConfigUpdateRequest,
     LiveOrderRequest,
     ModifyPositionRequest,
     close_position,
     modify_position,
     place_live_order,
+    update_config,
 )
 from backend.services.unified_trading import UnifiedOrderResponse
 
@@ -126,4 +128,25 @@ async def test_manual_live_order_records_exchange_fill():
     assert trade.binance_order_id == "entry-1"
     assert result["trade_id"] == 77
     db.commit.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_config_update_persists_to_env_file(monkeypatch, tmp_path):
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "USE_RISK_REVIEWER_LLM=true\nENABLE_PERSONAS=false\nOTHER=value\n"
+    )
+    monkeypatch.setenv("ENV_FILE_PATH", str(env_file))
+
+    result = await update_config(ConfigUpdateRequest(
+        use_risk_reviewer_llm=False,
+        enable_personas=True,
+    ))
+
+    content = env_file.read_text()
+    assert "USE_RISK_REVIEWER_LLM=false" in content
+    assert "ENABLE_PERSONAS=true" in content
+    assert "OTHER=value" in content
+    assert result["config"]["use_risk_reviewer_llm"] is False
+    assert result["config"]["enable_personas"] is True
 
