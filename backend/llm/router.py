@@ -134,10 +134,10 @@ def pick_model(task_type: str) -> ModelConfig:
 def get_api_key(config: ModelConfig) -> str:
     """Resolve the API key for a model config from environment variables."""
     if config.api_key_env:
-        key = os.getenv(config.api_key_env, "")
-        if key:
-            return key
-    # Cascade through common key env vars
+        # Never substitute an unrelated provider's token. The old cascade sent
+        # LiteLLM/Kie keys to Anthropic and Gemini, producing repeated 401/400s.
+        return os.getenv(config.api_key_env, "")
+    # Legacy configs without an explicit key name may use the local proxy key.
     # LITELLM_API_KEY is the LiteLLM master key (also used for KieAI proxy)
     return (
         os.getenv("LITELLM_API_KEY", "")
