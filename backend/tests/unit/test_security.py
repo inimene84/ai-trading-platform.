@@ -3,6 +3,7 @@ from fastapi import HTTPException
 from starlette.requests import Request
 
 from backend.security import admin_auth_enabled, is_sensitive_request, validate_admin_request
+from backend.main import validate_live_startup_security
 
 
 def _req(method: str, path: str) -> Request:
@@ -39,3 +40,18 @@ def test_validate_admin_request_accepts_header(monkeypatch):
         "headers": [(b"x-api-key", b"secret")],
     }
     validate_admin_request(Request(scope))
+
+
+def test_live_startup_refuses_missing_admin_token(monkeypatch):
+    monkeypatch.setenv("TRADING_MODE", "live")
+    for name in ("ADMIN_API_KEY", "API_AUTH_TOKEN", "BACKEND_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    with pytest.raises(RuntimeError, match="Refusing LIVE startup"):
+        validate_live_startup_security()
+
+
+def test_paper_startup_allows_missing_admin_token(monkeypatch):
+    monkeypatch.setenv("TRADING_MODE", "paper")
+    for name in ("ADMIN_API_KEY", "API_AUTH_TOKEN", "BACKEND_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    validate_live_startup_security()
