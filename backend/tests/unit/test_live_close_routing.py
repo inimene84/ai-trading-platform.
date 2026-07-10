@@ -133,3 +133,30 @@ def test_reduce_only_long_close_sends_sell_on_long_and_ignores_zero_margin():
     assert params["side"] == "SELL"
     assert params["positionSide"] == "LONG"
 
+
+def test_partial_close_keeps_exchange_protective_orders():
+    svc = _broker_service()
+    client = MagicMock()
+    client.futures_account.return_value = {"availableBalance": "0"}
+    client.futures_create_order.return_value = {
+        "orderId": 123,
+        "avgPrice": "100",
+    }
+
+    with patch.object(svc, "_get_client", return_value=client), \
+         patch.object(svc, "_setup_symbol"), \
+         patch.object(svc, "_round_price", side_effect=lambda s, p: p), \
+         patch.object(svc, "_live_position_qty", return_value=0.5):
+        result = svc.place_order(
+            symbol="ETHUSDT",
+            direction="BUY",
+            action="close",
+            quantity=0.1,
+            price=100.0,
+            reduce_only=True,
+        )
+
+    assert result["status"] == "sent"
+    client.futures_cancel_all_open_orders.assert_not_called()
+    client.futures_cancel_algo_order.assert_not_called()
+

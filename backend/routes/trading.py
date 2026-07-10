@@ -1,13 +1,13 @@
 import os
 import httpx
 from dotenv import load_dotenv
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse, JSONResponse
 import json
 import asyncio
-from datetime import datetime
-from typing import Optional, List, Dict, Any
-from pydantic import BaseModel
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Literal, Optional
+from pydantic import BaseModel, Field
 
 from backend.database.connection import SessionLocal
 from backend.database.models import TradingSignal, Trade, PortfolioSnapshot
@@ -48,6 +48,21 @@ class TradingConfigResponse(BaseModel):
 class ConfigUpdateRequest(BaseModel):
     use_risk_reviewer_llm: Optional[bool] = None
     enable_personas: Optional[bool] = None
+
+
+class ModifyPositionRequest(BaseModel):
+    stop_loss: Optional[float] = Field(default=None, gt=0)
+    take_profit: Optional[float] = Field(default=None, gt=0)
+
+
+class LiveOrderRequest(BaseModel):
+    symbol: str = Field(min_length=5, max_length=20, pattern=r"^[A-Za-z0-9=_/-]+$")
+    side: Literal["buy", "sell"]
+    quantity: float = Field(gt=0, le=1_000_000_000)
+    order_type: Literal["market", "limit"] = "market"
+    price: float = Field(default=0, ge=0)
+    stop_loss: Optional[float] = Field(default=None, gt=0)
+    take_profit: Optional[float] = Field(default=None, gt=0)
 
 load_dotenv()
 
@@ -872,37 +887,56 @@ async def disable_ctrader_live():
 
 @router.post("/positions/{position_id}/close")
 async def close_position(position_id: int):
-    """Close an open position by ID."""
-    from backend.database.connection import SessionLocal
-    from backend.database.models import Trade
-    from datetime import datetime
+    """Close an exchange position layer, then persist the actual fill."""
     db = SessionLocal()
     try:
         trade = db.query(Trade).filter(Trade.id == position_id, Trade.status.in_(["open", "filled"])).first()
         if not trade:
-            from fastapi import HTTPException
             raise HTTPException(status_code=404, detail=f"Open position {position_id} not found")
-        exit_price = trade.entry_price
-        try:
-            import yfinance as yf
-            yf_sym = _to_yfinance_symbol(trade.symbol)
-            ticker = yf.Ticker(yf_sym)
-            hist = ticker.history(period="1d")
-            if not hist.empty:
-                exit_price = float(hist["Close"].iloc[-1])
-        except Exception:
-            pass
-        if trade.direction == "BUY":
-            pnl = (exit_price - trade.entry_price) * trade.quantity
+
+        close_side = OrderSide.SELL if trade.direction == "BUY" else OrderSide.BUY
+        response = UnifiedTrading().place_order(UnifiedOrder(
+            symbol=trade.symbol,
+            side=close_side,
+            order_type=OrderType.MARKET,
+            quantity=trade.quantity,
+            reduce_only=True,
+        ))
+        if not response.success:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Exchange close failed; DB left open: {response.message}",
+            )
+
+        exit_price = response.filled_price
+        if not exit_price:
+            from backend.services.binance_futures_service import binance_futures_broker
+            exit_price = binance_futures_broker.get_exit_price(trade.symbol)
+
+        from backend.services.trading_loop_helpers import is_plausible_exit_price
+        if is_plausible_exit_price(trade.entry_price, exit_price):
+            if trade.direction == "BUY":
+                pnl = (exit_price - trade.entry_price) * trade.quantity
+            else:
+                pnl = (trade.entry_price - exit_price) * trade.quantity
+            trade.exit_price = exit_price
+            trade.pnl = round(pnl, 4)
         else:
-            pnl = (trade.entry_price - exit_price) * trade.quantity
+            # Exchange is flat but the fill price is unavailable: close the row
+            # honestly with unknown P&L rather than inventing a yfinance price.
+            trade.exit_price = None
+            trade.pnl = None
         trade.status = "closed"
-        trade.exit_price = exit_price
-        trade.pnl = round(pnl, 2)
-        trade.closed_at = datetime.utcnow()
-        trade.notes = (trade.notes or "") + " | Closed via manual dashboard"
+        trade.closed_at = datetime.now(timezone.utc)
+        trade.notes = (trade.notes or "") + " | Closed on exchange via manual dashboard"
         db.commit()
-        return {"success": True, "position_id": position_id, "exit_price": exit_price, "pnl": round(pnl, 2), "message": f"Position {position_id} closed"}
+        return {
+            "success": True,
+            "position_id": position_id,
+            "exit_price": trade.exit_price,
+            "pnl": trade.pnl,
+            "message": f"Position {position_id} closed on exchange",
+        }
     except Exception:
         db.rollback()
         raise
@@ -911,22 +945,53 @@ async def close_position(position_id: int):
 
 
 @router.put("/positions/{position_id}/modify")
-async def modify_position(position_id: int, body: dict):
-    """Modify stop loss and take profit for an open position."""
-    from backend.database.connection import SessionLocal
-    from backend.database.models import Trade
+async def modify_position(position_id: int, body: ModifyPositionRequest):
+    """Modify exchange SL/TP first, then persist levels that succeeded."""
     db = SessionLocal()
     try:
         trade = db.query(Trade).filter(Trade.id == position_id, Trade.status.in_(["open", "filled"])).first()
         if not trade:
-            from fastapi import HTTPException
             raise HTTPException(status_code=404, detail=f"Open position {position_id} not found")
-        if "stop_loss" in body and body["stop_loss"] is not None:
-            trade.stop_loss = float(body["stop_loss"])
-        if "take_profit" in body and body["take_profit"] is not None:
-            trade.take_profit = float(body["take_profit"])
+
+        from backend.services.binance_futures_service import binance_futures_broker
+        results = {}
+        failures = []
+        if body.stop_loss is not None:
+            result = binance_futures_broker.replace_stop_loss(
+                trade.symbol, trade.direction, body.stop_loss,
+            )
+            results["stop_loss"] = result
+            if result.get("status") in {"replaced", "simulated"}:
+                trade.stop_loss = body.stop_loss
+            else:
+                failures.append(f"SL: {result.get('reason') or result.get('message')}")
+        if body.take_profit is not None:
+            result = binance_futures_broker.replace_take_profit(
+                trade.symbol, trade.direction, body.take_profit,
+            )
+            results["take_profit"] = result
+            if result.get("status") in {"replaced", "simulated"}:
+                trade.take_profit = body.take_profit
+            else:
+                failures.append(f"TP: {result.get('reason') or result.get('message')}")
+
         db.commit()
-        return {"success": True, "position_id": position_id, "stop_loss": trade.stop_loss, "take_profit": trade.take_profit}
+        if failures:
+            raise HTTPException(
+                status_code=502,
+                detail={
+                    "message": "One or more exchange protection updates failed",
+                    "failures": failures,
+                    "results": results,
+                },
+            )
+        return {
+            "success": True,
+            "position_id": position_id,
+            "stop_loss": trade.stop_loss,
+            "take_profit": trade.take_profit,
+            "exchange_results": results,
+        }
     except Exception:
         db.rollback()
         raise
@@ -1166,18 +1231,18 @@ async def paper_place_order(request: dict):
     }
 
 @router.post("/order")
-async def place_live_order(request: dict):
-    """Place a live order through the active broker session."""
+async def place_live_order(request: LiveOrderRequest):
+    """Place a validated live order and persist its exchange fill."""
     from backend.services.risk_config import get_risk_config
     from backend.services.decision_engine import compute_sl_tp_levels
     from backend.services.trading_loop import trading_loop
 
-    symbol = request.get("symbol", "").upper()
-    side = request.get("side", "buy").lower()
+    symbol = request.symbol.upper()
+    side = request.side
     direction = "BUY" if side == "buy" else "SELL"
 
-    raw_sl = request.get("stop_loss")
-    raw_tp = request.get("take_profit")
+    raw_sl = request.stop_loss
+    raw_tp = request.take_profit
     stop_loss = float(raw_sl) if raw_sl not in (None, "", 0) else None
     take_profit = float(raw_tp) if raw_tp not in (None, "", 0) else None
 
@@ -1185,7 +1250,7 @@ async def place_live_order(request: dict):
     if stop_loss is None or take_profit is None:
         bars = await trading_loop._fetch_bars(symbol)
         if bars and len(bars) >= 15:
-            entry = float(request.get("price") or 0) or float(bars[-1]["close"])
+            entry = request.price or float(bars[-1]["close"])
             stop_loss, take_profit = compute_sl_tp_levels(
                 bars, direction, entry, get_risk_config(),
                 signal_sl=stop_loss, signal_tp=take_profit,
@@ -1195,13 +1260,81 @@ async def place_live_order(request: dict):
     order = UnifiedOrder(
         symbol=symbol,
         side=OrderSide(side),
-        order_type=OrderType(request.get("order_type", "market").lower()),
-        quantity=float(request.get("quantity", 0)),
-        price=float(request.get("price", 0) or 0),
+        order_type=OrderType(request.order_type),
+        quantity=request.quantity,
+        price=request.price,
         stop_loss=stop_loss,
         take_profit=take_profit,
     )
     resp = ut.place_order(order)
+    if not resp.success:
+        raise HTTPException(status_code=502, detail=f"Exchange order failed: {resp.message}")
+
+    # Live manual orders must enter the same DB lifecycle as loop orders so
+    # reconciliation, protection, risk counts, dashboard, and exits all see
+    # the exchange leg. Paper mode has its own persistence engine.
+    if resp.mode == "live":
+        entry_price = float(resp.filled_price or request.price or 0)
+        if entry_price <= 0:
+            # The exchange order exists but cannot be managed honestly without
+            # its fill. Flatten immediately rather than create an orphan leg.
+            close_side = OrderSide.SELL if direction == "BUY" else OrderSide.BUY
+            ut.place_order(UnifiedOrder(
+                symbol=symbol,
+                side=close_side,
+                order_type=OrderType.MARKET,
+                quantity=float(resp.filled_qty or request.quantity),
+                reduce_only=True,
+            ))
+            raise HTTPException(
+                status_code=502,
+                detail="Exchange fill had no price; emergency close attempted",
+            )
+
+        db = SessionLocal()
+        try:
+            trade = Trade(
+                symbol=symbol,
+                direction=direction,
+                quantity=float(resp.filled_qty or request.quantity),
+                entry_price=entry_price,
+                filled_price=entry_price,
+                stop_loss=stop_loss,
+                take_profit=take_profit,
+                status="filled",
+                strategy="manual_api",
+                notes="Manual live order recorded from exchange fill",
+                binance_order_id=str(resp.order_id or ""),
+                exchange="binance_futures",
+            )
+            db.add(trade)
+            db.commit()
+            db.refresh(trade)
+            trade_id = trade.id
+        except Exception as db_error:
+            db.rollback()
+            # Never leave a filled-but-unrecorded manual position unmanaged.
+            close_side = OrderSide.SELL if direction == "BUY" else OrderSide.BUY
+            close_resp = ut.place_order(UnifiedOrder(
+                symbol=symbol,
+                side=close_side,
+                order_type=OrderType.MARKET,
+                quantity=float(resp.filled_qty or request.quantity),
+                reduce_only=True,
+            ))
+            logger.critical(
+                "Manual order filled but DB persistence failed; emergency close "
+                "success=%s: %s", close_resp.success, db_error,
+            )
+            raise HTTPException(
+                status_code=500,
+                detail="Order persistence failed; emergency close attempted",
+            )
+        finally:
+            db.close()
+    else:
+        trade_id = None
+
     return {
         "success": resp.success,
         "order_id": resp.order_id,
@@ -1209,6 +1342,7 @@ async def place_live_order(request: dict):
         "mode": resp.mode,
         "filled_price": resp.filled_price,
         "filled_qty": resp.filled_qty,
+        "trade_id": trade_id,
     }
 
 

@@ -873,20 +873,30 @@ class BinanceFuturesService:
             # ── Cleanup Orphaned Orders on Close ──────────────────────────────
             if reduce_only:
                 try:
-                    # Cancel BOTH regular and conditional/algo orders (SL/TP/trailing
-                    # are conditional orders that futures_cancel_all_open_orders misses).
-                    client.futures_cancel_all_open_orders(symbol=futures_sym)
-                    try:
-                        _algo = client.futures_get_open_algo_orders()
-                        _algo_list = _algo if isinstance(_algo, list) else _algo.get('orders', [])
-                        for _o in _algo_list:
-                            if _o.get('symbol') == futures_sym and _o.get('algoId'):
-                                client.futures_cancel_algo_order(algoId=_o['algoId'])
-                    except Exception as _ae:
-                        logger.warning(f"  [!] Failed to cancel conditional orders for {futures_sym}: {_ae}")
-                    logger.info(f"  ✓ Cancelled all remaining open + conditional orders for {futures_sym}")
+                    # A close may cover only one DB pyramid layer. Keep the
+                    # closePosition SL/TP while any quantity remains; those
+                    # orders automatically protect the whole residual leg.
+                    remaining = self._live_position_qty(futures_sym, position_side)
+                    if remaining <= 0:
+                        # Fully flat: remove orphan regular + conditional orders.
+                        client.futures_cancel_all_open_orders(symbol=futures_sym)
+                        try:
+                            _algo = client.futures_get_open_algo_orders()
+                            _algo_list = _algo if isinstance(_algo, list) else _algo.get('orders', [])
+                            for _o in _algo_list:
+                                if _o.get('symbol') == futures_sym and _o.get('algoId'):
+                                    client.futures_cancel_algo_order(algoId=_o['algoId'])
+                        except Exception as _ae:
+                            logger.warning(f"  [!] Failed to cancel conditional orders for {futures_sym}: {_ae}")
+                        logger.info(f"  ✓ Fully flat; cancelled remaining orders for {futures_sym}")
+                    else:
+                        logger.info(
+                            f"  ✓ Partial close left {remaining} {futures_sym}; "
+                            "keeping exchange SL/TP protection"
+                        )
                 except Exception as e:
-                    logger.warning(f"  [!] Failed to cancel open orders for {futures_sym}: {e}")
+                    # Unknown remaining state: fail safe by preserving orders.
+                    logger.warning(f"  [!] Could not verify flat state for {futures_sym}; keeping protective orders: {e}")
 
             # ── Stop-loss order (STOP_MARKET, reduceOnly) ─────────────────────
             if not reduce_only and stop_loss:
@@ -1423,6 +1433,95 @@ class BinanceFuturesService:
                 f"  [TRAIL-SL] {symbol} exchange-stop move FAILED before replacement completed: {e}"
             )
             return {'status': 'error', 'message': str(e)}
+
+    def replace_take_profit(
+        self,
+        symbol: str,
+        direction: str,
+        new_take_profit: float,
+    ) -> dict:
+        """Replace the exchange closePosition TAKE_PROFIT_MARKET order.
+
+        Unlike SL replacement, a failed TP restore does not leave downside
+        unprotected (the SL remains live), but SQL must not claim the new TP
+        succeeded unless Binance accepted it.
+        """
+        futures_sym = self._to_futures_symbol(symbol)
+        if not futures_sym:
+            return {'status': 'skipped', 'reason': f'{symbol} unsupported'}
+        if self.dry_run:
+            return {'status': 'simulated', 'symbol': futures_sym, 'new_take_profit': new_take_profit}
+        if not new_take_profit or new_take_profit <= 0:
+            return {'status': 'skipped', 'reason': 'invalid new_take_profit'}
+
+        client = self._get_client()
+        position_side = 'LONG' if direction.upper() == 'BUY' else 'SHORT'
+        close_side = 'SELL' if direction.upper() == 'BUY' else 'BUY'
+        rounded_new = self._round_price(futures_sym, new_take_profit)
+        ticker = client.futures_symbol_ticker(symbol=futures_sym)
+        current_price = float(ticker.get('price') or 0)
+        if current_price > 0:
+            if direction.upper() == 'BUY' and rounded_new <= current_price:
+                return {'status': 'skipped', 'reason': 'long TP must be above current price'}
+            if direction.upper() == 'SELL' and rounded_new >= current_price:
+                return {'status': 'skipped', 'reason': 'short TP must be below current price'}
+
+        existing = [
+            o for o in self._collect_protective_orders(
+                futures_sym, position_side, raise_on_error=True,
+            )
+            if 'TAKE_PROFIT' in (o.get('type') or '')
+        ]
+        old_levels = [
+            float(o.get('price') or 0)
+            for o in existing
+            if float(o.get('price') or 0) > 0
+        ]
+        for o in existing:
+            if o.get('algo_id'):
+                client.futures_cancel_algo_order(algoId=o['algo_id'])
+            else:
+                client.futures_cancel_order(
+                    symbol=futures_sym, orderId=int(o['order_id']),
+                )
+
+        params = {
+            "symbol": futures_sym,
+            "side": close_side,
+            "type": "TAKE_PROFIT_MARKET",
+            "stopPrice": rounded_new,
+            "closePosition": "true",
+            "positionSide": position_side,
+        }
+        try:
+            order = self._safe_create_order(client, params)
+            return {
+                'status': 'replaced',
+                'symbol': futures_sym,
+                'new_take_profit': rounded_new,
+                'order_id': str(order.get('algoId') or order.get('orderId', '')),
+            }
+        except Exception as new_error:
+            if old_levels:
+                restore = dict(params)
+                restore["stopPrice"] = old_levels[0]
+                try:
+                    self._safe_create_order(client, restore)
+                    return {
+                        'status': 'error',
+                        'reason': 'new_tp_failed_old_restored',
+                        'message': str(new_error),
+                    }
+                except Exception as restore_error:
+                    logger.error(
+                        f"  [TP-REPLACE] {futures_sym} new and restore both failed: "
+                        f"{new_error}; {restore_error}"
+                    )
+            return {
+                'status': 'error',
+                'reason': 'take_profit_replace_failed',
+                'message': str(new_error),
+            }
 
     def cancel_order(self, order_id: str, symbol: Optional[str] = None) -> dict:
         try:
