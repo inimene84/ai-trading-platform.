@@ -11,6 +11,7 @@ import {
   ChevronRight,
 } from 'lucide-react';
 import { cn } from '../lib/utils';
+import { fetchBinance } from '../services/binanceProxy';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -284,7 +285,7 @@ export function MultiAssetPanel({ currentSymbol, onSelectSymbol, onQuickTrade }:
     const results: Record<string, Partial<AssetData>> = {};
     try {
       const queryStr = cryptoSymbols.map(s => `"${s}"`).join(',');
-      const resp = await fetch(
+      const resp = await fetchBinance(
         `https://api.binance.com/api/v3/ticker/24hr?symbols=[${queryStr}]`
       );
       if (resp.ok) {
