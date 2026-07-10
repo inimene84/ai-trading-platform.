@@ -272,14 +272,24 @@ class BinanceFuturesService:
             logger.warning(f"[{sym}] leverage: {e}")
         self._leverage_set.add(sym)
 
-    def _round_qty(self, sym: str, qty: float) -> float:
-        """Floor quantity to Binance LOT_SIZE step (avoids -1111 precision errors)."""
+    def _round_qty(self, sym: str, qty: float, round_up: bool = False) -> float:
+        """Round quantity to Binance LOT_SIZE step (avoids -1111 precision errors).
+
+        Defaults to flooring, which is the safe direction for a caller-supplied
+        quantity (never order more than requested). Pass `round_up=True` when
+        `qty` is itself a *minimum* required quantity (e.g. derived from
+        Binance's MIN_NOTIONAL filter) — flooring a minimum can round it back
+        below the threshold it was meant to satisfy and trigger -4164.
+        """
         import math
         step = self._lot_step.get(sym) or MIN_QTY.get(sym, 0.001)
         min_q = self._lot_min.get(sym) or MIN_QTY.get(sym, step)
         if step <= 0:
             step = 0.001
-        rounded = math.floor(qty / step + 1e-9) * step
+        if round_up:
+            rounded = math.ceil(qty / step - 1e-9) * step
+        else:
+            rounded = math.floor(qty / step + 1e-9) * step
         if rounded < min_q:
             rounded = math.ceil(min_q / step - 1e-9) * step
         prec = self._qty_precision.get(sym)
@@ -317,10 +327,15 @@ class BinanceFuturesService:
             qty = max(min_qty, notional_qty, min_notional_qty)
         else:
             qty = min_qty
-        rounded = self._round_qty(sym, qty)
-        # Final safety: ensure rounded qty still meets min_qty
+        # Round up: `qty` is a *minimum* viable size here, so flooring it to the
+        # LOT_SIZE step could push the resulting notional back under Binance's
+        # MIN_NOTIONAL filter and cause a -4164 rejection at order time.
+        rounded = self._round_qty(sym, qty, round_up=True)
+        # Final safety: ensure rounded qty still meets min_qty and min_notional.
         if rounded < min_qty:
-            rounded = self._round_qty(sym, min_qty)
+            rounded = self._round_qty(sym, min_qty, round_up=True)
+        if price > 0 and rounded * price < min_notional:
+            rounded = self._round_qty(sym, min_notional / price, round_up=True)
         logger.info(f"[Binance] Quantity for {sym}: {rounded:.6f} @ ${price:.2f} (${trade_usdt} USDT, minNotional=${min_notional})")
         return rounded
 
@@ -695,8 +710,10 @@ class BinanceFuturesService:
                 _actual_notional = quantity * price
                 if _actual_notional < _min_not:
                     _old_qty = quantity
-                    import math
-                    quantity = self._round_qty(futures_sym, math.ceil(_min_not / price * 10000) / 10000)
+                    # round_up=True: this is a minimum required quantity, so
+                    # flooring it to the LOT_SIZE step (the default direction)
+                    # can undo the bump and land back under `_min_not` -> -4164.
+                    quantity = self._round_qty(futures_sym, _min_not / price, round_up=True)
                     logger.info(
                         f"[Binance] Notional floor: {futures_sym} bumped qty {_old_qty:.6f} -> {quantity:.6f} "
                         f"(${_actual_notional:.2f} < min ${_min_not:.0f})"
