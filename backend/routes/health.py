@@ -2,6 +2,9 @@ from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 import asyncio
 import json
+from datetime import datetime
+
+from backend.services.sentry_state import get_trading_status, is_trading_allowed
 
 router = APIRouter()
 
@@ -13,11 +16,12 @@ async def root():
 
 @router.get("/health")
 async def health_check():
-    from datetime import datetime
     return {
         "status": "ok",
         "timestamp": datetime.now().isoformat(),
-        "service": "trading-platform-api"
+        "service": "trading-platform-api",
+        "trading_allowed": is_trading_allowed(),
+        "trading_status": get_trading_status().value,
     }
 
 

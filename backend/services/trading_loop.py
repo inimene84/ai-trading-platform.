@@ -21,6 +21,7 @@ from backend.services.binance_market_data import binance_market_data
 from backend.strategies.market_regime import MarketRegimeDetector
 from backend.services.unified_trading import UnifiedTrading, UnifiedOrder, OrderSide, OrderType
 from backend.services.position_manager import get_position_manager
+from backend.services.sentry_state import get_trading_status, is_trading_allowed
 from backend.services.trading_loop_helpers import (
     EmergencyExitManager,
     BrokerPositionSyncService,
@@ -155,6 +156,8 @@ class TradingLoopService:
             "cash": float(balance_info.get("available", balance_info.get("balance", 0.0))),
             "equity": float(balance_info.get("equity", balance_info.get("balance", 0.0))),
             "margin_used": float(balance_info.get("margin_used", 0.0)),
+            "trading_allowed": is_trading_allowed(),
+            "trading_status": get_trading_status().value,
         }
 
     async def start(
@@ -322,6 +325,21 @@ class TradingLoopService:
 
     async def _run_cycle(self):
         """Execute one trading cycle across all symbols in parallel."""
+        if not is_trading_allowed():
+            sentry_status = get_trading_status().value
+            logger.warning(
+                f"[SENTRY] Trading halted ({sentry_status}) — skipping cycle"
+            )
+            self._state = "halted"
+            return {
+                "signals": 0,
+                "trades": 0,
+                "sentry_halted": True,
+                "trading_status": sentry_status,
+            }
+        if self._state == "halted":
+            self._state = "running"
+
         # 0. Refresh RiskConfig from environment variables / .env
         from backend.services.risk_config import refresh_risk_config
         self.risk_config = refresh_risk_config()
