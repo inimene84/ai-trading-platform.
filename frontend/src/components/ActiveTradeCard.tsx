@@ -1,6 +1,5 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { X, Edit3, TrendingUp, TrendingDown, Clock, ChevronUp, ChevronDown } from 'lucide-react';
-import { fetchBinance } from '../services/binanceProxy';
 
 export interface ActiveTrade {
   id: number | string;
@@ -101,12 +100,14 @@ export function ActiveTradeCard({ trade, onClose, onModify }: ActiveTradeCardPro
           p = data.price ?? data.current_price ?? data.last ?? null;
         }
       } else {
-        const res = await fetchBinance(
-          `https://api.binance.com/api/v3/ticker/price?symbol=${binanceSym}`
+        // Position P&L must use the same futures mark source as the backend,
+        // not Binance spot (basis/funding can make them diverge).
+        const res = await fetch(
+          `/api/backend/trading/price?symbol=${encodeURIComponent(binanceSym)}`
         );
         if (res.ok) {
           const data = await res.json();
-          p = parseFloat(data.price);
+          p = Number(data.price ?? data.current_price ?? data.last);
         }
       }
       if (p !== null && !isNaN(p)) {

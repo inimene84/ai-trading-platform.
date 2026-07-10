@@ -13,16 +13,9 @@ interface Task {
   progress: number;
 }
 
-const mockTasks: Task[] = [
-  { id: 'tsk_001', name: 'Model Backtesting: Q3 Data', type: 'Backtest', status: 'running', startTime: '10 mins ago', progress: 45 },
-  { id: 'tsk_002', name: 'Fetch Binance Historical (BTC/USDT)', type: 'Data Sync', status: 'completed', startTime: '1 hr ago', duration: '12s', progress: 100 },
-  { id: 'tsk_003', name: 'Train Agent: Sentiment Analyzer', type: 'Training', status: 'failed', startTime: '2 hrs ago', duration: '45m', progress: 82 },
-  { id: 'tsk_004', name: 'Generate Daily Trading Report', type: 'Reporting', status: 'pending', progress: 0 },
-  { id: 'tsk_005', name: 'Sync Portfolio Balances', type: 'Data Sync', status: 'completed', startTime: '3 hrs ago', duration: '2s', progress: 100 },
-];
-
 export const TaskListView: React.FC = () => {
-  const [tasks, setTasks] = useState<Task[]>(mockTasks);
+  // No task API is connected yet. Never present fabricated operational jobs.
+  const tasks: Task[] = [];
   const [searchTerm, setSearchTerm] = useState('');
 
   const filteredTasks = tasks.filter(t => t.name.toLowerCase().includes(searchTerm.toLowerCase()) || t.type.toLowerCase().includes(searchTerm.toLowerCase()));
@@ -139,7 +132,7 @@ export const TaskListView: React.FC = () => {
             {filteredTasks.length === 0 && (
               <tr>
                 <td colSpan={5} className="px-6 py-12 text-center text-zinc-500 text-sm">
-                  No tasks found matching your search.
+                  Task monitoring is not connected to a backend task API.
                 </td>
               </tr>
             )}

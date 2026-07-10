@@ -65,23 +65,10 @@ export function MiniCandleChart({
             close: Number(c.close ?? c[4]),
             volume: Number(c.volume ?? c[5] ?? 0),
           })));
-        } else if (p !== null) {
-          // Generate synthetic candles with small noise
-          const base = Number(p);
-          const synthetic: Candle[] = Array.from({ length: CANDLE_COUNT }, (_, i) => {
-            const noise = (Math.random() - 0.5) * base * 0.002;
-            const o = base + noise;
-            const c = base + (Math.random() - 0.5) * base * 0.002;
-            return {
-              time: Date.now() - (CANDLE_COUNT - i) * 60000,
-              open: o,
-              high: Math.max(o, c) + Math.abs(noise) * 0.5,
-              low: Math.min(o, c) - Math.abs(noise) * 0.5,
-              close: c,
-              volume: 0,
-            };
-          });
-          setCandles(synthetic);
+        } else {
+          // A quote is not OHLC history. Leave the chart empty rather than
+          // drawing random candles that look like real market movement.
+          setCandles([]);
         }
         setError(false);
       } else {
