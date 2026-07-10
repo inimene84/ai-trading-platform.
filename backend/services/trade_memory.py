@@ -554,7 +554,11 @@ class TradeMemoryService:
             with SessionLocal() as db:
                 trades = (
                     db.query(Trade)
-                    .filter(sa.and_(Trade.status == "closed"))
+                    .filter(sa.and_(
+                        Trade.status == "closed",
+                        Trade.pnl.isnot(None),
+                        Trade.exit_price.isnot(None),
+                    ))
                     .order_by(Trade.closed_at.desc())
                     .limit(limit)
                     .all()
@@ -564,7 +568,7 @@ class TradeMemoryService:
                 pid = await self.record_trade(
                     symbol=t.symbol,
                     direction=t.direction,
-                    pnl=t.pnl or 0.0,
+                    pnl=float(t.pnl),
                     context=ctx,
                     entry_price=t.entry_price,
                     exit_price=t.exit_price,

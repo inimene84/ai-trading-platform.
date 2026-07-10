@@ -1144,7 +1144,13 @@ class BinanceFuturesService:
                 logger.info(f"  [MAKER] partial maker {executed}, topped up {remaining} at MARKET")
                 return final
         except Exception as e:
-            logger.warning(f"  [MAKER] reconcile error for {futures_sym} ({e}) — MARKET fallback for full qty")
+            # Fill quantity is unknown. Falling back for the FULL quantity can
+            # double the position when the maker order partially filled but
+            # status lookup failed. Abort; broker-sync orphan adoption will
+            # reconcile/protect any actual fill on the next cycle.
+            raise RuntimeError(
+                f"maker fill reconciliation uncertain for {futures_sym}: {e}"
+            ) from e
         return None
 
     def _native_trailing_enabled(self) -> bool:

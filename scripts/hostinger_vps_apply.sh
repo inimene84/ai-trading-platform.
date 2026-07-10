@@ -68,7 +68,7 @@ if [ -f .env ]; then
     sed -i 's/^TRADING_KILL_FLOOR_USDT=20/TRADING_KILL_FLOOR_USDT=65/' .env
     echo "  Bumped TRADING_KILL_FLOOR_USDT 20 -> 65"
   fi
-  grep -q '^NATIVE_TRAILING_ENABLED=' .env || echo 'NATIVE_TRAILING_ENABLED=true' >> .env
+  grep -q '^NATIVE_TRAILING_ENABLED=' .env || echo 'NATIVE_TRAILING_ENABLED=false' >> .env
   grep -q '^EQUITY_SIZING_ENABLED=' .env || echo 'EQUITY_SIZING_ENABLED=true' >> .env
   grep -q '^PAPER_TRADING=' .env || echo 'PAPER_TRADING=true' >> .env
   grep -q '^DRY_RUN_ALL=' .env || echo 'DRY_RUN_ALL=true' >> .env

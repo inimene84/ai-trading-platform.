@@ -384,6 +384,7 @@ class TradingLoopService:
         # ─────────────────────────────────────────────────────────────────────
 
         # ── C8: ACCOUNT-LEVEL KILL SWITCH ──────────────────────────────────
+        kill_switch_verified = True
         try:
             _acct = binance_futures_broker._get_client().futures_account()
             _kill_floor = self.risk_config.kill_floor_usdt
@@ -391,8 +392,9 @@ class TradingLoopService:
             # response — treat as "unknown" and skip rather than reading 0 and
             # either false-triggering or (worse) silently bypassing.
             if _acct is None or 'totalMarginBalance' not in _acct:
-                logger.warning(
-                    "[KILL SWITCH] Skipped: futures_account() returned no totalMarginBalance field"
+                kill_switch_verified = False
+                logger.error(
+                    "[KILL SWITCH] Equity unavailable; new entries will be blocked"
                 )
             else:
                 _equity = float(_acct.get('totalMarginBalance') or 0.0)
@@ -417,7 +419,10 @@ class TradingLoopService:
                     self._error = "KILL_SWITCH_TRIGGERED"
                     return {"signals": 0, "trades": 0, "kill_switch": True}
         except Exception as _ks_e:
-            logger.warning(f"[KILL SWITCH] Check skipped: {_ks_e}")
+            kill_switch_verified = False
+            logger.error(
+                f"[KILL SWITCH] Equity check failed; new entries will be blocked: {_ks_e}"
+            )
         # ─────────────────────────────────────────────────────────────────────
 
         # ── STEP 0: Emergency Position Manager BEFORE broker sync ──────────
@@ -465,11 +470,16 @@ class TradingLoopService:
 
         # ── P0 margin gates: decide ONCE per cycle whether new entries are
         # affordable, instead of letting every symbol fail at the broker.
-        self._entries_blocked = False
-        self._entries_blocked_reason = ""
+        self._entries_blocked = not kill_switch_verified
+        self._entries_blocked_reason = (
+            "kill-switch equity could not be verified"
+            if not kill_switch_verified else ""
+        )
         _min_avail = self.risk_config.min_available_margin_usdt
         _wallet_cap = self.risk_config.pyramid_max_wallet_pct
-        if self._cycle_available < _min_avail:
+        if not kill_switch_verified:
+            pass  # preserve the fail-closed reason above
+        elif self._cycle_available < _min_avail:
             self._entries_blocked = True
             self._entries_blocked_reason = (
                 f"available margin ${self._cycle_available:.2f} < floor ${_min_avail:.2f}"
@@ -751,6 +761,8 @@ class TradingLoopService:
         db = SessionLocal()
         _signals = 0
         _trades = 0
+        reserved_open_slot = False
+        open_slot_committed = False
 
         try:
             # 1. Fetch existing position (DB + live exchange — hedge mode can drift)
@@ -907,6 +919,11 @@ class TradingLoopService:
                         signal_status = "rejected"
                         signal_reason = f"{signal_reason} | SHORT exposure cap reached"
                         decision = None
+                    elif decision.action == "SELL" and getattr(self, "_cycle_equity", 0.0) > 0 and (_short_notional + _new_notional > self._cycle_equity * 0.8):
+                        logger.warning(f"  [ {symbol} ] SELL blocked: 80% Portfolio SHORT Correlation limit reached")
+                        signal_status = "rejected"
+                        signal_reason = f"{signal_reason} | 80% SHORT correlation cap reached"
+                        decision = None
                     else:
                         signal_status = "approved"
 
@@ -950,6 +967,7 @@ class TradingLoopService:
                         )
                         if order_result.success and not existing:
                             self._open_count += 1
+                            reserved_open_slot = True
                 if decision and order_result and order_result.success:
                     _trades = 1
                     filled_px = float(order_result.filled_price or decision.entry_price)
@@ -971,6 +989,7 @@ class TradingLoopService:
                     )
                     db.add(trade)
                     db.commit()
+                    open_slot_committed = True
 
                     # Write to InfluxDB for Grafana dashboards
                     try:
@@ -1047,6 +1066,9 @@ class TradingLoopService:
         except Exception as e:
             logger.error(f"Error processing {symbol}: {e}")
             db.rollback()
+            if reserved_open_slot and not open_slot_committed:
+                # Undo the in-cycle reservation if SQL persistence failed.
+                self._open_count = max(0, self._open_count - 1)
             return {"signals": 0, "trades": 0}
         finally:
             db.close()
