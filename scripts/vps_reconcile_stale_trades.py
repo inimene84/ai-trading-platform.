@@ -1,7 +1,8 @@
-from vps_ssh_common import ssh_cmd, SSH_BASE
 #!/usr/bin/env python3
 """One-off: close DB trade rows whose symbol is verified flat on the exchange."""
 import subprocess
+
+from vps_ssh_common import ssh_cmd
 
 REMOTE = r'''
 docker exec -i ai-trading-backend python3 - <<'PY'
