@@ -1649,23 +1649,18 @@ async def event_stream(topics: str = ""):
 async def get_price(symbol: str = "BTCUSDT"):
     """Return current mark/last price for a Binance Futures symbol."""
     from backend.services.binance_market_data import binance_market_data
+    sym = symbol.upper()
     try:
-        ticker = await binance_market_data.get_ticker_24h(symbol.upper())
+        ticker = await binance_market_data.get_ticker_24h(sym)
         if ticker:
-            return {"symbol": symbol.upper(), "price": ticker.get("lastPrice", 0.0),
-                    "change24h": ticker.get("priceChangePercent", 0.0)}
+            return {
+                "symbol": sym,
+                "price": ticker.get("lastPrice", 0.0),
+                "change24h": ticker.get("priceChangePercent", 0.0),
+            }
     except Exception:
         pass
-    # Fallback via Binance proxy endpoint data
-    try:
-        async with httpx.AsyncClient(timeout=8) as c:
-            r = await c.get(f"https://fapi.binance.com/fapi/v1/ticker/price?symbol={symbol.upper()}")
-            if r.status_code == 200:
-                d = r.json()
-                return {"symbol": symbol.upper(), "price": float(d.get("price", 0)), "change24h": 0.0}
-    except Exception:
-        pass
-    return {"symbol": symbol.upper(), "price": 0.0, "change24h": 0.0}
+    return {"symbol": sym, "price": 0.0, "change24h": 0.0}
 
 
 @router.get("/account/summary")

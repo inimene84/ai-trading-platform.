@@ -24,7 +24,8 @@ logger = logging.getLogger(__name__)
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 BINANCE_FAPI_BASE = "https://fapi.binance.com"
-CACHE_TTL = 300  # 5 minutes
+CACHE_TTL = 300  # 5 minutes (klines, OI, funding)
+TICKER_CACHE_TTL = int(os.getenv("TICKER_CACHE_TTL_SEC", "15"))  # dashboard price polls
 
 # Max concurrent outbound requests to Binance public API.
 # Prevents burst overload that triggers IP bans (2400 req/min limit).
@@ -57,14 +58,15 @@ class BinanceMarketDataService:
         self._http_client: Optional[httpx.AsyncClient] = None
 
     # ── Cache helpers ─────────────────────────────────────────────────────
-    def _get_cached(self, key: str) -> Optional[any]:
+    def _get_cached(self, key: str, ttl: Optional[int] = None) -> Optional[any]:
         entry = self._cache.get(key)
-        if entry and (time.time() - entry['ts']) < CACHE_TTL:
+        limit = CACHE_TTL if ttl is None else ttl
+        if entry and (time.time() - entry['ts']) < limit:
             return entry['data']
         return None
 
-    def _set_cache(self, key: str, data: any):
-        self._cache[key] = {'ts': time.time(), 'data': data}
+    def _set_cache(self, key: str, data: any, ttl: Optional[int] = None):
+        self._cache[key] = {'ts': time.time(), 'data': data, 'ttl': ttl}
 
     # ── HTTP helper ───────────────────────────────────────────────────────
     async def _get_client(self) -> httpx.AsyncClient:
@@ -283,7 +285,7 @@ class BinanceMarketDataService:
     async def get_ticker_24h(self, symbol: str) -> Optional[dict]:
         """Get 24h ticker statistics for a symbol."""
         cache_key = f"ticker24h:{symbol}"
-        cached = self._get_cached(cache_key)
+        cached = self._get_cached(cache_key, ttl=TICKER_CACHE_TTL)
         if cached is not None:
             return cached
 
@@ -305,8 +307,7 @@ class BinanceMarketDataService:
             'lowPrice': float(data.get('lowPrice', 0)),
             'count': int(data.get('count', 0)),
         }
-        self._set_cache(cache_key, result)
-        # ── Publish to DataHub so AI tools / subscribers get it instantly ──
+        self._set_cache(cache_key, result, ttl=TICKER_CACHE_TTL)
         try:
             from backend.services.data_hub import DataHub
             DataHub().publish(f"market:quote:{symbol.upper()}", {
@@ -330,12 +331,12 @@ class BinanceMarketDataService:
         # A filtered cache caused stale entries when TRADING_SYMBOLS grew (13/20
         # pairs falsely reported as no-ticker in the symbol-quality gate).
         raw_key = "ticker24h:raw"
-        data = self._get_cached(raw_key)
+        data = self._get_cached(raw_key, ttl=TICKER_CACHE_TTL)
         if data is None:
             data = await self._request('/fapi/v1/ticker/24hr')
             if not data:
                 return []
-            self._set_cache(raw_key, data)
+            self._set_cache(raw_key, data, ttl=TICKER_CACHE_TTL)
 
         results = []
         for entry in data:

@@ -53,6 +53,24 @@ def test_closing_base_row_does_not_clear_pyramid_history():
     assert layers == {"ETHUSDT": [101.0, 102.0]}
 
 
+def test_chunk_symbols_splits_into_batches():
+    symbols = [f"S{i}USDT" for i in range(20)]
+    batches = TradingLoopService._chunk_symbols(symbols, 5)
+    assert len(batches) == 4
+    assert all(len(b) == 5 for b in batches)
+    assert [s for batch in batches for s in batch] == symbols
+
+
+def test_chunk_symbols_handles_remainder():
+    symbols = ["AUSDT", "BUSDT", "CUSDT", "DUSDT", "EUSDT", "FUSDT", "GUSDT"]
+    batches = TradingLoopService._chunk_symbols(symbols, 3)
+    assert batches == [
+        ["AUSDT", "BUSDT", "CUSDT"],
+        ["DUSDT", "EUSDT", "FUSDT"],
+        ["GUSDT"],
+    ]
+
+
 def test_status_uses_broker_balance():
     loop = TradingLoopService()
     mock_broker = MagicMock()

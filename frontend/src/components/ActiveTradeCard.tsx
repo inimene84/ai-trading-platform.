@@ -87,7 +87,7 @@ export function ActiveTradeCard({ trade, onClose, onModify }: ActiveTradeCardPro
   const isForex = trade.symbol.endsWith('=X');
   const binanceSym = trade.symbol.replace('=X', '').replace('/', '');
 
-  // Live price polling every 5 seconds
+  // Live price polling — backend caches tickers (TICKER_CACHE_TTL_SEC); 15s is enough for P&L cards
   const fetchLivePrice = useCallback(async () => {
     try {
       let p: number | null = null;
@@ -129,7 +129,7 @@ export function ActiveTradeCard({ trade, onClose, onModify }: ActiveTradeCardPro
 
   useEffect(() => {
     fetchLivePrice();
-    const iv = setInterval(fetchLivePrice, 5000);
+    const iv = setInterval(fetchLivePrice, 15000);
     return () => clearInterval(iv);
   }, [fetchLivePrice]);
 

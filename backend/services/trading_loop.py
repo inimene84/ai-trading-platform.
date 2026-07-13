@@ -107,7 +107,7 @@ class TradingLoopService:
         # Env-tunable so a larger scan universe can raise throughput slightly
         # without a rebuild (each symbol costs ~40 API weight; budget is 2400/min).
         self._symbol_semaphore = asyncio.Semaphore(
-            max(1, int(os.getenv("SYMBOL_CONCURRENCY", "3")))
+            max(1, int(os.getenv("SYMBOL_CONCURRENCY", "2")))
         )
         # New-bar gate: symbol → open-time of the last bar the entry pipeline
         # evaluated. The loop cycles every 15 min on 1h bars, so without this
@@ -406,28 +406,44 @@ class TradingLoopService:
         # ─────────────────────────────────────────────────────────────────────
 
         # ── C8: ACCOUNT-LEVEL KILL SWITCH ──────────────────────────────────
+        # Snapshot account balance ONCE per cycle — reused for kill switch and
+        # margin gates (was 2x futures_account() per cycle).
         kill_switch_verified = True
         try:
-            _acct = binance_futures_broker._get_client().futures_account()
-            _kill_floor = self.risk_config.kill_floor_usdt
-            # Only act on a VALID reading. A missing field means malformed/partial
-            # response — treat as "unknown" and skip rather than reading 0 and
-            # either false-triggering or (worse) silently bypassing.
-            if _acct is None or 'totalMarginBalance' not in _acct:
-                kill_switch_verified = False
-                logger.error(
-                    "[KILL SWITCH] Equity unavailable; new entries will be blocked"
-                )
-            else:
-                _equity = float(_acct.get('totalMarginBalance') or 0.0)
-                # Trigger on ANY valid equity at/below floor — including $0.00.
-                # A drained/empty account ($0) is exactly when the loop MUST stop.
-                if _equity <= _kill_floor:
+            self._cycle_balance = get_active_broker().get_balance()
+        except Exception as _be:
+            logger.warning(f"Could not fetch balance for cycle: {_be}")
+            self._cycle_balance = {}
+            kill_switch_verified = False
+            logger.error(
+                "[KILL SWITCH] Equity unavailable; new entries will be blocked"
+            )
+
+        _bal = self._cycle_balance
+        try:
+            self._cycle_equity = float(_bal.get("equity", _bal.get("balance", 0.0)) or 0.0)
+            self._cycle_available = float(_bal.get("available", 0.0) or 0.0)
+            self._cycle_margin_used = float(_bal.get("margin_used", 0.0) or 0.0)
+        except Exception as _be:
+            logger.warning(f"Could not parse balance: {_be}")
+            self._cycle_equity = 0.0
+            self._cycle_available = 0.0
+            self._cycle_margin_used = 0.0
+
+        if kill_switch_verified:
+            try:
+                _kill_floor = self.risk_config.kill_floor_usdt
+                _equity = self._cycle_equity
+                if _equity <= 0 and "equity" not in _bal and "balance" not in _bal:
+                    kill_switch_verified = False
+                    logger.error(
+                        "[KILL SWITCH] Equity unavailable; new entries will be blocked"
+                    )
+                elif _equity <= _kill_floor:
                     logger.critical(
                         f"[KILL SWITCH] Equity ${_equity:.2f} <= floor ${_kill_floor:.2f} — LOOP STOPPED. "
                         f"\u26a0\ufe0f Manual restart required after depositing funds above ${_kill_floor:.0f}."
                     )
-                    # Write kill event to InfluxDB for Grafana alerting
                     try:
                         await influx._write(
                             influx.BUCKET_SYSTEM, 'system_event',
@@ -435,16 +451,16 @@ class TradingLoopService:
                             {'equity': float(_equity), 'kill_floor': float(_kill_floor)}
                         )
                     except Exception:
-                        pass  # best-effort
+                        pass
                     self._state = "stopped"
                     self._running = False
                     self._error = "KILL_SWITCH_TRIGGERED"
                     return {"signals": 0, "trades": 0, "kill_switch": True}
-        except Exception as _ks_e:
-            kill_switch_verified = False
-            logger.error(
-                f"[KILL SWITCH] Equity check failed; new entries will be blocked: {_ks_e}"
-            )
+            except Exception as _ks_e:
+                kill_switch_verified = False
+                logger.error(
+                    f"[KILL SWITCH] Equity check failed; new entries will be blocked: {_ks_e}"
+                )
         # ─────────────────────────────────────────────────────────────────────
 
         # ── STEP 0: Emergency Position Manager BEFORE broker sync ──────────
@@ -472,23 +488,6 @@ class TradingLoopService:
         min_confidence = self.risk_config.min_signal_strength
         ai_threshold = self.risk_config.ai_analysis_threshold
         max_positions = self.risk_config.max_positions
-        # Snapshot account balance ONCE per cycle — cached and reused everywhere
-        # below to avoid redundant Binance API calls (was 3x per cycle).
-        try:
-            self._cycle_balance = get_active_broker().get_balance()
-        except Exception as _be:
-            logger.warning(f"Could not fetch balance for cycle: {_be}")
-            self._cycle_balance = {}
-        _bal = self._cycle_balance
-        try:
-            self._cycle_equity = float(_bal.get("equity", _bal.get("balance", 0.0)) or 0.0)
-            self._cycle_available = float(_bal.get("available", 0.0) or 0.0)
-            self._cycle_margin_used = float(_bal.get("margin_used", 0.0) or 0.0)
-        except Exception as _be:
-            logger.warning(f"Could not parse balance: {_be}")
-            self._cycle_equity = 0.0
-            self._cycle_available = 0.0
-            self._cycle_margin_used = 0.0
 
         # ── P0 margin gates: decide ONCE per cycle whether new entries are
         # affordable, instead of letting every symbol fail at the broker.
@@ -628,7 +627,7 @@ class TradingLoopService:
                                     # Verify position is actually flat on the exchange to prevent quantity drift
                                     try:
                                         pos_qty = 0.0
-                                        for p in broker.get_positions(raise_on_error=True):
+                                        for p in self._cycle_positions:
                                             if p.get('symbol') == binance_futures_broker._to_futures_symbol(trade.symbol):
                                                 pos_qty = float(p.get('quantity', 0))
                                                 break
@@ -701,13 +700,9 @@ class TradingLoopService:
         # symbol task and suspended protection maintenance for the full cycle.
         # ── SYMBOL-QUALITY GATE: drop blacklisted + illiquid symbols ──
         tradeable = await self._filter_tradeable_symbols(self._symbols)
-        tasks = [
-            self._process_symbol(
-                symbol, min_confidence, ai_threshold, max_positions
-            )
-            for symbol in tradeable
-        ]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        results = await self._run_symbol_batches(
+            tradeable, min_confidence, ai_threshold, max_positions,
+        )
 
         _signals_generated = 0
         _trades_executed = 0
@@ -762,7 +757,7 @@ class TradingLoopService:
                         unrealized_pnl=bal.get('unrealized_pnl', 0.0),
                         margin_used=bal.get('margin_used', 0.0),
                     )
-                    positions = binance_futures_broker.get_positions()
+                    positions = self._cycle_positions
                     for pos in positions:
                         await influx.write_binance_position(
                             symbol=pos['symbol'],
@@ -778,6 +773,45 @@ class TradingLoopService:
                     logger.warning(f'Binance InfluxDB write error: {_bf_e}')
         finally:
             db.close()
+
+    @staticmethod
+    def _chunk_symbols(symbols: list[str], batch_size: int) -> list[list[str]]:
+        """Split symbols into fixed-size batches for rate-limit-friendly scanning."""
+        size = max(1, batch_size)
+        return [symbols[i:i + size] for i in range(0, len(symbols), size)]
+
+    async def _run_symbol_batches(
+        self,
+        symbols: list[str],
+        min_confidence: float,
+        ai_threshold: float,
+        max_positions: int,
+    ) -> list:
+        """Process symbols in 2–4 batches with pauses to stay under Binance weight limits."""
+        batch_size = max(1, int(os.getenv("SYMBOL_BATCH_SIZE", "5")))
+        pause_sec = max(0.0, float(os.getenv("SYMBOL_BATCH_PAUSE_SEC", "3")))
+        batches = self._chunk_symbols(symbols, batch_size)
+        concurrency = max(1, int(os.getenv("SYMBOL_CONCURRENCY", "2")))
+        logger.info(
+            f"Symbol scan: {len(symbols)} symbols in {len(batches)} batch(es) "
+            f"(batch_size={batch_size}, pause={pause_sec}s, concurrency={concurrency})"
+        )
+
+        all_results: list = []
+        for batch_idx, batch in enumerate(batches):
+            if batch_idx > 0 and pause_sec > 0:
+                logger.info(
+                    f"Symbol batch pause {pause_sec:.0f}s before batch "
+                    f"{batch_idx + 1}/{len(batches)} ({', '.join(batch)})"
+                )
+                await asyncio.sleep(pause_sec)
+            tasks = [
+                self._process_symbol(symbol, min_confidence, ai_threshold, max_positions)
+                for symbol in batch
+            ]
+            batch_results = await asyncio.gather(*tasks, return_exceptions=True)
+            all_results.extend(batch_results)
+        return all_results
 
     async def _process_symbol(self, symbol: str, min_confidence: float, ai_threshold: float, max_positions: int):
         """Analyze a single symbol and execute a trade if conditions are met."""
