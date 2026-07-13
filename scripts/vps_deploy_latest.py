@@ -8,7 +8,7 @@ from vps_ssh_common import ssh_cmd
 DEPLOY = r"""
 cd /root/ai-trading-platform-v3
 git pull origin main 2>&1 | tail -3
-docker compose -f docker-compose.prod.yml up -d --build backend 2>&1 | tail -5
+docker compose -f docker-compose.prod.yml up -d --build backend sentry-watchdog 2>&1 | tail -8
 for i in $(seq 1 24); do
   curl -sf http://127.0.0.1:8001/health >/dev/null && { echo backend_healthy; break; }
   sleep 5
