@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 
 from backend.database.models import Trade, PortfolioSnapshot
 from backend.services.influxdb_writer import influx
+from backend.services.decision_engine import atr_from_bars
 from backend.services.unified_trading import UnifiedTrading, UnifiedOrder, OrderSide, OrderType
 from backend.services.position_manager import get_position_manager
 
@@ -363,16 +364,7 @@ class TrailingStopManager:
 
         try:
             current_price = bars[-1]["close"]
-            n = min(15, len(bars) - 1)
-            if n < 2:
-                return
-            highs = [b["high"] for b in bars[-n:]]
-            lows = [b["low"] for b in bars[-n:]]
-            closes = [b["close"] for b in bars[-(n + 1):-1]]
-            trs = []
-            for h, l_val, c in zip(highs, lows, closes):
-                trs.append(max(h - l_val, abs(h - c), abs(l_val - c)))
-            atr = sum(trs) / len(trs) if trs else 0.0
+            atr = atr_from_bars(bars, current_price)
             if atr <= 0:
                 atr = current_price * 0.02
 
@@ -470,17 +462,9 @@ class PartialTPManager:
         if not bars or len(bars) < 16:
             return
         try:
-            import numpy as np
             current_price = bars[-1]["close"]
 
-            n = min(15, len(bars) - 1)
-            if n < 2:
-                return
-            highs = np.array([b["high"] for b in bars[-n:]])
-            lows = np.array([b["low"] for b in bars[-n:]])
-            closes = np.array([b["close"] for b in bars[-(n + 1):-1]])
-            tr = np.maximum(np.maximum(highs - lows, np.abs(highs - closes)), np.abs(lows - closes))
-            atr = float(np.mean(tr))
+            atr = atr_from_bars(bars, current_price)
             if atr <= 0:
                 atr = current_price * 0.02
 

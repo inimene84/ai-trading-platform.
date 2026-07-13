@@ -178,8 +178,9 @@ class PaperTradingEngine:
         with self._lock:
             self._portfolios[pid] = pf
         # ── Persist to Postgres ──
-        db = _get_db()
+        db = None
         try:
+            db = _get_db()
             from backend.database.models import PaperPortfolio as PP
             db.add(PP(
                 portfolio_id=pid, name=name, broker=exchange or "paper",
@@ -188,10 +189,12 @@ class PaperTradingEngine:
             ))
             db.commit()
         except Exception as e:
-            db.rollback()
+            if db is not None:
+                db.rollback()
             logger.warning(f"Paper portfolio DB persist failed: {e}")
         finally:
-            db.close()
+            if db is not None:
+                db.close()
         logger.info(f"Paper portfolio created: {name} (id={pid}, balance={balance}, leverage={leverage}x)")
         return pid
 
@@ -279,6 +282,7 @@ class PaperTradingEngine:
             self._orders[oid] = rec
 
             # Persist order to DB
+            db = None
             try:
                 db = _get_db()
                 from backend.database.models import PaperOrder as PO
@@ -291,8 +295,12 @@ class PaperTradingEngine:
                 ))
                 db.commit()
             except Exception as e:
-                db.rollback()
+                if db is not None:
+                    db.rollback()
                 logger.warning(f"Paper order DB persist failed: {e}")
+            finally:
+                if db is not None:
+                    db.close()
 
             # Auto-fill market orders
             if order.order_type == OrderType.MARKET:
@@ -330,6 +338,7 @@ class PaperTradingEngine:
                 return UnifiedOrderResponse(False, order_id, f"Order already {rec['status']}", "paper")
             rec["status"] = "cancelled"
         # Persist cancel
+        db = None
         try:
             db = _get_db()
             from backend.database.models import PaperOrder as PO
@@ -338,8 +347,12 @@ class PaperTradingEngine:
                 db_order.status = "cancelled"
                 db.commit()
         except Exception as e:
-            db.rollback()
+            if db is not None:
+                db.rollback()
             logger.warning(f"Paper cancel DB persist failed: {e}")
+        finally:
+            if db is not None:
+                db.close()
         return UnifiedOrderResponse(True, order_id, "Order cancelled", "paper")
 
     def get_orders(self, portfolio_id: str, status: str = "") -> List[dict]:
@@ -446,6 +459,7 @@ class PaperTradingEngine:
         pf["trades"].append(trade)
 
         # ── Persist fill to DB ──
+        db = None
         try:
             db = _get_db()
             from backend.database.models import PaperTrade as PT, PaperOrder as PO, PaperPortfolio as PP
@@ -469,8 +483,12 @@ class PaperTradingEngine:
                 db_pf.margin_used = pf.get("margin_used", 0.0)
             db.commit()
         except Exception as e:
-            db.rollback()
+            if db is not None:
+                db.rollback()
             logger.warning(f"Paper fill DB persist failed: {e}")
+        finally:
+            if db is not None:
+                db.close()
 
         logger.info(
             f"Paper fill: {sym} {order['side']} {qty} @ {fill_price:.4f} "

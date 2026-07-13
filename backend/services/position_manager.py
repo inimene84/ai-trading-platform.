@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from dataclasses import dataclass
 import logging
 
-from backend.services.risk_config import get_risk_config
+from backend.services.risk_config import refresh_risk_config
 
 logger = logging.getLogger("position_manager")
 
@@ -21,7 +21,7 @@ class ExitOpinion:
 
 class PositionManager:
     def __init__(self):
-        self.config = get_risk_config()
+        self.config = refresh_risk_config()
 
     @property
     def emergency_drawdown_pct(self) -> float:
@@ -31,8 +31,7 @@ class PositionManager:
                                     current_price: float, opinion_layer_fn=None,
                                     current_funding_rate: float = 0.0) -> ExitOpinion:
         # Re-read config each call so .env changes are respected at runtime
-        self.config = get_risk_config()
-
+        self.config = refresh_risk_config()
         entry_price = trade.get("entry_price", current_price)
         direction = trade.get("direction", "BUY")
         opened_at = trade.get("opened_at")

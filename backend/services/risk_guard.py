@@ -4,8 +4,8 @@ from datetime import datetime, timezone, timedelta
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from backend.services.risk_config import RiskConfig, get_trading_mode
-from backend.services.trading_mode import TradingMode
+from backend.services.risk_config import RiskConfig
+from backend.services.trading_mode import TradingMode, get_trading_mode
 from backend.database.models import Trade, PortfolioSnapshot
 
 logger = logging.getLogger(__name__)

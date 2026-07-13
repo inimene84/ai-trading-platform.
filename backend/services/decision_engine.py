@@ -1,6 +1,5 @@
 import os
 import logging
-import numpy as np
 from typing import Optional, Dict, Any, List
 from dataclasses import dataclass
 
@@ -38,6 +37,22 @@ def _reviewer_gate_fail_open() -> bool:
     return get_trading_mode() != TradingMode.LIVE
 
 
+def atr_from_bars(bars: List[Dict[str, Any]], fallback_price: float, periods: int = 14) -> float:
+    """True-range ATR using aligned prev-close windows (avoids length mismatch on short series)."""
+    if not bars:
+        return fallback_price * 0.02
+    window = bars[-(periods + 1):] if len(bars) >= periods + 1 else bars
+    if len(window) < 2:
+        return fallback_price * 0.02
+    trs = []
+    for i in range(1, len(window)):
+        h = window[i]["high"]
+        l_val = window[i]["low"]
+        prev_c = window[i - 1]["close"]
+        trs.append(max(h - l_val, abs(h - prev_c), abs(l_val - prev_c)))
+    return sum(trs) / len(trs) if trs else fallback_price * 0.02
+
+
 def compute_sl_tp_levels(
     bars: List[Dict[str, Any]],
     direction: str,
@@ -48,14 +63,7 @@ def compute_sl_tp_levels(
 ) -> tuple[float, float]:
     """ATR-based stop-loss and take-profit for an entry (shared by loop + manual orders)."""
     try:
-        n = min(15, len(bars) - 1)  # need n bars + 1 previous close
-        if n < 2:
-            raise ValueError("too few bars")
-        highs = np.array([b["high"] for b in bars[-n:]])
-        lows = np.array([b["low"] for b in bars[-n:]])
-        closes = np.array([b["close"] for b in bars[-(n + 1):-1]])
-        tr = np.maximum(np.maximum(highs - lows, np.abs(highs - closes)), np.abs(lows - closes))
-        atr = float(np.mean(tr))
+        atr = atr_from_bars(bars, entry_price)
     except Exception:
         atr = entry_price * 0.02
 

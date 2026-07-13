@@ -4,6 +4,7 @@ from unittest.mock import MagicMock
 from backend.services.decision_engine import (
     DecisionEngine,
     compute_sl_tp_levels,
+    atr_from_bars,
     pyramid_price_improved,
 )
 from backend.services.risk_config import RiskConfig
@@ -52,6 +53,19 @@ def test_compute_sl_tp_sell_direction(risk_config):
     sl, tp = compute_sl_tp_levels(bars, "SELL", 100.0, risk_config)
     assert sl > 100.0
     assert tp < 100.0
+
+
+def test_compute_sl_tp_honors_zero_signal_sl(risk_config):
+    bars = _make_bars(20, base=100.0)
+    sl, tp = compute_sl_tp_levels(bars, "BUY", 100.0, risk_config, signal_sl=0.0, signal_tp=120.0)
+    assert sl == 0.0
+    assert tp == 120.0
+
+
+def test_atr_from_bars_handles_short_series():
+    bars = _make_bars(15, base=100.0)
+    atr = atr_from_bars(bars, 100.0)
+    assert atr > 0
 
 
 def test_short_pyramid_requires_price_decline():
