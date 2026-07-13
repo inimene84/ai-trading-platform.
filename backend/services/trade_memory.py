@@ -41,51 +41,18 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from backend.utils.embeddings import generate_text_embedding
+from backend.services.qdrant_client import (
+    AsyncQdrantClient,
+    Distance,
+    FieldCondition,
+    Filter,
+    MatchValue,
+    PointStruct,
+    QDRANT_AVAILABLE,
+    VectorParams,
+)
 
 logger = logging.getLogger(__name__)
-
-# Reuse the existing async Qdrant client primitives. We talk to a *separate*
-# collection so we never collide with the crypto-news archive.
-try:
-    from qdrant_client import AsyncQdrantClient
-    from qdrant_client.models import (
-        VectorParams, Distance, PointStruct, Filter, FieldCondition, MatchValue,
-    )
-    _QDRANT_AVAILABLE = True
-except ImportError:  # pragma: no cover - exercised only when lib is absent
-    _QDRANT_AVAILABLE = False
-    AsyncQdrantClient = None  # type: ignore
-
-    # Lightweight stand-ins so the module imports and unit tests run even when
-    # qdrant-client is not installed (mirrors qdrant_client.py's own fallback).
-    class VectorParams:  # type: ignore
-        def __init__(self, size=0, distance=None):
-            self.size = size
-            self.distance = distance
-
-    class Distance:  # type: ignore
-        COSINE = "Cosine"
-
-    class PointStruct:  # type: ignore
-        def __init__(self, id=None, vector=None, payload=None):
-            self.id = id
-            self.vector = vector
-            self.payload = payload
-
-    class Filter:  # type: ignore
-        def __init__(self, must=None, should=None, must_not=None):
-            self.must = must
-            self.should = should
-            self.must_not = must_not
-
-    class FieldCondition:  # type: ignore
-        def __init__(self, key=None, match=None):
-            self.key = key
-            self.match = match
-
-    class MatchValue:  # type: ignore
-        def __init__(self, value=None):
-            self.value = value
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -252,7 +219,7 @@ class TradeMemoryService:
         self._client = None
         self._collection_ready = False
         self._task = None
-        if _QDRANT_AVAILABLE and self.enabled:
+        if QDRANT_AVAILABLE and self.enabled:
             try:
                 self._client = AsyncQdrantClient(
                     url=self.url,
@@ -262,7 +229,7 @@ class TradeMemoryService:
             except Exception as e:  # pragma: no cover
                 logger.warning(f"TradeMemory: Qdrant client init failed: {e}")
                 self._client = None
-        elif not _QDRANT_AVAILABLE:
+        elif not QDRANT_AVAILABLE:
             logger.warning("TradeMemory: qdrant-client not installed — recall disabled")
 
     def start(self) -> None:
@@ -483,7 +450,7 @@ class TradeMemoryService:
     async def status(self) -> Dict[str, Any]:
         info: Dict[str, Any] = {
             "enabled": self.enabled,
-            "qdrant_available": _QDRANT_AVAILABLE,
+            "qdrant_available": QDRANT_AVAILABLE,
             "collection": self.collection,
             "vector_size": self.vector_size,
             "recall_k": self.recall_k,
