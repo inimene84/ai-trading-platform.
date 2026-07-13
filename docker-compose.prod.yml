@@ -23,7 +23,7 @@ services:
       GEMINI_API_KEY: ${GOOGLE_API_KEY}
       PERSONA_LLM_PROVIDER: ${PERSONA_LLM_PROVIDER:-kie}
       PERSONA_LLM_MODEL: ${PERSONA_LLM_MODEL:-claude-sonnet-4-6}
-      GROQ_API_KEY: ${LITELLM_API_KEY:?LITELLM_API_KEY must be set}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
       PERSONA_LLM_BASE_URL: ${PERSONA_LLM_BASE_URL:-https://api.kie.ai/v1}
       KIE_MODEL: claude-sonnet-4-6
       KIE_OPUS_MODEL: ${KIE_OPUS_MODEL:-claude-opus-4-6}
@@ -176,6 +176,34 @@ services:
       - influxdb
     networks:
       - trading-net
+  sentry-watchdog:
+    build:
+      context: .
+      dockerfile: sentry_watchdog/Dockerfile
+    container_name: ai-trading-sentry-watchdog
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      BACKEND_URL: http://backend:8000
+      SENTRY_WATCHDOG_TOKEN: ${SENTRY_WATCHDOG_TOKEN:-}
+      SENTRY_STATE_DIR: /app/data/sentry
+    volumes:
+      - app-data:/app/data
+    depends_on:
+      - backend
+    networks:
+      - trading-net
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: 3
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 256M
   mcp-server:
     build:
       context: .
