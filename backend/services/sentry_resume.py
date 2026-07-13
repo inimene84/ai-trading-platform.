@@ -112,6 +112,24 @@ async def safe_resume(
                 "state": state,
             }
 
+    # Re-place SL/TP that may have been stripped during watchdog halt / deploy restart.
+    protection_result: dict[str, Any] | None = None
+    try:
+        from backend.database.connection import SessionLocal
+        from backend.services.binance_futures_service import binance_futures_broker
+        from backend.services.trading_loop_helpers import ExchangeProtectionManager
+
+        db = SessionLocal()
+        try:
+            protection_result = ExchangeProtectionManager.restore_all_open_positions(
+                db, binance_futures_broker,
+            )
+        finally:
+            db.close()
+    except Exception as exc:
+        protection_result = {"error": str(exc)}
+        logger.warning("Protection restore on resume failed", error=str(exc))
+
     new_state = resume_trading(resumed_by=resumed_by)
     halted_at = state.get("halted_at")
     halt_reason = state.get("reason") or "unknown"
@@ -130,6 +148,13 @@ async def safe_resume(
             msg_lines.append(f"⚠️ Exchange-only positions: {', '.join(orphans)}")
         if reconcile_result.get("error"):
             msg_lines.append(f"Reconcile note: {reconcile_result['error']}")
+    if protection_result:
+        msg_lines.append(
+            f"Protection restore: checked={protection_result.get('checked', 0)} "
+            f"restored={protection_result.get('restored', 0)}"
+        )
+        if protection_result.get("error"):
+            msg_lines.append(f"Protection note: {protection_result['error']}")
 
     try:
         await send_telegram_message("\n".join(msg_lines), parse_mode="HTML")
@@ -140,6 +165,7 @@ async def safe_resume(
         "ok": True,
         "state": new_state,
         "reconcile": reconcile_result,
+        "protection": protection_result,
     }
 
 

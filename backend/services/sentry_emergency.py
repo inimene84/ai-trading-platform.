@@ -135,7 +135,7 @@ def _cancel_all_open_orders_sync() -> dict[str, Any]:
     errors: list[str] = []
     for sym in sorted(symbols):
         try:
-            binance_futures_broker.cancel_all_orders(sym)
+            binance_futures_broker.cancel_non_protective_orders(sym)
             cancelled += 1
         except Exception as exc:
             errors.append(f"{sym}: {exc}")
@@ -145,6 +145,7 @@ def _cancel_all_open_orders_sync() -> dict[str, Any]:
         "symbols_seen": len(symbols),
         "symbols_cancelled": cancelled,
         "errors": errors,
+        "mode": "non_protective_only",
     }
 
 

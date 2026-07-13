@@ -502,6 +502,35 @@ class BinanceFuturesService:
         except Exception as e:
             logger.debug(f"[{fsym}] cancel algo orders: {e}")
 
+    def _is_protective_order_type(self, order_type: str) -> bool:
+        upper = (order_type or "").upper()
+        return any(t in upper for t in self._PROTECTIVE_ORDER_TYPES)
+
+    def cancel_non_protective_orders(self, symbol: str) -> int:
+        """Cancel entry/limit orders only — preserve live SL/TP/trailing protection."""
+        fsym = self._to_futures_symbol(symbol)
+        if not fsym:
+            return 0
+        cancelled = 0
+        client = self._get_client()
+        for o in self.get_open_orders(raise_on_error=True):
+            if o.get("symbol") != fsym:
+                continue
+            if self._is_protective_order_type(o.get("type") or ""):
+                continue
+            try:
+                if o.get("algo_id"):
+                    client.futures_cancel_algo_order(algoId=o["algo_id"])
+                elif o.get("order_id"):
+                    client.futures_cancel_order(symbol=fsym, orderId=int(o["order_id"]))
+                cancelled += 1
+            except Exception as ce:
+                logger.debug(
+                    f"[{fsym}] cancel non-protective order "
+                    f"{o.get('order_id') or o.get('algo_id')}: {ce}"
+                )
+        return cancelled
+
     _PROTECTIVE_ORDER_TYPES = frozenset({
         "STOP_MARKET", "TAKE_PROFIT_MARKET", "TRAILING_STOP_MARKET", "STOP", "TAKE_PROFIT",
     })

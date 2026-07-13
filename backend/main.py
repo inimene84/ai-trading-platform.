@@ -155,6 +155,26 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"⚠ Unified Trading init warning: {e}")
 
+    # Restore exchange SL/TP after restart (sentry halt may have cancelled them).
+    if os.getenv("ACTIVE_BROKER", "ctrader") == "binance_futures" and resolved_mode == TradingMode.LIVE:
+        try:
+            from backend.database.connection import SessionLocal
+            from backend.services.trading_loop_helpers import ExchangeProtectionManager
+
+            db = SessionLocal()
+            try:
+                summary = ExchangeProtectionManager.restore_all_open_positions(
+                    db, binance_futures_broker,
+                )
+                if summary.get("restored") or summary.get("errors"):
+                    logger.warning(f"Startup protection restore: {summary}")
+                else:
+                    logger.info(f"Startup protection check: {summary.get('checked', 0)} symbol(s) OK")
+            finally:
+                db.close()
+        except Exception as e:
+            logger.error(f"Startup protection restore failed: {e}")
+
     # Track spawned background tasks so we can cancel them cleanly on shutdown
     background_tasks = []
 

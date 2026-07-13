@@ -318,7 +318,11 @@ class BrokerPositionSyncService:
 
                     if t.symbol not in cancelled_orphans:
                         try:
-                            broker.cancel_all_orders(t.symbol)
+                            # Only strip orders when the exchange leg is verified flat.
+                            # Never cancel protective SL/TP for symbols that still have
+                            # a live position (pyramid layers may close one row at a time).
+                            if t.symbol not in broker_symbols:
+                                broker.cancel_all_orders(t.symbol)
                             cancelled_orphans.add(t.symbol)
                         except Exception as _ce:
                             logger.warning(f"  [ {t.symbol} ] orphan order cleanup failed: {_ce}")
@@ -536,6 +540,51 @@ class PartialTPManager:
 
 class ExchangeProtectionManager:
     """Validates and restores missing SL/TP orders on the exchange."""
+
+    @staticmethod
+    def restore_all_open_positions(db, broker) -> dict:
+        """Re-place missing SL/TP for every symbol with open DB trades."""
+        summary = {"checked": 0, "restored": 0, "errors": 0}
+        try:
+            if os.getenv("ACTIVE_BROKER", "ctrader") != "binance_futures":
+                return summary
+            from backend.services.trading_mode import get_trading_mode, TradingMode
+            if get_trading_mode() != TradingMode.LIVE:
+                return summary
+
+            trades = db.query(Trade).filter(Trade.status.in_(["open", "filled"])).all()
+            by_symbol: dict[str, Trade] = {}
+            for trade in trades:
+                if not trade.stop_loss and not trade.take_profit:
+                    continue
+                existing = by_symbol.get(trade.symbol)
+                if not existing or (trade.stop_loss and trade.take_profit):
+                    by_symbol[trade.symbol] = trade
+
+            for symbol, trade in by_symbol.items():
+                summary["checked"] += 1
+                res = broker.ensure_protective_orders(
+                    trade.symbol,
+                    trade.direction,
+                    trade.stop_loss,
+                    trade.take_profit,
+                )
+                status = res.get("status") if isinstance(res, dict) else None
+                if status == "restored":
+                    summary["restored"] += 1
+                    logger.warning(
+                        f"  [ {symbol} ] protection restored on startup/resume: "
+                        f"{res.get('restored')}"
+                    )
+                elif status == "error":
+                    summary["errors"] += 1
+                    logger.error(
+                        f"  [ {symbol} ] protection restore failed: {res.get('message')}"
+                    )
+        except Exception as e:
+            logger.warning(f"Bulk protection restore failed: {e}")
+            summary["errors"] += 1
+        return summary
 
     @staticmethod
     def ensure_exchange_protection(

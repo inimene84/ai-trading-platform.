@@ -36,6 +36,32 @@ def test_get_open_orders_merges_regular_and_algo(broker):
     assert algo["type"] == "STOP_MARKET"
 
 
+def test_cancel_non_protective_orders_preserves_sl_tp(broker):
+    client = MagicMock()
+    client.futures_get_open_orders.return_value = [{
+        "orderId": 1, "symbol": "BTCUSDT", "side": "BUY", "type": "LIMIT",
+        "origQty": "0.001", "price": "50000", "status": "NEW",
+    }]
+    client.futures_get_open_algo_orders.return_value = [{
+        "algoId": 99, "symbol": "BTCUSDT", "side": "SELL", "orderType": "STOP_MARKET",
+        "quantity": "0.001", "triggerPrice": "48000", "algoStatus": "NEW",
+    }]
+
+    with patch.object(broker, "_get_client", return_value=client), \
+         patch.object(broker, "_to_futures_symbol", return_value="BTCUSDT"), \
+         patch.object(broker, "get_open_orders", return_value=[
+        {"order_id": "1", "symbol": "BTCUSDT", "side": "BUY", "type": "LIMIT",
+         "quantity": 0.001, "price": 50000, "algo_id": None},
+        {"order_id": "99", "symbol": "BTCUSDT", "side": "SELL", "type": "STOP_MARKET",
+         "quantity": 0.001, "price": 48000, "algo_id": 99},
+    ]):
+        cancelled = broker.cancel_non_protective_orders("BTCUSDT")
+
+    assert cancelled == 1
+    client.futures_cancel_order.assert_called_once_with(symbol="BTCUSDT", orderId=1)
+    client.futures_cancel_algo_order.assert_not_called()
+
+
 def test_cancel_all_orders_cancels_regular_and_algo(broker):
     client = MagicMock()
     client.futures_get_open_algo_orders.return_value = [

@@ -35,6 +35,7 @@ def write_halt_file(*, reason: str, source: str) -> dict[str, Any]:
 
 
 def cancel_binance_orders() -> dict[str, Any]:
+    """Cancel pending entry orders only — keep SL/TP on open positions."""
     broker = os.getenv("ACTIVE_BROKER", "ctrader")
     if broker != "binance_futures":
         return {"skipped": True, "reason": f"broker={broker}"}
@@ -53,39 +54,54 @@ def cancel_binance_orders() -> dict[str, Any]:
     testnet = os.getenv("BINANCE_TESTNET", "false").lower() == "true"
     client = Client(api_key, secret, testnet=testnet)
 
+    _PROTECTIVE = frozenset({
+        "STOP_MARKET", "TAKE_PROFIT_MARKET", "TRAILING_STOP_MARKET", "STOP", "TAKE_PROFIT",
+    })
+
+    def _is_protective(order_type: str) -> bool:
+        upper = (order_type or "").upper()
+        return any(t in upper for t in _PROTECTIVE)
+
     symbols: set[str] = set()
+    orders_to_cancel: list[tuple[str, str | None, int | None]] = []
     try:
         for order in client.futures_get_open_orders():
             sym = order.get("symbol")
-            if sym:
+            otype = order.get("type") or ""
+            if sym and not _is_protective(otype):
                 symbols.add(sym)
+                orders_to_cancel.append((sym, "regular", order.get("orderId")))
         algo = client.futures_get_open_algo_orders()
         algo_list = algo if isinstance(algo, list) else algo.get("orders", [])
         for order in algo_list:
             sym = order.get("symbol")
-            if sym:
+            otype = order.get("orderType") or order.get("type") or ""
+            if sym and not _is_protective(otype):
                 symbols.add(sym)
+                orders_to_cancel.append((sym, "algo", order.get("algoId")))
     except Exception as exc:
         return {"error": str(exc), "symbols_cancelled": 0}
 
     cancelled = 0
     errors: list[str] = []
-    for sym in sorted(symbols):
+    for sym, kind, oid in orders_to_cancel:
+        if not oid:
+            continue
         try:
-            client.futures_cancel_all_open_orders(symbol=sym)
-            algo = client.futures_get_open_algo_orders()
-            algo_list = algo if isinstance(algo, list) else algo.get("orders", [])
-            for order in algo_list:
-                if order.get("symbol") == sym and order.get("algoId"):
-                    try:
-                        client.futures_cancel_algo_order(algoId=order["algoId"])
-                    except Exception:
-                        pass
+            if kind == "algo":
+                client.futures_cancel_algo_order(algoId=oid)
+            else:
+                client.futures_cancel_order(symbol=sym, orderId=int(oid))
             cancelled += 1
         except Exception as exc:
-            errors.append(f"{sym}: {exc}")
+            errors.append(f"{sym}:{oid}: {exc}")
 
-    return {"symbols_seen": len(symbols), "symbols_cancelled": cancelled, "errors": errors}
+    return {
+        "symbols_seen": len(symbols),
+        "orders_cancelled": cancelled,
+        "errors": errors,
+        "mode": "non_protective_only",
+    }
 
 
 async def send_telegram(text: str) -> bool:
