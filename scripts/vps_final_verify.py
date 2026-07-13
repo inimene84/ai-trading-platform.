@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import subprocess
+from vps_ssh_common import ssh_cmd, SSH_BASE
 REMOTE = r'''
 cd /root/ai-trading-platform-v3
 docker compose -f docker-compose.prod.yml up -d --build backend
@@ -49,6 +50,6 @@ crit=$(docker logs ai-trading-backend --since 15m 2>&1 | grep -ci 'CRITICAL\|All
 echo "critical_error_lines=$crit"
 docker logs ai-trading-backend --since 15m 2>&1 | grep -iE 'CRITICAL|All LLM providers|Failed to send telegram|Traceback' | tail -5 || echo "(none recent)"
 '''
-r=subprocess.run(['ssh','-i',r'C:\Users\thori\.ssh\id_vps_bot','-o','BatchMode=yes','root@72.60.18.113',REMOTE],capture_output=True,text=True)
+r=subprocess.run(ssh_cmd(REMOTE),capture_output=True,text=True)
 print(r.stdout)
 if r.stderr: print('STDERR', r.stderr[-2000:])

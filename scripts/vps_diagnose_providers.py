@@ -1,12 +1,10 @@
+from vps_ssh_common import ssh_cmd, SSH_BASE
 #!/usr/bin/env python3
 """Run provider diagnostics on Hostinger VPS via SSH."""
 import subprocess
 import sys
 
-SSH = [
-    "ssh", "-i", r"C:\Users\thori\.ssh\id_vps_bot",
-    "-o", "BatchMode=yes", "root@72.60.18.113",
-]
+SSH = list(SSH_BASE)
 
 REMOTE = r'''
 cd /root/ai-trading-platform-v3

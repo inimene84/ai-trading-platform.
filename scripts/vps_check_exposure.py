@@ -1,3 +1,4 @@
+from vps_ssh_common import ssh_cmd, SSH_BASE
 #!/usr/bin/env python3
 """Compare DB open trades vs live exchange positions and compute notionals."""
 import subprocess
@@ -37,7 +38,7 @@ for p in acct.get("positions", []):
 PY
 '''
 r = subprocess.run(
-    ['ssh', '-i', r'C:\Users\thori\.ssh\id_vps_bot', '-o', 'BatchMode=yes', 'root@72.60.18.113', REMOTE],
+    ssh_cmd(REMOTE),
     capture_output=True, text=True, encoding='utf-8', errors='replace',
 )
 print(r.stdout)

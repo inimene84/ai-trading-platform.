@@ -1,3 +1,4 @@
+from vps_ssh_common import ssh_cmd, SSH_BASE
 #!/usr/bin/env python3
 """Compare local vs VPS env key lengths and search VPS for env backups."""
 import subprocess
@@ -24,7 +25,7 @@ echo "=== DOCKER ENV FOR BACKEND (key presence only) ==="
 docker inspect ai-trading-backend --format '{{range .Config.Env}}{{println .}}{{end}}' | grep -E '^(TELEGRAM|XAI|GOOGLE|OPENROUTER|KIE)_' | sed 's/=.*/=***/'
 '''
 
-SSH = ['ssh', '-i', r'C:\Users\thori\.ssh\id_vps_bot', '-o', 'BatchMode=yes', 'root@72.60.18.113', REMOTE]
+SSH = ssh_cmd(REMOTE)
 r = subprocess.run(SSH, capture_output=True, text=True)
 print(r.stdout)
 if r.stderr:

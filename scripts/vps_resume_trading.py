@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import subprocess
+from vps_ssh_common import ssh_cmd, SSH_BASE
 REMOTE = r'''
 cd /root/ai-trading-platform-v3
 ADMIN=$(grep '^ADMIN_API_KEY=' .env | cut -d= -f2-)
@@ -29,7 +30,7 @@ echo "=== FINAL ERROR SCAN (5m) ==="
 docker logs ai-trading-backend --since 5m 2>&1 | grep -iE 'CRITICAL|All LLM providers|Failed to send telegram|Traceback' | tail -10 || echo "(none)"
 '''
 r = subprocess.run(
-    ['ssh', '-i', r'C:\Users\thori\.ssh\id_vps_bot', '-o', 'BatchMode=yes', 'root@72.60.18.113', REMOTE],
+    ssh_cmd(REMOTE),
     capture_output=True, text=True,
 )
 print(r.stdout)

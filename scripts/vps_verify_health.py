@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import subprocess, time
-SSH=['ssh','-i',r'C:\Users\thori\.ssh\id_vps_bot','-o','BatchMode=yes','root@72.60.18.113']
+from vps_ssh_common import ssh_cmd, SSH_BASE
+SSH=list(SSH_BASE)
 VERIFY=r'''
 cd /root/ai-trading-platform-v3
 for i in 1 2 3 4 5 6 7 8 9 10; do

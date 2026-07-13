@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import subprocess
+from vps_ssh_common import ssh_cmd, SSH_BASE
 REMOTE = r'''
 python3 <<'PY'
 from pathlib import Path
@@ -14,5 +15,5 @@ for f in ['/root/.hermes/.env']:
         print(f'{k}: len={len(v)}' + (f' start={v[:4]}' if v else ' MISSING'))
 PY
 '''
-r=subprocess.run(['ssh','-i',r'C:\Users\thori\.ssh\id_vps_bot','-o','BatchMode=yes','root@72.60.18.113',REMOTE],capture_output=True,text=True)
+r=subprocess.run(ssh_cmd(REMOTE),capture_output=True,text=True)
 print(r.stdout)

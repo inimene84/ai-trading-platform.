@@ -1,3 +1,4 @@
+from vps_ssh_common import ssh_cmd, SSH_BASE
 #!/usr/bin/env python3
 """Update VPS .env: 20 scan coins, 10 max positions, equity-based sizing."""
 import subprocess
@@ -45,7 +46,7 @@ PY
 '''
 
 r = subprocess.run(
-    ['ssh', '-i', r'C:\Users\thori\.ssh\id_vps_bot', '-o', 'BatchMode=yes', 'root@72.60.18.113', REMOTE],
+    ssh_cmd(REMOTE),
     capture_output=True, text=True, encoding='utf-8', errors='replace',
 )
 print(r.stdout)

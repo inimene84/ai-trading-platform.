@@ -1,3 +1,4 @@
+from vps_ssh_common import ssh_cmd, SSH_BASE
 #!/usr/bin/env python3
 """Find working OpenRouter models on VPS."""
 import subprocess
@@ -50,10 +51,7 @@ for test in models[:8] + [
 PY
 '''
 
-SSH = [
-    'ssh', '-i', r'C:\Users\thori\.ssh\id_vps_bot',
-    '-o', 'BatchMode=yes', 'root@72.60.18.113', REMOTE,
-]
+SSH = ssh_cmd(REMOTE)
 
 if __name__ == '__main__':
     r = subprocess.run(SSH, capture_output=True, text=True)

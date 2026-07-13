@@ -1,3 +1,4 @@
+from vps_ssh_common import ssh_cmd, SSH_BASE
 #!/usr/bin/env python3
 """Inspect raw Kie response structure to find why JSON is invalid."""
 import subprocess
@@ -52,7 +53,7 @@ PY
 '''
 
 r = subprocess.run(
-    ['ssh', '-i', r'C:\Users\thori\.ssh\id_vps_bot', '-o', 'BatchMode=yes', 'root@72.60.18.113', REMOTE],
+    ssh_cmd(REMOTE),
     capture_output=True, text=True,
 )
 print(r.stdout)

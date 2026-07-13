@@ -4,9 +4,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+from vps_ssh_common import SSH_BASE, scp_cmd
+
 ROOT = Path(__file__).resolve().parents[1]
-SSH_KEY = str(Path.home() / ".ssh" / "id_vps_bot")
-HOST = "root@72.60.18.113"
 PROJECT = "/root/ai-trading-platform-v3"
 
 PREFILL_TEST = r'''
@@ -91,17 +91,17 @@ def run(cmd, label):
 
 
 def main():
-    rc = run(["ssh", "-i", SSH_KEY, "-o", "BatchMode=yes", HOST, PREFILL_TEST], "prefill test")
+    rc = run([*SSH_BASE, PREFILL_TEST], "prefill test")
     if rc != 0:
         return rc
     for local, remote in [
         (ROOT / "backend" / "llm" / "router.py", f"{PROJECT}/backend/llm/router.py"),
         (ROOT / "backend" / "services" / "market_alerts.py", f"{PROJECT}/backend/services/market_alerts.py"),
     ]:
-        rc = run(["scp", "-i", SSH_KEY, "-o", "BatchMode=yes", str(local), f"{HOST}:{remote}"], f"upload {local.name}")
+        rc = run(scp_cmd(str(local), remote), f"upload {local.name}")
         if rc != 0:
             return rc
-    return run(["ssh", "-i", SSH_KEY, "-o", "BatchMode=yes", HOST, DEPLOY], "deploy + verify")
+    return run([*SSH_BASE, DEPLOY], "deploy + verify")
 
 
 if __name__ == "__main__":

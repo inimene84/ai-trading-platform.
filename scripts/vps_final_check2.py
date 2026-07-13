@@ -4,9 +4,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+from vps_ssh_common import SSH_BASE, scp_cmd
+
 ROOT = Path(__file__).resolve().parents[1]
-SSH_KEY = str(Path.home() / ".ssh" / "id_vps_bot")
-HOST = "root@72.60.18.113"
 PROJECT = "/root/ai-trading-platform-v3"
 
 VERIFY = r'''
@@ -67,8 +67,7 @@ ls backend/routes/*.bak* 2>/dev/null || echo "none"
 
 def main():
     r = subprocess.run(
-        ["scp", "-i", SSH_KEY, "-o", "BatchMode=yes",
-         str(ROOT / "backend" / "llm" / "router.py"), f"{HOST}:{PROJECT}/backend/llm/router.py"],
+        scp_cmd(str(ROOT / "backend" / "llm" / "router.py"), f"{PROJECT}/backend/llm/router.py"),
         capture_output=True, text=True,
     )
     if r.returncode != 0:
@@ -76,8 +75,7 @@ def main():
         return r.returncode
     print("router.py uploaded")
 
-    r = subprocess.run(["ssh", "-i", SSH_KEY, "-o", "BatchMode=yes", HOST, VERIFY],
-                       capture_output=True, text=True)
+    r = subprocess.run([*SSH_BASE, VERIFY], capture_output=True, text=True)
     print(r.stdout)
     if r.stderr:
         print("STDERR:", r.stderr[-800:])

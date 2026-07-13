@@ -1,3 +1,4 @@
+from vps_ssh_common import ssh_cmd, SSH_BASE
 #!/usr/bin/env python3
 """Reset VPS to clean main, pull, rebuild stack incl. watchdog, verify."""
 import subprocess
@@ -90,7 +91,7 @@ echo "-- containers --"
 docker ps -a --format '{{.Names}}|{{.Status}}' | grep -E 'ai-trading|vps-'
 '''
 
-SSH = ['ssh', '-i', r'C:\Users\thori\.ssh\id_vps_bot', '-o', 'BatchMode=yes', 'root@72.60.18.113']
+SSH = list(SSH_BASE)
 
 
 def main():

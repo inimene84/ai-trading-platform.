@@ -4,12 +4,11 @@ import subprocess
 import sys
 from pathlib import Path
 
+from vps_ssh_common import SSH_BASE, scp_cmd
+
 ROOT = Path(__file__).resolve().parents[1]
-SSH_KEY = Path.home() / ".ssh" / "id_vps_bot"
-HOST = "root@72.60.18.113"
 PROJECT = "/root/ai-trading-platform-v3"
-SSH = ["ssh", "-i", str(SSH_KEY), "-o", "BatchMode=yes", HOST]
-SCP = ["scp", "-i", str(SSH_KEY), "-o", "BatchMode=yes"]
+SSH = list(SSH_BASE)
 
 SYNC_ENV = r'''
 python3 <<'PY'
@@ -152,7 +151,7 @@ def main() -> int:
         (ROOT / "litellm-config.yaml", f"{PROJECT}/litellm-config.yaml"),
     ]
     for local, remote in files:
-        r = run(SCP + [str(local), f"{HOST}:{remote}"])
+        r = run(scp_cmd(str(local), remote))
         if r.returncode != 0:
             print(r.stderr)
             return r.returncode
