@@ -11,7 +11,7 @@ model_list:
   # ── OpenRouter Claude Sonnet 5 ──
   - model_name: claude-sonnet
     litellm_params:
-      model: anthropic/claude-sonnet-5
+      model: openrouter/anthropic/claude-sonnet-5
       api_key: os.environ/OPENROUTER_API_KEY
       temperature: 0.3
       max_tokens: 1024
@@ -19,7 +19,7 @@ model_list:
   # Legacy alias (now points to OpenRouter)
   - model_name: gemini-3-flash
     litellm_params:
-      model: google/gemini-2.5-flash
+      model: openrouter/google/gemini-2.5-flash
       api_key: os.environ/OPENROUTER_API_KEY
       temperature: 0.3
       max_tokens: 512
