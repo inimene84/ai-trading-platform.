@@ -10,12 +10,12 @@ cd /root/ai-trading-platform-v3
 python3 << 'PY'
 from pathlib import Path
 updates = {
-    "SYMBOL_BATCH_SIZE": "5",
-    "SYMBOL_BATCH_PAUSE_SEC": "3",
-    "SYMBOL_CONCURRENCY": "2",
-    "TICKER_CACHE_TTL_SEC": "15",
-    "BINANCE_WALLET_POLL_INTERVAL": "180",
-    "BINANCE_ORDER_POLL_INTERVAL": "180",
+    "SYMBOL_BATCH_SIZE": "1",
+    "SYMBOL_BATCH_PAUSE_SEC": "45",
+    "SYMBOL_CONCURRENCY": "1",
+    "TICKER_CACHE_TTL_SEC": "30",
+    "BINANCE_WALLET_POLL_INTERVAL": "300",
+    "BINANCE_ORDER_POLL_INTERVAL": "300",
 }
 path = Path(".env")
 lines = path.read_text().splitlines() if path.exists() else []

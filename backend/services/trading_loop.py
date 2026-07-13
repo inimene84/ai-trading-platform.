@@ -104,10 +104,10 @@ class TradingLoopService:
         # avoids calling get_positions() per symbol which returns ALL positions)
         self._cycle_positions: list = []
         # Semaphore: stagger symbol processing to bound Binance API bursts.
-        # Env-tunable so a larger scan universe can raise throughput slightly
-        # without a rebuild (each symbol costs ~40 API weight; budget is 2400/min).
+        # Default concurrency=1 with SYMBOL_BATCH_PAUSE_SEC=45 → one coin every ~45s
+        # (20 symbols ≈ 15+ min per cycle). Env-tunable without rebuild.
         self._symbol_semaphore = asyncio.Semaphore(
-            max(1, int(os.getenv("SYMBOL_CONCURRENCY", "2")))
+            max(1, int(os.getenv("SYMBOL_CONCURRENCY", "1")))
         )
         # New-bar gate: symbol → open-time of the last bar the entry pipeline
         # evaluated. The loop cycles every 15 min on 1h bars, so without this
@@ -787,13 +787,13 @@ class TradingLoopService:
         ai_threshold: float,
         max_positions: int,
     ) -> list:
-        """Process symbols in 2–4 batches with pauses to stay under Binance weight limits."""
-        batch_size = max(1, int(os.getenv("SYMBOL_BATCH_SIZE", "5")))
-        pause_sec = max(0.0, float(os.getenv("SYMBOL_BATCH_PAUSE_SEC", "3")))
+        """Process symbols sequentially with pauses to stay under Binance weight limits."""
+        batch_size = max(1, int(os.getenv("SYMBOL_BATCH_SIZE", "1")))
+        pause_sec = max(0.0, float(os.getenv("SYMBOL_BATCH_PAUSE_SEC", "45")))
         batches = self._chunk_symbols(symbols, batch_size)
-        concurrency = max(1, int(os.getenv("SYMBOL_CONCURRENCY", "2")))
+        concurrency = max(1, int(os.getenv("SYMBOL_CONCURRENCY", "1")))
         logger.info(
-            f"Symbol scan: {len(symbols)} symbols in {len(batches)} batch(es) "
+            f"Symbol scan: {len(symbols)} symbols in {len(batches)} rotation(s) "
             f"(batch_size={batch_size}, pause={pause_sec}s, concurrency={concurrency})"
         )
 
@@ -801,7 +801,7 @@ class TradingLoopService:
         for batch_idx, batch in enumerate(batches):
             if batch_idx > 0 and pause_sec > 0:
                 logger.info(
-                    f"Symbol batch pause {pause_sec:.0f}s before batch "
+                    f"Symbol rotation pause {pause_sec:.0f}s before "
                     f"{batch_idx + 1}/{len(batches)} ({', '.join(batch)})"
                 )
                 await asyncio.sleep(pause_sec)
