@@ -40,7 +40,9 @@ async def test_review_trade_decision_veto():
 
 
 @pytest.mark.asyncio
-async def test_review_trade_decision_fail_open_on_garbage_response():
+async def test_review_trade_decision_fail_open_on_garbage_response(monkeypatch):
+    monkeypatch.setenv("TRADING_MODE", "paper")
+    monkeypatch.delenv("RISK_REVIEWER_FAIL_OPEN", raising=False)
     with patch("backend.llm.router.call_llm_resilient", new_callable=AsyncMock) as mock_call:
         mock_call.return_value = "I recommend rejecting this trade."
 
@@ -81,9 +83,11 @@ async def test_parse_reviewer_extracts_json_from_prose():
     assert "Trend aligned" in reasoning
 
 
-@pytest.mark.asyncio
-async def test_parse_reviewer_fail_open_on_plain_prose_veto():
+def test_parse_reviewer_fail_open_on_plain_prose_veto(monkeypatch):
     from backend.services.risk_reviewer import _parse_reviewer_response
+
+    monkeypatch.setenv("TRADING_MODE", "paper")
+    monkeypatch.delenv("RISK_REVIEWER_FAIL_OPEN", raising=False)
 
     approved, reasoning = _parse_reviewer_response(
         "I cannot approve this trade due to excessive risk."
