@@ -950,18 +950,36 @@ class TradingLoopService:
                         signal_status = "rejected"
                         signal_reason = f"{signal_reason} | LONG exposure cap reached"
                         decision = None
-                    elif decision.action == "BUY" and getattr(self, "_cycle_equity", 0.0) > 0 and (_long_notional + _new_notional > self._cycle_equity * 0.8):
-                        logger.warning(f"  [ {symbol} ] BUY blocked: 80% Portfolio LONG Correlation limit reached")
+                    elif decision.action == "BUY" and getattr(self, "_cycle_equity", 0.0) > 0 and (
+                        _long_notional + _new_notional
+                        > self._cycle_equity * self.risk_config.max_direction_notional_equity_mult
+                    ):
+                        _mult = self.risk_config.max_direction_notional_equity_mult
+                        logger.warning(
+                            f"  [ {symbol} ] BUY blocked: LONG notional "
+                            f"${_long_notional + _new_notional:.0f} > {_mult}x equity "
+                            f"(${self._cycle_equity * _mult:.0f}) — direction notional cap"
+                        )
+                        signal_status = "rejected"
+                        signal_reason = f"{signal_reason} | LONG direction notional cap ({_mult}x equity)"
                         decision = None
                     elif decision.action == "SELL" and (_short_notional + _new_notional > self.risk_config.max_directional_exposure_usdt):
                         logger.warning(f"  [ {symbol} ] SELL blocked: SHORT exposure cap reached")
                         signal_status = "rejected"
                         signal_reason = f"{signal_reason} | SHORT exposure cap reached"
                         decision = None
-                    elif decision.action == "SELL" and getattr(self, "_cycle_equity", 0.0) > 0 and (_short_notional + _new_notional > self._cycle_equity * 0.8):
-                        logger.warning(f"  [ {symbol} ] SELL blocked: 80% Portfolio SHORT Correlation limit reached")
+                    elif decision.action == "SELL" and getattr(self, "_cycle_equity", 0.0) > 0 and (
+                        _short_notional + _new_notional
+                        > self._cycle_equity * self.risk_config.max_direction_notional_equity_mult
+                    ):
+                        _mult = self.risk_config.max_direction_notional_equity_mult
+                        logger.warning(
+                            f"  [ {symbol} ] SELL blocked: SHORT notional "
+                            f"${_short_notional + _new_notional:.0f} > {_mult}x equity "
+                            f"(${self._cycle_equity * _mult:.0f}) — direction notional cap"
+                        )
                         signal_status = "rejected"
-                        signal_reason = f"{signal_reason} | 80% SHORT correlation cap reached"
+                        signal_reason = f"{signal_reason} | SHORT direction notional cap ({_mult}x equity)"
                         decision = None
                     else:
                         signal_status = "approved"

@@ -43,6 +43,17 @@ class RiskConfig(BaseSettings):
         default=5,
         validation_alias=AliasChoices("max_same_direction_positions", "MAX_SAME_DIRECTION_POSITIONS"),
     )
+    # Portfolio-level direction cap: total same-direction NOTIONAL may reach
+    # this multiple of equity. Notional is leveraged, so at 10x leverage a
+    # 4.0 multiple = ~40% of equity committed as margin in one direction.
+    # (The old hardcoded 0.8x-equity notional cap allowed only ~8% margin
+    # utilization at 10x and blocked entries with just 2-4 open positions.)
+    max_direction_notional_equity_mult: float = PydanticField(
+        default=4.0,
+        validation_alias=AliasChoices(
+            "max_direction_notional_equity_mult", "MAX_DIRECTION_NOTIONAL_EQUITY_MULT"
+        ),
+    )
     funding_rate_cap: float = 0.0005  # 0.05%
     # Max confidence nudge (absolute) the funding rate may apply to a signal.
     # Unclamped funding adjustment (rate*1000) flipped marginal signals toward
