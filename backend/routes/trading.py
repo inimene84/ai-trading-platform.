@@ -482,9 +482,7 @@ async def update_config(payload: ConfigUpdateRequest):
             else:
                 output.append(line)
         output.extend(f"{key}={value}" for key, value in remaining.items())
-        tmp_path = env_path.with_suffix(".tmp")
-        tmp_path.write_text("\n".join(output) + "\n")
-        tmp_path.replace(env_path)
+        env_path.write_text("\n".join(output) + "\n")
         os.environ.update(updates)
 
     config = refresh_risk_config()
@@ -539,6 +537,19 @@ async def get_stocks():
 _BINANCE_PROXY_ALLOWED = {
     "ticker/24hr", "ticker/price", "ticker/bookTicker",
     "klines", "depth", "exchangeInfo", "avgPrice",
+}
+
+# Proxy protection state: short-TTL response cache, in-flight coalescing and a
+# global backoff window honoured after any 418/429 from Binance. All dashboard
+# traffic funnels through this proxy from one VPS IP — without these guards a
+# few open dashboards can burn the IP-weight budget and get the *trading*
+# engine IP-banned (-1003, 10-60 min cooldown).
+_binance_proxy_cache: Dict[str, tuple] = {}
+_binance_proxy_inflight: Dict[str, "asyncio.Future"] = {}
+_binance_proxy_backoff_until: float = 0.0
+_BINANCE_PROXY_TTL = {
+    "ticker/24hr": 10.0, "ticker/price": 5.0, "ticker/bookTicker": 5.0,
+    "klines": 20.0, "depth": 5.0, "avgPrice": 10.0, "exchangeInfo": 300.0,
 }
 
 
@@ -1108,14 +1119,66 @@ async def binance_proxy(endpoint: str, request: Request):
     if endpoint not in _BINANCE_PROXY_ALLOWED:
         return JSONResponse({"error": f"endpoint not allowed: {endpoint}"}, status_code=400)
 
-    url = f"https://api.binance.com/api/v3/{endpoint}"
     params = dict(request.query_params)
-    try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.get(url, params=params)
-        return JSONResponse(content=resp.json(), status_code=resp.status_code)
-    except Exception as exc:
-        return JSONResponse({"error": f"binance proxy failed: {exc}"}, status_code=502)
+    key = endpoint + "?" + "&".join(f"{k}={v}" for k, v in sorted(params.items()))
+    now = asyncio.get_event_loop().time()
+
+    # 1) Global backoff: if Binance told us to back off, fail fast locally.
+    if now < _binance_proxy_backoff_until:
+        retry_in = int(_binance_proxy_backoff_until - now) + 1
+        return JSONResponse(
+            {"error": "binance rate limited, backing off", "retry_after": retry_in},
+            status_code=429,
+            headers={"Retry-After": str(retry_in)},
+        )
+
+    # 2) Serve from short TTL cache (dashboard polls are highly repetitive).
+    cached = _binance_proxy_cache.get(key)
+    if cached and now - cached[0] < _BINANCE_PROXY_TTL.get(endpoint, 10.0):
+        return JSONResponse(content=cached[1], status_code=200)
+
+    # 3) Coalesce identical concurrent requests into one upstream call.
+    fut = _binance_proxy_inflight.get(key)
+    if fut is None:
+        fut = asyncio.get_event_loop().create_future()
+        _binance_proxy_inflight[key] = fut
+        try:
+            resp = None
+            # data-api.binance.vision is Binance's dedicated public market-data
+            # host: keeps dashboard traffic off the IP-weight budget of
+            # api.binance.com that the live trading engine depends on.
+            for host in ("https://data-api.binance.vision", "https://api.binance.com"):
+                try:
+                    async with httpx.AsyncClient(timeout=15.0) as client:
+                        resp = await client.get(f"{host}/api/v3/{endpoint}", params=params)
+                    if resp.status_code < 500:
+                        break
+                except Exception:
+                    resp = None
+                    continue
+            if resp is None:
+                raise RuntimeError("all binance hosts unreachable")
+            if resp.status_code in (418, 429):
+                retry_after = int(resp.headers.get("Retry-After", "60"))
+                globals()["_binance_proxy_backoff_until"] = (
+                    asyncio.get_event_loop().time() + min(retry_after, 3600)
+                )
+                fut.set_result((resp.status_code, {"error": "binance rate limited", "retry_after": retry_after}))
+            else:
+                body = resp.json()
+                if resp.status_code == 200:
+                    _binance_proxy_cache[key] = (asyncio.get_event_loop().time(), body)
+                    if len(_binance_proxy_cache) > 512:
+                        oldest = min(_binance_proxy_cache, key=lambda k: _binance_proxy_cache[k][0])
+                        _binance_proxy_cache.pop(oldest, None)
+                fut.set_result((resp.status_code, body))
+        except Exception as exc:
+            fut.set_result((502, {"error": f"binance proxy failed: {exc}"}))
+        finally:
+            _binance_proxy_inflight.pop(key, None)
+
+    status, body = await fut
+    return JSONResponse(content=body, status_code=status)
 
 
 @router.get("/crypto-news")
@@ -1262,6 +1325,9 @@ async def paper_place_order(request: dict):
 @router.post("/order")
 async def place_live_order(request: LiveOrderRequest):
     """Place a validated live order and persist its exchange fill."""
+    from backend.services.sentry_state import is_trading_allowed
+    if not is_trading_allowed():
+        raise HTTPException(status_code=400, detail="Trading is currently halted by Sentry.")
     from backend.services.risk_config import get_risk_config
     from backend.services.decision_engine import compute_sl_tp_levels
     from backend.services.trading_loop import trading_loop
@@ -1441,6 +1507,9 @@ async def ai_agent_trade(request: AgentTradeRequest):
     Let the LLM trade autonomously via tool calls.
     Uses the Fincept-style tool execution loop.
     """
+    from backend.services.sentry_state import is_trading_allowed
+    if not is_trading_allowed():
+        raise HTTPException(status_code=400, detail="Trading is currently halted by Sentry.")
     import os
     from backend.services.llm_tool_loop import LlmToolClient, build_trading_tools
     from backend.services.unified_trading import UnifiedTrading

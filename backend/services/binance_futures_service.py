@@ -825,6 +825,15 @@ class BinanceFuturesService:
                     result = self._try_maker_entry(
                         client, futures_sym, side, quantity, position_side,
                     )
+                except RuntimeError as re:
+                    # Uncertain maker fill status: abort to avoid duplicate fill / doubling position size
+                    logger.critical(f"  [MAKER] uncertain maker fill: {re} — aborting entry to prevent double-fill")
+                    return {
+                        'status': 'error',
+                        'broker': 'binance_futures',
+                        'reason': 'uncertain_maker_fill',
+                        'message': str(re)
+                    }
                 except Exception as mk_e:
                     logger.warning(f"  [MAKER] post-only entry path errored ({mk_e}) — falling back to MARKET")
                     result = None
@@ -900,7 +909,7 @@ class BinanceFuturesService:
                     # A close may cover only one DB pyramid layer. Keep the
                     # closePosition SL/TP while any quantity remains; those
                     # orders automatically protect the whole residual leg.
-                    remaining = self._live_position_qty(futures_sym, position_side)
+                    remaining = self._live_position_qty(futures_sym, position_side, raise_on_error=True)
                     if remaining <= 0:
                         # Fully flat: remove orphan regular + conditional orders.
                         client.futures_cancel_all_open_orders(symbol=futures_sym)
@@ -1456,23 +1465,27 @@ class BinanceFuturesService:
                         "quantity": qty,
                         "positionSide": position_side,
                     }
+                    # Instead of an dangerous, standalone market order, trigger the global emergency_halt
+                    logger.critical(
+                        f"  [TRAIL-SL] {futures_sym} STOP REPLACEMENT AND RESTORE FAILED. "
+                        "Triggering Sentry Emergency Halt to protect the account."
+                    )
+                    from backend.services.sentry_emergency import emergency_halt
+                    import asyncio
                     try:
-                        close_order = self._safe_create_order(client, emergency)
-                        return {
-                            'status': 'emergency_closed',
-                            'reason': 'stop_replace_and_restore_failed',
-                            'order_id': str(close_order.get('orderId', '')),
-                        }
-                    except Exception as close_error:
-                        logger.critical(
-                            f"  [TRAIL-SL] {futures_sym} EMERGENCY CLOSE FAILED: {close_error} "
-                            "— MANUAL INTERVENTION REQUIRED"
-                        )
-                        return {
-                            'status': 'critical',
-                            'reason': 'position_unprotected',
-                            'message': str(close_error),
-                        }
+                        loop = asyncio.get_event_loop()
+                        if loop.is_running():
+                            loop.create_task(emergency_halt(
+                                reason=f"STOP REPLACEMENT AND RESTORE FAILED for {futures_sym}",
+                                source="replace_stop_loss"
+                            ))
+                    except Exception as eh_err:
+                        logger.critical(f"Failed to trigger emergency halt: {eh_err}")
+                    return {
+                        'status': 'critical',
+                        'reason': 'stop_replace_and_restore_failed_sentry_triggered',
+                        'message': str(restore_error),
+                    }
 
             logger.info(
                 f"  [TRAIL-SL] {futures_sym} exchange stop -> {rounded_new} "

@@ -595,7 +595,7 @@ class CTraderService:
             "broker": "ctrader"
         }
 
-    def get_positions(self) -> list:
+    def get_positions(self, raise_on_error: bool = False) -> list:
         """
         Return all non-zero open positions.
         Returns a list of dicts.

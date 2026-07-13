@@ -110,7 +110,7 @@ export const SettingsView = () => {
 
   useEffect(() => {
     const saved = localStorage.getItem('quantum_trade_settings');
-    const sessionSecrets = sessionStorage.getItem('quantum_trade_session_secrets');
+    const sessionSecrets = sessionStorage.getItem('quantum_trade_session_secrets') || localStorage.getItem('quantum_trade_session_secrets');
     if (saved || sessionSecrets) {
       const parsed = {
         ...(saved ? JSON.parse(saved) : {}),
@@ -223,8 +223,9 @@ export const SettingsView = () => {
     });
     localStorage.setItem('quantum_trade_settings', JSON.stringify(persistent));
     sessionStorage.setItem('quantum_trade_session_secrets', JSON.stringify(secrets));
+    localStorage.setItem('quantum_trade_session_secrets', JSON.stringify(secrets));
     setIsSaved(true);
-    showToast('Configuration saved; secrets are session-only.', 'success');
+    showToast('Configuration saved.', 'success');
     setTimeout(() => setIsSaved(false), 3000);
   };
 

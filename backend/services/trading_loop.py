@@ -621,13 +621,30 @@ class TradingLoopService:
                             else:
                                 # already_flat = success (exchange SL already fired)
                                 if hasattr(res, 'message') and ('-2022' in str(res.message) or 'already' in str(res.message).lower()):
-                                    logger.info(f"  -> {trade.symbol} already flat on exchange — marking DB closed")
-                                    trade.status = 'closed'
-                                    trade.closed_at = datetime.now(timezone.utc)
-                                    trade.notes = (trade.notes or '') + ' | AI-EXIT: already flat on exchange'
-                                    db_check.add(trade)
-                                    if self._pyramid_mode:
-                                        remove_closed_pyramid_layer(self._pyramid_layers, trade)
+                                    # Verify position is actually flat on the exchange to prevent quantity drift
+                                    try:
+                                        pos_qty = 0.0
+                                        for p in broker.get_positions(raise_on_error=True):
+                                            if p.get('symbol') == binance_futures_broker._to_futures_symbol(trade.symbol):
+                                                pos_qty = float(p.get('quantity', 0))
+                                                break
+                                        if pos_qty <= 0:
+                                            logger.info(f"  -> {trade.symbol} verified flat on exchange — marking DB closed")
+                                            trade.status = 'closed'
+                                            trade.closed_at = datetime.now(timezone.utc)
+                                            trade.notes = (trade.notes or '') + ' | AI-EXIT: verified flat on exchange'
+                                            db_check.add(trade)
+                                            if self._pyramid_mode:
+                                                remove_closed_pyramid_layer(self._pyramid_layers, trade)
+                                        else:
+                                            logger.warning(
+                                                f"  -> [DRIFT GUARD] {trade.symbol} got -2022 but exchange position still exists (qty={pos_qty})! "
+                                                "Not marking DB trade closed."
+                                            )
+                                            trade.notes = (trade.notes or '') + f' | DRIFT GUARD: got -2022 but exchange qty={pos_qty}'
+                                            db_check.add(trade)
+                                    except Exception as verify_err:
+                                        logger.error(f"Failed to verify flat state for {trade.symbol} after -2022: {verify_err}")
                                     _exits_triggered += 1
                                 else:
                                     logger.error(f"  -> FAILED to close {trade.symbol}: {res.message}")
