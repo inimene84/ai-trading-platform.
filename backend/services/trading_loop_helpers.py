@@ -363,9 +363,12 @@ class TrailingStopManager:
 
         try:
             current_price = bars[-1]["close"]
-            highs = [b["high"] for b in bars[-15:]]
-            lows = [b["low"] for b in bars[-15:]]
-            closes = [b["close"] for b in bars[-16:-1]]
+            n = min(15, len(bars) - 1)
+            if n < 2:
+                return
+            highs = [b["high"] for b in bars[-n:]]
+            lows = [b["low"] for b in bars[-n:]]
+            closes = [b["close"] for b in bars[-(n + 1):-1]]
             trs = []
             for h, l_val, c in zip(highs, lows, closes):
                 trs.append(max(h - l_val, abs(h - c), abs(l_val - c)))
@@ -470,9 +473,12 @@ class PartialTPManager:
             import numpy as np
             current_price = bars[-1]["close"]
 
-            highs = np.array([b["high"] for b in bars[-15:]])
-            lows = np.array([b["low"] for b in bars[-15:]])
-            closes = np.array([b["close"] for b in bars[-16:-1]])
+            n = min(15, len(bars) - 1)
+            if n < 2:
+                return
+            highs = np.array([b["high"] for b in bars[-n:]])
+            lows = np.array([b["low"] for b in bars[-n:]])
+            closes = np.array([b["close"] for b in bars[-(n + 1):-1]])
             tr = np.maximum(np.maximum(highs - lows, np.abs(highs - closes)), np.abs(lows - closes))
             atr = float(np.mean(tr))
             if atr <= 0:
@@ -626,13 +632,25 @@ class PerformanceMetricsWriter:
         cycle_count: int,
     ) -> None:
         try:
-            from sqlalchemy import func as _func
-            closed = db.query(Trade).filter(Trade.status == "closed").all()
-            wins = sum(1 for t in closed if (t.pnl or 0) > 0)
-            losses = sum(1 for t in closed if (t.pnl or 0) < 0)
+            from sqlalchemy import func as _func, case
+
+            # Use SQL aggregates instead of loading all closed trades into memory
+            stats = db.query(
+                _func.count(Trade.id).label("total"),
+                _func.sum(case((Trade.pnl > 0, 1), else_=0)).label("wins"),
+                _func.sum(case((Trade.pnl < 0, 1), else_=0)).label("losses"),
+                _func.coalesce(_func.sum(Trade.pnl), 0.0).label("realized_pnl"),
+            ).filter(
+                Trade.status == "closed",
+                Trade.pnl.isnot(None),
+            ).one()
+
+            total = int(stats.total or 0)
+            wins = int(stats.wins or 0)
+            losses = int(stats.losses or 0)
             decided = wins + losses
             win_rate = (wins / decided * 100.0) if decided else 0.0
-            realized_pnl = round(sum((t.pnl or 0.0) for t in closed), 4)
+            realized_pnl = round(float(stats.realized_pnl or 0.0), 4)
 
             # Drawdown vs peak equity seen in portfolio snapshots
             peak = db.query(_func.max(PortfolioSnapshot.total_value)).scalar() or cycle_equity
@@ -644,7 +662,7 @@ class PerformanceMetricsWriter:
                 win_rate=round(win_rate, 2),
                 wins=wins,
                 losses=losses,
-                total_trades=len(closed),
+                total_trades=total,
                 drawdown_pct=round(drawdown_pct, 3),
                 open_positions=open_count,
                 cycle=cycle_count,

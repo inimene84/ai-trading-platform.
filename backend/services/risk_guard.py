@@ -5,6 +5,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from backend.services.risk_config import RiskConfig, get_trading_mode
+from backend.services.trading_mode import TradingMode
 from backend.database.models import Trade, PortfolioSnapshot
 
 logger = logging.getLogger(__name__)
@@ -65,7 +66,7 @@ def enforce_risk_limits(
     # It is only honored in PAPER mode now — in LIVE mode it is ignored and a
     # loud error is logged so a misconfiguration cannot disable live guards.
     if os.getenv("DISABLE_RISK_GUARD", "false").lower() == "true":
-        if get_trading_mode() == "paper":
+        if get_trading_mode() == TradingMode.PAPER:
             logger.warning(
                 "Risk guard disabled via DISABLE_RISK_GUARD (allowed: PAPER mode)."
             )

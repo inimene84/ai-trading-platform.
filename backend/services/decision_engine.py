@@ -48,22 +48,25 @@ def compute_sl_tp_levels(
 ) -> tuple[float, float]:
     """ATR-based stop-loss and take-profit for an entry (shared by loop + manual orders)."""
     try:
-        highs = np.array([b["high"] for b in bars[-15:]])
-        lows = np.array([b["low"] for b in bars[-15:]])
-        closes = np.array([b["close"] for b in bars[-16:-1]])
+        n = min(15, len(bars) - 1)  # need n bars + 1 previous close
+        if n < 2:
+            raise ValueError("too few bars")
+        highs = np.array([b["high"] for b in bars[-n:]])
+        lows = np.array([b["low"] for b in bars[-n:]])
+        closes = np.array([b["close"] for b in bars[-(n + 1):-1]])
         tr = np.maximum(np.maximum(highs - lows, np.abs(highs - closes)), np.abs(lows - closes))
         atr = float(np.mean(tr))
     except Exception:
         atr = entry_price * 0.02
 
     if direction == "BUY":
-        sl = signal_sl if signal_sl else (entry_price - (atr * config.sl_atr_mult))
-        tp = signal_tp if signal_tp else (entry_price + (atr * config.tp_atr_mult))
+        sl = signal_sl if signal_sl is not None else (entry_price - (atr * config.sl_atr_mult))
+        tp = signal_tp if signal_tp is not None else (entry_price + (atr * config.tp_atr_mult))
         sl = min(sl, entry_price - (atr * config.sl_atr_mult))
         tp = max(tp, entry_price + (atr * config.tp_atr_mult))
     else:
-        sl = signal_sl if signal_sl else (entry_price + (atr * config.sl_atr_mult))
-        tp = signal_tp if signal_tp else (entry_price - (atr * config.tp_atr_mult))
+        sl = signal_sl if signal_sl is not None else (entry_price + (atr * config.sl_atr_mult))
+        tp = signal_tp if signal_tp is not None else (entry_price - (atr * config.tp_atr_mult))
         sl = max(sl, entry_price + (atr * config.sl_atr_mult))
         tp = min(tp, entry_price - (atr * config.tp_atr_mult))
     return sl, tp
@@ -124,7 +127,6 @@ class DecisionEngine:
             self._record_eval(symbol, "HOLD", 0.0, "insufficient bars")
             return None
             
-        bars[-1]["close"]
         self._record_eval(symbol, "HOLD", 0.0, "evaluating")
         
         # 1. Active position logic

@@ -30,8 +30,8 @@ if sentry_dsn and not any(m in sentry_dsn.lower() for m in _placeholder_markers)
     try:
         sentry_sdk.init(
             dsn=sentry_dsn,
-            traces_sample_rate=1.0,
-            profiles_sample_rate=1.0,
+            traces_sample_rate=float(os.getenv("SENTRY_TRACES_SAMPLE_RATE", "0.2")),
+            profiles_sample_rate=float(os.getenv("SENTRY_PROFILES_SAMPLE_RATE", "0.1")),
         )
     except Exception as exc:
         logging.getLogger(__name__).warning("Sentry init skipped: %s", exc)

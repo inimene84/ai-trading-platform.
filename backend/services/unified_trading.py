@@ -171,15 +171,15 @@ class PaperTradingEngine:
             "id": pid, "name": name, "currency": currency,
             "leverage": leverage, "margin_mode": margin_mode,
             "fee_rate": fee_rate, "exchange": exchange,
-            "initial_balance": balance, "created_at": _now(),
+            "initial_balance": balance, "created_at": _db_now(),
         }
         pf["orders"] = []
         pf["trades"] = []
         with self._lock:
             self._portfolios[pid] = pf
         # ── Persist to Postgres ──
+        db = _get_db()
         try:
-            db = _get_db()
             from backend.database.models import PaperPortfolio as PP
             db.add(PP(
                 portfolio_id=pid, name=name, broker=exchange or "paper",
@@ -190,6 +190,8 @@ class PaperTradingEngine:
         except Exception as e:
             db.rollback()
             logger.warning(f"Paper portfolio DB persist failed: {e}")
+        finally:
+            db.close()
         logger.info(f"Paper portfolio created: {name} (id={pid}, balance={balance}, leverage={leverage}x)")
         return pid
 

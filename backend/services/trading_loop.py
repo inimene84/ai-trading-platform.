@@ -631,7 +631,7 @@ class TradingLoopService:
                                             if p.get('symbol') == binance_futures_broker._to_futures_symbol(trade.symbol):
                                                 pos_qty = float(p.get('quantity', 0))
                                                 break
-                                        if pos_qty <= 0:
+                                        if pos_qty == 0:
                                             logger.info(f"  -> {trade.symbol} verified flat on exchange — marking DB closed")
                                             trade.status = 'closed'
                                             trade.closed_at = datetime.now(timezone.utc)
@@ -1345,7 +1345,7 @@ class TradingLoopService:
                             remove_closed_pyramid_layer(self._pyramid_layers, trade)
                     else:
                         logger.error(f"  -> Failed to close {symbol} via SL/TP: {res.message}")
-                    trade.notes = (trade.notes or "") + f" | SL/TP close FAILED: {res.message}"
+                        trade.notes = (trade.notes or "") + f" | SL/TP close FAILED: {res.message}"
 
     def _is_market_open(self, symbol: str) -> bool:
         """Check if the market is open for the given symbol.

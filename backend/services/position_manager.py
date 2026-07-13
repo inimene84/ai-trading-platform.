@@ -22,13 +22,17 @@ class ExitOpinion:
 class PositionManager:
     def __init__(self):
         self.config = get_risk_config()
-        self.emergency_drawdown_pct = self.config.emergency_drawdown_pct
-        self.max_hold_hours = self.config.max_position_hold_hours
-        self.exit_opinion_threshold = self.config.exit_opinion_threshold
+
+    @property
+    def emergency_drawdown_pct(self) -> float:
+        return self.config.emergency_drawdown_pct
 
     async def analyze_open_position(self, symbol: str, trade: dict, bars: list,
                                     current_price: float, opinion_layer_fn=None,
                                     current_funding_rate: float = 0.0) -> ExitOpinion:
+        # Re-read config each call so .env changes are respected at runtime
+        self.config = get_risk_config()
+
         entry_price = trade.get("entry_price", current_price)
         direction = trade.get("direction", "BUY")
         opened_at = trade.get("opened_at")
@@ -36,8 +40,8 @@ class PositionManager:
         take_profit = trade.get("take_profit")
 
         # Local copies of exit parameters, adjustable via hold bonus
-        max_hold_hours = self.max_hold_hours
-        exit_opinion_threshold = self.exit_opinion_threshold
+        max_hold_hours = self.config.max_position_hold_hours
+        exit_opinion_threshold = self.config.exit_opinion_threshold
 
         # Funding rate position hold bonus for shorts:
         # If we are SHORT (SELL) and funding is positive (meaning longs pay shorts, e.g. > 0.0001),
