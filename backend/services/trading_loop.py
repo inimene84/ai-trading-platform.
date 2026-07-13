@@ -103,8 +103,12 @@ class TradingLoopService:
         # Cycle-level cache for exchange positions (populated once per cycle,
         # avoids calling get_positions() per symbol which returns ALL positions)
         self._cycle_positions: list = []
-        # Semaphore: process max 3 symbols concurrently to stagger API calls
-        self._symbol_semaphore = asyncio.Semaphore(3)
+        # Semaphore: stagger symbol processing to bound Binance API bursts.
+        # Env-tunable so a larger scan universe can raise throughput slightly
+        # without a rebuild (each symbol costs ~40 API weight; budget is 2400/min).
+        self._symbol_semaphore = asyncio.Semaphore(
+            max(1, int(os.getenv("SYMBOL_CONCURRENCY", "3")))
+        )
         # New-bar gate: symbol → open-time of the last bar the entry pipeline
         # evaluated. The loop cycles every 15 min on 1h bars, so without this
         # the same bar was re-decided up to 4x (churn + redundant LLM cost).

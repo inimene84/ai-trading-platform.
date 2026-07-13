@@ -269,7 +269,13 @@ async def _invoke_provider(
             "max_tokens": tokens,
         }
         if system:
-            payload["system"] = system
+            # Prompt caching: static system prompts (personas, alert templates)
+            # are marked cacheable so repeated calls only pay ~10% for cached
+            # input tokens. Ignored harmlessly when under the model's minimum
+            # cacheable length.
+            payload["system"] = [
+                {"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}
+            ]
             
         async with httpx.AsyncClient(timeout=45.0) as client:
             # If the model hits the token cap mid-JSON the output is unusable,
