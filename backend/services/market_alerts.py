@@ -84,7 +84,7 @@ async def _analyze_market(
             prompt=user_prompt,
             system=system_prompt,
             temperature=0.3,
-            max_tokens=300,
+            max_tokens=1024,
             response_json=True
         )
         output = json.loads(res)

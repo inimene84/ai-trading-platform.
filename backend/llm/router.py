@@ -92,8 +92,8 @@ _DEFAULT_REGISTRY: dict[str, ModelConfig] = {
 
     # Direct OpenRouter fallback (bypasses LiteLLM proxy)
     "fallback_1": ModelConfig(
-        name=os.getenv("OPENROUTER_MODEL", "openrouter/anthropic/claude-3.5-sonnet"),
-        provider="openai",  # OpenRouter uses OpenAI format
+        name=os.getenv("OPENROUTER_MODEL", "anthropic/claude-sonnet-5"),
+        provider="openrouter",
         tier="balanced",
         base_url=os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
         api_key_env="OPENROUTER_API_KEY",
@@ -105,10 +105,11 @@ _DEFAULT_REGISTRY: dict[str, ModelConfig] = {
         api_key_env="ANTHROPIC_API_KEY",
     ),
     "fallback_3": ModelConfig(
-        name=os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
-        provider="google",
+        name=os.getenv("GEMINI_MODEL", "google/gemini-2.5-flash"),
+        provider="openrouter-gemini",
         tier="balanced",
-        api_key_env="GOOGLE_API_KEY",
+        base_url=os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
+        api_key_env="OPENROUTER_API_KEY",
     ),
 }
 
@@ -177,13 +178,15 @@ def _clean_and_parse_json(content: str) -> dict:
     except json.JSONDecodeError:
         pass
         
-    # Try markdown json block extraction
-    m = re.search(r'```(?:json)?\s*\n?({.*?})\s*\n?```', content, re.DOTALL)
+    # Try markdown json block extraction (with or without outer braces)
+    m = re.search(r'```(?:json)?\s*\n?(.*?)\s*\n?```', content, re.DOTALL)
     if m:
-        try:
-            return json.loads(m.group(1))
-        except json.JSONDecodeError:
-            pass
+        inner = m.group(1).strip()
+        for candidate in (inner, f"{{{inner}}}"):
+            try:
+                return json.loads(candidate)
+            except json.JSONDecodeError:
+                pass
             
     # Try searching for anything between first { and last }
     m = re.search(r'\{.*\}', content, re.DOTALL)
@@ -210,7 +213,7 @@ async def _invoke_provider(
     temp = temperature if temperature is not None else cfg.temperature
     tokens = max_tokens if max_tokens is not None else cfg.max_tokens
     
-    if prov in ("litellm", "xai", "groq", "openai"):
+    if prov in ("litellm", "xai", "groq", "openai", "openrouter", "openrouter-gemini"):
         # OpenAI chat completions format
         base_url = cfg.base_url or "https://api.openai.com/v1"
         messages = []
@@ -255,24 +258,50 @@ async def _invoke_provider(
             headers["x-api-key"] = api_key
             headers["anthropic-version"] = "2023-06-01"
             
+        messages = [{"role": "user", "content": prompt}]
+        # Anthropic API has no JSON mode; prefilling the assistant turn with "{"
+        # forces raw JSON output (no markdown fences) and saves output tokens.
+        if response_json:
+            messages.append({"role": "assistant", "content": "{"})
         payload = {
             "model": cfg.name,
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": messages,
             "max_tokens": tokens,
         }
         if system:
             payload["system"] = system
             
         async with httpx.AsyncClient(timeout=45.0) as client:
-            resp = await client.post(url, headers=headers, json=payload)
-            if not resp.is_success:
-                raise httpx.HTTPStatusError(f"HTTP {resp.status_code}: {resp.text[:200]}", request=resp.request, response=resp)
-            data = resp.json()
-            text = ""
-            for block in data.get("content", []):
-                if block.get("type") == "text":
-                    text += block.get("text", "")
-            return text
+            # If the model hits the token cap mid-JSON the output is unusable,
+            # so retry once with double the budget before falling through.
+            for attempt_tokens in (tokens, tokens * 2):
+                payload["max_tokens"] = attempt_tokens
+                resp = await client.post(url, headers=headers, json=payload)
+                if not resp.is_success:
+                    raise httpx.HTTPStatusError(f"HTTP {resp.status_code}: {resp.text[:200]}", request=resp.request, response=resp)
+                data = resp.json()
+                text = ""
+                for block in data.get("content", []):
+                    if block.get("type") == "text":
+                        text += block.get("text", "")
+                if response_json:
+                    # Kie's proxy ignores the assistant prefill and returns the
+                    # full response; only re-attach "{" when the model actually
+                    # continued from the prefilled brace.
+                    stripped = text.lstrip()
+                    if not stripped.startswith("{") and not stripped.startswith("```"):
+                        text = "{" + text
+                # Kie's proxy reports end_turn even when the cap is hit, so also
+                # treat an output that consumed the full budget as truncated.
+                out_tokens = (data.get("usage") or {}).get("output_tokens", 0)
+                truncated = data.get("stop_reason") == "max_tokens" or out_tokens >= attempt_tokens
+                if truncated and response_json:
+                    logger.warning(
+                        f"LLM output truncated at max_tokens={attempt_tokens} for {cfg.name}; retrying with larger budget"
+                    )
+                    continue
+                return text
+            raise ValueError(f"Output still truncated at max_tokens={tokens * 2} for {cfg.name}")
             
     elif prov in ("google", "gemini"):
         # Google Gemini generateContent format
@@ -357,27 +386,35 @@ async def call_llm_resilient(
             base_url=os.getenv('XAI_BASE_URL', 'https://api.x.ai/v1'),
             api_key_env='XAI_API_KEY'
         )),
-        ("Fallback 3 (Anthropic)", _DEFAULT_REGISTRY["fallback_2"]),
-        ("Fallback 4 (Gemini)", _DEFAULT_REGISTRY["fallback_3"]),
+        ("Fallback 3 (OpenAI)", ModelConfig(
+            name=os.getenv('OPENAI_MODEL', 'gpt-4o-mini'),
+            provider='openai',
+            base_url=os.getenv('OPENAI_BASE_URL', 'https://api.openai.com/v1'),
+            api_key_env='OPENAI_API_KEY'
+        )),
+        ("Fallback 4 (Anthropic)", _DEFAULT_REGISTRY["fallback_2"]),
+        ("Fallback 5 (Gemini)", _DEFAULT_REGISTRY["fallback_3"]),
     ]
     if os.getenv("OLLAMA_ENABLED", "false").lower() == "true":
-        chain.append(("Fallback 5 (Ollama)", ModelConfig(
+        chain.append(("Fallback 6 (Ollama)", ModelConfig(
             name=os.getenv('OLLAMA_PRIMARY_MODEL', 'phi3.5'),
             provider='ollama',
             base_url=os.getenv('OLLAMA_BASE_URL', 'http://localhost:11434'),
         )))
     
     configs_to_try = []
-    seen_providers = set()
+    seen_models: set[str] = set()
     
     # Primary is always first
     configs_to_try.append((chain[0][0], chain[0][1]))
-    seen_providers.add(chain[0][1].provider)
+    seen_models.add(chain[0][1].name)
     
     for name, cfg in chain[1:]:
         key = get_api_key(cfg)
         is_configured = True
         if cfg.provider not in ("ollama",) and not key:
+            is_configured = False
+        if key and len(key) < 20 and cfg.api_key_env in ("XAI_API_KEY", "GOOGLE_API_KEY"):
             is_configured = False
         if key and any(marker in key.lower() for marker in (
             "changeme", "placeholder", "your_", "xxx",
@@ -387,9 +424,9 @@ async def call_llm_resilient(
             logger.warning("LLM Router: skipping malformed Anthropic API key")
             is_configured = False
             
-        if is_configured and cfg.provider not in seen_providers:
+        if is_configured and cfg.name not in seen_models:
             configs_to_try.append((name, cfg))
-            seen_providers.add(cfg.provider)
+            seen_models.add(cfg.name)
             
     async with _LLM_SEMAPHORE:
         last_error = None
