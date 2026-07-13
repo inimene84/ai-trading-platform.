@@ -61,6 +61,8 @@ class PositionManager:
             try:
                 if isinstance(opened_at, str):
                     opened_at = dateutil_parser.parse(opened_at)
+                if opened_at.tzinfo is None:
+                    opened_at = opened_at.replace(tzinfo=timezone.utc)
                 duration_hours = (datetime.now(timezone.utc) - opened_at).total_seconds() / 3600
             except Exception:
                 pass

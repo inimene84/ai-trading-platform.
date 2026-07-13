@@ -1492,7 +1492,7 @@ class TradingLoopService:
             kept = [s for s in candidates if s.upper() not in blocked]
             skipped = [s for s in candidates if s.upper() in blocked]
             if skipped:
-                logger.warning(
+                logger.info(
                     f"  [SYMBOL GATE] negative expectancy over {lookback_days}d "
                     f"(skipped): {skipped}"
                 )

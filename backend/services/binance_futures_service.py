@@ -260,7 +260,7 @@ class BinanceFuturesService:
             logger.info(f"[{sym}] Margin → {self.margin_type}")
         except Exception as e:
             err = str(e)
-            if '-4046' in err or '-4175' in err:  # -4046=already set, -4175=credit status (BNFCR)
+            if '-4046' in err or '-4175' in err or '-4067' in err:  # -4046=already set, -4175=credit status (BNFCR), -4067=open orders
                 pass  # safe to ignore
             else:
                 logger.warning(f"[{sym}] margin_type: {e}")
@@ -1139,7 +1139,7 @@ class BinanceFuturesService:
             order = client.futures_create_order(**params)
         except Exception as e:
             # -2021/-5022: would immediately match (not a maker) → bail to MARKET
-            logger.info(f"  [MAKER] post-only rejected for {futures_sym} ({e}) — MARKET fallback")
+            logger.debug(f"  [MAKER] post-only rejected for {futures_sym} ({e}) — MARKET fallback")
             return None
 
         oid = order.get("orderId")

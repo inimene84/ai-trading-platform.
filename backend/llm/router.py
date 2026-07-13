@@ -261,7 +261,7 @@ async def _invoke_provider(
         messages = [{"role": "user", "content": prompt}]
         # Anthropic API has no JSON mode; prefilling the assistant turn with "{"
         # forces raw JSON output (no markdown fences) and saves output tokens.
-        if response_json:
+        if response_json and not is_kie:
             messages.append({"role": "assistant", "content": "{"})
         payload = {
             "model": cfg.name,
