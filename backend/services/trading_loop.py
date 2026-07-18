@@ -699,8 +699,31 @@ class TradingLoopService:
         # but still runs exchange protection restore and trailing maintenance.
         # Previously a transient balance failure (available=0) skipped every
         # symbol task and suspended protection maintenance for the full cycle.
+        # Merge open-position symbols into the scan set so a tighter universe
+        # (e.g. recovery majors-only) never abandons an in-flight leg's SL/TP.
+        manage_symbols = list(self._symbols)
+        try:
+            db_open = SessionLocal()
+            try:
+                open_syms = [
+                    s for (s,) in db_open.query(Trade.symbol)
+                    .filter(Trade.status.in_(["open", "filled"]))
+                    .distinct()
+                    .all()
+                    if s
+                ]
+            finally:
+                db_open.close()
+            known = {s.upper() for s in manage_symbols}
+            for s in open_syms:
+                if s.upper() not in known:
+                    manage_symbols.append(s)
+                    known.add(s.upper())
+        except Exception as e:
+            logger.warning(f"  open-symbol merge failed ({e}); using configured universe only")
+
         # ── SYMBOL-QUALITY GATE: drop blacklisted + illiquid symbols ──
-        tradeable = await self._filter_tradeable_symbols(self._symbols)
+        tradeable = await self._filter_tradeable_symbols(manage_symbols)
         results = await self._run_symbol_batches(
             tradeable, min_confidence, ai_threshold, max_positions,
         )
