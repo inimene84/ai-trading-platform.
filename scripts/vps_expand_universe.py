@@ -14,11 +14,12 @@ lines = p.read_text().splitlines(keepends=True)
 
 # 20 liquid USDT perps — all present in the service's static LOT_SIZE/tick maps.
 updates = {
-    'TRADING_SYMBOLS': ('ETHUSDT,SOLUSDT,XRPUSDT,ARBUSDT,ADAUSDT,DOGEUSDT,BNBUSDT,'
-                        'AVAXUSDT,LINKUSDT,NEARUSDT,LTCUSDT,DOTUSDT,ATOMUSDT,APTUSDT,'
+    # ADA/ARB/DOGE/APT excluded — Jul-2026 weekly loss leaders.
+    'TRADING_SYMBOLS': ('ETHUSDT,SOLUSDT,XRPUSDT,BNBUSDT,'
+                        'AVAXUSDT,LINKUSDT,NEARUSDT,LTCUSDT,DOTUSDT,ATOMUSDT,'
                         'OPUSDT,INJUSDT,SUIUSDT,UNIUSDT,POLUSDT,BTCUSDT'),
     'MAX_POSITIONS': '10',
-    'MAX_SAME_DIRECTION_POSITIONS': '6',
+    'MAX_SAME_DIRECTION_POSITIONS': '3',
     'EQUITY_SIZING_ENABLED': 'true',
     'RISK_PER_TRADE_PCT': '0.01',
     'MAX_TRADE_NOTIONAL_EQUITY_MULT': '1.0',

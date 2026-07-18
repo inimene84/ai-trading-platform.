@@ -72,11 +72,12 @@ class TradingLoopService:
         self._error: Optional[str] = None
         self._interval_minutes = 15
         env_syms = os.getenv('TRADING_SYMBOLS', '')
+        # Default universe omits ADA/ARB/DOGE/APT — confirmed weekly loss leaders.
         self._symbols = [s.strip() for s in env_syms.split(',') if s.strip()] if env_syms else [
             'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'XRPUSDT',
-            'ADAUSDT', 'DOGEUSDT', 'AVAXUSDT', 'DOTUSDT', 'LINKUSDT',
+            'AVAXUSDT', 'DOTUSDT', 'LINKUSDT',
             'POLUSDT', 'LTCUSDT', 'UNIUSDT', 'ATOMUSDT', 'NEARUSDT',
-            'OPUSDT', 'ARBUSDT', 'APTUSDT', 'INJUSDT'
+            'OPUSDT', 'INJUSDT', 'BTCUSDT',
         ]
         self._strategy_name = "combined"
         self._last_cycle: Optional[str] = None
@@ -902,6 +903,13 @@ class TradingLoopService:
                 db.commit()
                 return {"signals": 0, "trades": 0}
 
+            # 3b2. Blacklisted symbols with an open leg: manage exits only —
+            # no new entry and no pyramid add.
+            if symbol.upper() in self.risk_config.symbol_blacklist:
+                self._check_sl_tp(db, symbol, bars)
+                db.commit()
+                return {"signals": 0, "trades": 0}
+
             # 3c. New-bar gate — the entry pipeline consumes 1h bars; the same
             # bar must not be re-decided every 15-min cycle. SL/TP, trailing
             # and protection management still run each cycle.
@@ -1397,11 +1405,43 @@ class TradingLoopService:
         blacklist = self.risk_config.symbol_blacklist
         min_vol = float(self.risk_config.min_24h_quote_volume_usdt or 0)
 
-        # 1) Hard blacklist always applies (works even with no network)
-        candidates = [s for s in symbols if s.upper() not in blacklist]
-        blacklisted = [s for s in symbols if s.upper() in blacklist]
-        if blacklisted:
-            logger.warning(f"  [SYMBOL GATE] blacklisted (skipped): {blacklisted}")
+        # Open positions must keep flowing through management even if blacklisted
+        # for new entries (never abandon an in-flight SL/TP/trail).
+        open_symbols: set[str] = set()
+        try:
+            db = SessionLocal()
+            try:
+                open_symbols = {
+                    s.upper()
+                    for (s,) in db.query(Trade.symbol)
+                    .filter(Trade.status.in_(["open", "filled"]))
+                    .distinct()
+                    .all()
+                }
+            finally:
+                db.close()
+        except Exception as e:
+            logger.warning(f"  [SYMBOL GATE] open-symbol lookup failed ({e}); blacklist applies fully")
+
+        # 1) Hard blacklist for NEW entries; keep open legs for management.
+        candidates = []
+        blacklisted_skipped = []
+        blacklisted_managed = []
+        for s in symbols:
+            su = s.upper()
+            if su in blacklist and su not in open_symbols:
+                blacklisted_skipped.append(s)
+            elif su in blacklist and su in open_symbols:
+                blacklisted_managed.append(s)
+                candidates.append(s)
+            else:
+                candidates.append(s)
+        if blacklisted_skipped:
+            logger.warning(f"  [SYMBOL GATE] blacklisted (skipped): {blacklisted_skipped}")
+        if blacklisted_managed:
+            logger.warning(
+                f"  [SYMBOL GATE] blacklisted but open — manage only: {blacklisted_managed}"
+            )
 
         # 1b) Per-symbol expectancy gate: skip symbols that measurably bleed.
         candidates = self._apply_expectancy_gate(candidates)

@@ -25,6 +25,19 @@ def pyramid_price_improved(
     return False
 
 
+def pyramid_position_underwater(
+    direction: str, entry_price: float, current_price: float,
+) -> bool:
+    """True when mark has moved against the open position vs its entry."""
+    if not entry_price or not current_price:
+        return False
+    if direction == "BUY":
+        return current_price < entry_price
+    if direction == "SELL":
+        return current_price > entry_price
+    return False
+
+
 def _reviewer_gate_fail_open() -> bool:
     """Whether an unexpected error in the risk-reviewer GATE may let a trade through.
 
@@ -146,6 +159,23 @@ class DecisionEngine:
                     logger.info(f"[{symbol}] Pyramiding blocked: market is in RANGING/CHOP regime.")
                     return None
                 if len(pyramid_layers) < self.config.pyramid_max_layers:
+                    cur_px = bars[-1]["close"]
+                    entry_px = float(getattr(existing_position, "entry_price", 0) or 0)
+                    direction = getattr(existing_position, "direction", None)
+                    if (
+                        getattr(self.config, "pyramid_block_underwater", True)
+                        and direction
+                        and pyramid_position_underwater(direction, entry_px, cur_px)
+                    ):
+                        self._record_eval(
+                            symbol, direction, 0.0,
+                            f"pyramid blocked: underwater vs entry {entry_px} (mark {cur_px})",
+                        )
+                        logger.info(
+                            f"[{symbol}] Pyramiding blocked: position underwater "
+                            f"(entry={entry_px}, mark={cur_px})."
+                        )
+                        return None
                     # Strategy signal for pyramid
                     signal = self.strategy.generate_signal(
                         symbol,
@@ -162,7 +192,6 @@ class DecisionEngine:
                         # Optional price gate (PYRAMID_MIN_IMPROVEMENT=0 → add every cycle).
                         if pyramid_layers and self.config.pyramid_min_improvement > 0:
                             last_px = pyramid_layers[-1]
-                            cur_px = bars[-1]["close"]
                             imp = self.config.pyramid_min_improvement
                             # LONG pyramid: add on strength (price higher).
                             # SHORT pyramid/DCA: add when price moved vs last layer.

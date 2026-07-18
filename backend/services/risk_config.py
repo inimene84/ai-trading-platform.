@@ -17,13 +17,26 @@ class RiskConfig(BaseSettings):
     opinion_close_cooldown_min: int = 30
     
     # Pyramid/DCA settings
+    # Live week (Jul 11-18): 53 same-symbol multi-close clusters; stacked layers
+    # stopped out together and amplified losses. Cap layers hard; never add
+    # while the base position is underwater.
     pyramid_mode: bool = False
-    pyramid_max_layers: int = 5
+    pyramid_max_layers: int = PydanticField(
+        default=2,
+        validation_alias=AliasChoices("pyramid_max_layers", "PYRAMID_MAX_LAYERS"),
+    )
     pyramid_atr_multiplier: float = 1.0
     pyramid_min_conf_increase: float = 0.05
     pyramid_min_improvement: float = 0.005
     pyramid_usdt_per_layer: float = 10.0
     pyramid_max_wallet_pct: float = 0.70
+    # Block pyramid adds when mark is against the position vs entry.
+    pyramid_block_underwater: bool = PydanticField(
+        default=True,
+        validation_alias=AliasChoices(
+            "pyramid_block_underwater", "PYRAMID_BLOCK_UNDERWATER"
+        ),
+    )
     
     # Risk Limits
     max_positions: int = 4
@@ -40,7 +53,7 @@ class RiskConfig(BaseSettings):
     # Correlation cap: max open positions (distinct symbols) in the SAME
     # direction. Alts are ~0.9 correlated — 8 parallel shorts is one bet.
     max_same_direction_positions: int = PydanticField(
-        default=5,
+        default=3,
         validation_alias=AliasChoices("max_same_direction_positions", "MAX_SAME_DIRECTION_POSITIONS"),
     )
     # Portfolio-level direction cap: total same-direction NOTIONAL may reach
@@ -198,20 +211,29 @@ class RiskConfig(BaseSettings):
         validation_alias=AliasChoices("trailing_activation_pct", "TRAILING_ACTIVATION_PCT"),
     )
     # How far into profit (in ATR units) before the trail activates.
+    # Live week: 69/72 wins closed near a raised SL and 0 hits of full TP —
+    # early trail/STEP-TRAIL clipped winners while losers paid full risk
+    # (avg win $0.34 vs avg loss $0.66). Activate closer to TP (2.5 ATR) so
+    # winners have room to run.
     trail_activation_atr: float = PydanticField(
-        default=1.0,
+        default=2.0,
         validation_alias=AliasChoices("trail_activation_atr", "TRAIL_ACTIVATION_ATR"),
     )
     # Trailing distance behind the high-water mark, in ATR units.
     # MUST be < trail_activation_atr, otherwise the trail locks a LOSS at
     # activation and can only lock +1R once price reaches the TP itself — which
     # caps every realized winner below the 2.5R the min-edge gate sized for and
-    # bleeds refunded margin (leak #4). At 0.8 with activation 1.0 the trail
-    # locks ~+0.2 ATR profit the moment it arms, and banks ~+1.2R on a 2-ATR
-    # push that reverses, so winners >= losers.
+    # bleeds refunded margin (leak #4). At 0.8 with activation 2.0 the trail
+    # locks ~+1.2 ATR once armed.
     trail_atr_mult: float = PydanticField(
         default=0.8,
         validation_alias=AliasChoices("trail_atr_mult", "TRAIL_ATR_MULT"),
+    )
+    # Early breakeven ratchet at 0.75× activation. Disabled by default — it was
+    # the dominant "win near SL" path and destroyed payoff asymmetry.
+    step_trail_enabled: bool = PydanticField(
+        default=False,
+        validation_alias=AliasChoices("step_trail_enabled", "STEP_TRAIL_ENABLED"),
     )
 
     # ── Partial take-profit ──
@@ -242,9 +264,15 @@ class RiskConfig(BaseSettings):
             "min_24h_quote_volume_usdt", "MIN_24H_QUOTE_VOLUME_USDT"
         ),
     )
-    # Hard blacklist (comma-separated env). Always skipped regardless of volume.
+    # Hard blacklist (comma-separated env). Always skipped for NEW entries
+    # regardless of volume. Open positions on blacklisted symbols are still
+    # managed (SL/TP/trail) so an in-flight leg is never abandoned.
+    # Pre-seeded with confirmed weekly loss leaders (ADA/ARB/DOGE/APT).
     symbol_blacklist_raw: str = PydanticField(
-        default="",
+        default=(
+            "ADAUSDT,ARBUSDT,DOGEUSDT,APTUSDT,"
+            "ADAUSDC,ARBUSDC,DOGEUSDC,APTUSDC"
+        ),
         validation_alias=AliasChoices("symbol_blacklist", "SYMBOL_BLACKLIST"),
     )
 
