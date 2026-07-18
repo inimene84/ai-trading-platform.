@@ -96,6 +96,10 @@ if [ -f .env ]; then
   echo "  Applying weekly-edge risk/trail/pyramid/symbol safeguards..."
   _upsert_env RISK_MAX_DRAWDOWN_PCT 20
   _upsert_env RISK_MAX_DAILY_LOSS_PCT 5
+  # 72h peak window: after a realized multi-week drawdown, a 30d peak
+  # (~$246 vs ~$170) immediately trips the restored 20% gate and locks the
+  # loop forever. Forward protection uses a recent equity anchor instead.
+  _upsert_env RISK_PEAK_LOOKBACK_HOURS 72
   _upsert_env PYRAMID_MAX_LAYERS 2
   _upsert_env PYRAMID_BLOCK_UNDERWATER true
   _upsert_env MAX_SAME_DIRECTION_POSITIONS 3
