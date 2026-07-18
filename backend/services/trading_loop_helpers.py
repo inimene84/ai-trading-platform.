@@ -376,13 +376,17 @@ class TrailingStopManager:
                 if not trade.entry_price:
                     continue
 
+                step_trail = bool(getattr(risk_config, "step_trail_enabled", False))
+
                 if trade.direction == "BUY":
                     hw = high_water.get(trade.id, max(trade.entry_price, current_price))
                     hw = max(hw, current_price)
                     high_water[trade.id] = hw
 
                     if hw - trade.entry_price < activation_dist:
-                        if hw - trade.entry_price >= (activation_dist * 0.75):
+                        # Optional early BE ratchet. Off by default — it clipped
+                        # winners before TP and produced avg-win << avg-loss.
+                        if step_trail and hw - trade.entry_price >= (activation_dist * 0.75):
                             fee_offset = trail_dist * 0.1
                             candidate = trade.entry_price + fee_offset
                             old_stop = trade.stop_loss if trade.stop_loss is not None else float("-inf")
@@ -405,7 +409,7 @@ class TrailingStopManager:
                     high_water[trade.id] = lw
 
                     if trade.entry_price - lw < activation_dist:
-                        if trade.entry_price - lw >= (activation_dist * 0.75):
+                        if step_trail and trade.entry_price - lw >= (activation_dist * 0.75):
                             fee_offset = trail_dist * 0.1
                             candidate = trade.entry_price - fee_offset
                             old_stop = trade.stop_loss if trade.stop_loss is not None else float("inf")

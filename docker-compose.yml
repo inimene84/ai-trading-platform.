@@ -35,18 +35,22 @@ services:
       # Safety: risk guard ENABLED by default. Only disable for explicit testing by setting DISABLE_RISK_GUARD=true in .env
       DISABLE_RISK_GUARD: ${DISABLE_RISK_GUARD:-false}
       # MiCA/EEA: trade USDC-margined perpetuals (USDT restricted for EU users).
-      # 9 USDC pairs (DOT has no USDC perp). Override via TRADING_SYMBOLS in .env.
-      TRADING_SYMBOLS: ${TRADING_SYMBOLS:-BTCUSDC,ETHUSDC,SOLUSDC,BNBUSDC,XRPUSDC,ADAUSDC,AVAXUSDC,LINKUSDC,UNIUSDC}
-      # Liquidity floor. 3M keeps all 9 USDC majors (USDC books are thinner than
-      # USDT twins; 50M would silently drop ADA/AVAX/LINK/UNI). Override in .env.
+      # Override via TRADING_SYMBOLS in .env. ADA dropped (weekly loss leader).
+      TRADING_SYMBOLS: ${TRADING_SYMBOLS:-BTCUSDC,ETHUSDC,SOLUSDC,BNBUSDC,XRPUSDC,AVAXUSDC,LINKUSDC,UNIUSDC}
+      # Liquidity floor. 3M keeps USDC majors (USDC books are thinner than
+      # USDT twins; 50M would silently drop AVAX/LINK/UNI). Override in .env.
       MIN_24H_QUOTE_VOLUME_USDT: ${MIN_24H_QUOTE_VOLUME_USDT:-3000000}
-      # Payoff geometry (leak #4). TRAIL_ATR_MULT MUST be < TRAIL_ACTIVATION_ATR
-      # or the trail locks a loss at activation and caps winners below the 2.5R
-      # TP -> refunded margin bleeds out. 0.8 banks ~+1.2R on a 2-ATR reversal.
+      # Payoff geometry. TRAIL_ATR_MULT MUST be < TRAIL_ACTIVATION_ATR.
       SL_ATR_MULT: ${SL_ATR_MULT:-1.0}
       TP_ATR_MULT: ${TP_ATR_MULT:-2.5}
-      TRAIL_ACTIVATION_ATR: ${TRAIL_ACTIVATION_ATR:-1.0}
+      TRAIL_ACTIVATION_ATR: ${TRAIL_ACTIVATION_ATR:-2.0}
       TRAIL_ATR_MULT: ${TRAIL_ATR_MULT:-0.8}
+      STEP_TRAIL_ENABLED: ${STEP_TRAIL_ENABLED:-false}
+      RISK_MAX_DRAWDOWN_PCT: ${RISK_MAX_DRAWDOWN_PCT:-20}
+      RISK_MAX_DAILY_LOSS_PCT: ${RISK_MAX_DAILY_LOSS_PCT:-5}
+      PYRAMID_MAX_LAYERS: ${PYRAMID_MAX_LAYERS:-2}
+      PYRAMID_BLOCK_UNDERWATER: ${PYRAMID_BLOCK_UNDERWATER:-true}
+      MAX_SAME_DIRECTION_POSITIONS: ${MAX_SAME_DIRECTION_POSITIONS:-3}
       # Fee-churn fix: post-only (GTX) maker entries with MARKET fallback.
       # OFF by default (fail-safe). Set true to cut entry fees 0.05%->0.02%.
       MAKER_ENTRY_ENABLED: ${MAKER_ENTRY_ENABLED:-false}

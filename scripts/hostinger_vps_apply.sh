@@ -58,11 +58,23 @@ if grep -qE '^PAPER_TRADING=false$' .env \
   exit 1
 fi
 
+# Upsert KEY=VALUE in .env (replace existing line or append).
+_upsert_env() {
+  local key="$1" value="$2"
+  if grep -qE "^${key}=" .env; then
+    # Escape sed replacement metacharacters in value (&, \, |)
+    local escaped
+    escaped=$(printf '%s' "$value" | sed -e 's/[&|\\]/\\&/g')
+    sed -i "s|^${key}=.*|${key}=${escaped}|" .env
+  else
+    echo "${key}=${value}" >> .env
+  fi
+}
+
 if [ -f .env ]; then
   grep -q '^PYRAMID_MIN_IMPROVEMENT=' .env || echo 'PYRAMID_MIN_IMPROVEMENT=0.005' >> .env
   sed -i 's/^PYRAMID_MIN_IMPROVEMENT=0$/PYRAMID_MIN_IMPROVEMENT=0.005/' .env
   grep -q '^MIN_AVAILABLE_MARGIN_USDT=' .env || echo 'MIN_AVAILABLE_MARGIN_USDT=5' >> .env
-  grep -q '^MAX_SAME_DIRECTION_POSITIONS=' .env || echo 'MAX_SAME_DIRECTION_POSITIONS=5' >> .env
   # Kill floor: never below $50 on a ~$128 account
   if grep -q '^TRADING_KILL_FLOOR_USDT=20' .env 2>/dev/null; then
     sed -i 's/^TRADING_KILL_FLOOR_USDT=20/TRADING_KILL_FLOOR_USDT=65/' .env
@@ -76,6 +88,34 @@ if [ -f .env ]; then
   if ! grep -q '^GRAFANA_URL=' .env; then
     VPS_IP=$(curl -sf --max-time 3 ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')
     echo "GRAFANA_URL=http://${VPS_IP:-localhost}:3000" >> .env
+  fi
+
+  # ── Weekly-edge fixes (Jul 2026): restore risk halts, tighten trail/pyramid,
+  #    drop confirmed loss-leader alts. Force-overwrite unsafe overrides that
+  #    previously disabled the guard (drawdown=99 / daily=100 / pyramid=10).
+  echo "  Applying weekly-edge risk/trail/pyramid/symbol safeguards..."
+  _upsert_env RISK_MAX_DRAWDOWN_PCT 20
+  _upsert_env RISK_MAX_DAILY_LOSS_PCT 5
+  _upsert_env PYRAMID_MAX_LAYERS 2
+  _upsert_env PYRAMID_BLOCK_UNDERWATER true
+  _upsert_env MAX_SAME_DIRECTION_POSITIONS 3
+  _upsert_env TRAILING_STOP_ENABLED true
+  _upsert_env STEP_TRAIL_ENABLED false
+  _upsert_env TRAIL_ACTIVATION_ATR 2.0
+  _upsert_env TRAIL_ATR_MULT 0.8
+  _upsert_env NATIVE_TRAILING_ENABLED false
+  _upsert_env SYMBOL_BLACKLIST "ADAUSDT,ARBUSDT,DOGEUSDT,APTUSDT,ADAUSDC,ARBUSDC,DOGEUSDC,APTUSDC,SIRENUSDT,AIGENSYNUSDT,INUSDT,BUSDT,BRUSDT,SPKUSDT,MAGMAUSDT,VELVETUSDT,HOMEUSDT,BTWUSDT,LABUSDT"
+
+  # Strip weak alts from TRADING_SYMBOLS if present (USDT + USDC forms).
+  if grep -qE '^TRADING_SYMBOLS=' .env; then
+    CURRENT_SYMS=$(grep '^TRADING_SYMBOLS=' .env | cut -d= -f2-)
+    CLEAN_SYMS=$(printf '%s' "$CURRENT_SYMS" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | \
+      grep -vE '^(ADAUSDT|ARBUSDT|DOGEUSDT|APTUSDT|ADAUSDC|ARBUSDC|DOGEUSDC|APTUSDC)$' | \
+      paste -sd, -)
+    if [ -n "$CLEAN_SYMS" ] && [ "$CLEAN_SYMS" != "$CURRENT_SYMS" ]; then
+      _upsert_env TRADING_SYMBOLS "$CLEAN_SYMS"
+      echo "  Stripped ADA/ARB/DOGE/APT from TRADING_SYMBOLS"
+    fi
   fi
 fi
 
