@@ -15,7 +15,10 @@ logger = logging.getLogger(__name__)
 # drawdown % ends up measured against capital that may since have been
 # withdrawn — the guard then either never trips or trips spuriously. A rolling
 # window (default 30 days) keeps "peak" anchored to recent equity reality.
-PEAK_LOOKBACK_HOURS = float(os.getenv("RISK_PEAK_LOOKBACK_HOURS", "720"))
+# Default 72h (was 720/30d): a long window after a realized crash permanently
+# trips a restored ~20% drawdown gate against the old peak. Recent anchoring
+# keeps the halt meaningful for forward risk.
+PEAK_LOOKBACK_HOURS = float(os.getenv("RISK_PEAK_LOOKBACK_HOURS", "72"))
 
 
 class RiskBreach(Exception):
