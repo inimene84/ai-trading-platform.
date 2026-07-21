@@ -50,7 +50,7 @@ services:
       MAX_SAME_DIRECTION_POSITIONS: ${MAX_SAME_DIRECTION_POSITIONS:-3}
       # Fee-churn fix: post-only (GTX) maker entries with MARKET fallback.
       # OFF by default (fail-safe). Set true to cut entry fees 0.05%->0.02%.
-      MAKER_ENTRY_ENABLED: ${MAKER_ENTRY_ENABLED:-false}
+      MAKER_ENTRY_ENABLED: ${MAKER_ENTRY_ENABLED:-true}
       MAKER_WAIT_SEC: ${MAKER_WAIT_SEC:-30}
       INFLUXDB_URL: http://vps-influxdb:8086
       INFLUXDB_TOKEN: ${INFLUXDB_TOKEN}
