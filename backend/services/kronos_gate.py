@@ -3,13 +3,16 @@ Kronos Gate — Foundation Model Veto / Boost Layer
 =================================================
 Runs BEFORE the Opinion Layer aggregator.
 Kronos forecasts the next candle close; if it strongly disagrees with
-the strategy signal, it can VETO (neutralize) or FLIP the signal.
+the strategy signal, it can VETO (neutralize) the signal.
 If it strongly agrees, it BOOSTS confidence.
 
 Logic:
   • Kronos confidence ≥ 0.70 and same direction as strategy → BOOST
-  • Kronos confidence ≥ 0.60 and opposite direction → VETO or FLIP
+  • Kronos confidence ≥ 0.45 and opposite direction → VETO (stand aside)
   • Kronos confidence < 0.40 → no action (pass-through)
+
+FLIP (reversing the strategy signal) was removed: fading our own edge when
+Kronos disagreed produced systematic losses. Strong disagreement now vetoes.
 """
 
 import logging
@@ -20,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class KronosGateResult:
-    action: str              # "boost" | "veto" | "flip" | "pass"
+    action: str              # "boost" | "veto" | "dampen" | "pass"
     original_signal: str     # "BUY" | "SELL" | "NEUTRAL"
     final_signal: str
     confidence: float
@@ -101,24 +104,7 @@ def apply_kronos_gate(
             kronos_prediction=kronos_result,
         )
 
-    # ── FLIP: Kronos opposes strongly ──
-    if k_direction != strategy_signal and k_conf >= 0.60 and k_direction in ("BUY", "SELL"):
-        flip_conf = max(k_conf, strategy_confidence * 0.8)
-        reasoning = (
-            f"Kronos FLIP: predicts {k_change:+.2f}% (conf={k_conf:.2f}) "
-            f"opposes {strategy_signal}. Flipping to {k_direction} with conf={flip_conf:.2f}"
-        )
-        logger.info(f"KronosGate [{symbol}]: FLIP {strategy_signal} → {k_direction} conf={flip_conf:.2f}")
-        return KronosGateResult(
-            action="flip",
-            original_signal=strategy_signal,
-            final_signal=k_direction,
-            confidence=flip_conf,
-            reasoning=reasoning,
-            kronos_prediction=kronos_result,
-        )
-
-    # ── VETO: Kronos opposes moderately ──
+    # ── VETO: Kronos opposes (moderate or strong) — stand aside, never flip ──
     if k_direction != strategy_signal and k_conf >= 0.45:
         reasoning = (
             f"Kronos VETO: predicts {k_change:+.2f}% (conf={k_conf:.2f}) "

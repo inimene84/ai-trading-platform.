@@ -1267,13 +1267,23 @@ class TradingLoopService:
             db.rollback()
 
     def _apply_partial_tp(self, db, symbol: str, bars: list[dict]):
-        """Close a portion of the position at partial_tp_atr_mult × ATR profit."""
+        """Close a portion of the position at partial_tp_atr_mult × ATR profit (paper)."""
         PartialTPManager.apply_partial_tp(
             db=db,
             symbol=symbol,
             bars=bars,
             risk_config=self.risk_config,
             strategy_name=self._strategy_name,
+        )
+
+    def _apply_partial_tp_live(self, db, symbol: str, bars: list[dict]):
+        """Live: one exchange-sized reduce-only partial (safe with pyramid rows)."""
+        PartialTPManager.apply_partial_tp_live(
+            db=db,
+            symbol=symbol,
+            bars=bars,
+            risk_config=self.risk_config,
+            broker=binance_futures_broker,
         )
 
     def _apply_trailing_stop(self, db, symbol: str, bars: list[dict]):
@@ -1303,11 +1313,13 @@ class TradingLoopService:
         # Ratchet the trailing stop up/down BEFORE evaluating the crossing,
         # so a profit-locked stop can fire in the same cycle.
         self._apply_trailing_stop(db, symbol, bars)
-        # Live Binance: exchange SL/TP + _sync_positions_with_broker are authoritative.
-        # Software partial closes per DB row left legs open and caused restart incidents.
+        # Live Binance: exchange SL/TP + _sync_positions_with_broker are authoritative
+        # for full closes. Symbol-aggregated partial TP is safe (one reduce-only
+        # sized from exchange qty); per-DB-row partials remain paper-only.
         if self._is_live_binance():
+            self._apply_partial_tp_live(db, symbol, bars)
             return
-        # Partial take-profit: close a portion at 1× ATR profit (paper / non-live only)
+        # Partial take-profit: close a portion at 1× ATR profit (paper / non-live)
         self._apply_partial_tp(db, symbol, bars)
         current_price = bars[-1]["close"]
         trades = (

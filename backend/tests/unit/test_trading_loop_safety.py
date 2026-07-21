@@ -93,10 +93,14 @@ def test_check_sl_tp_skips_software_close_on_live_binance():
 
     with patch.object(loop, "_ensure_exchange_protection"), \
          patch.object(loop, "_apply_trailing_stop"), \
+         patch.object(loop, "_apply_partial_tp_live") as live_ptp, \
+         patch.object(loop, "_apply_partial_tp") as paper_ptp, \
          patch.object(loop, "_is_live_binance", return_value=True), \
          patch("backend.services.trading_loop.UnifiedTrading") as ut_cls:
         loop._check_sl_tp(db, "BTCUSDT", bars)
-        ut_cls.assert_not_called()
+        ut_cls.assert_not_called()  # no software full close
+        live_ptp.assert_called_once()
+        paper_ptp.assert_not_called()
 
 
 def test_check_sl_tp_runs_software_close_in_paper_mode():

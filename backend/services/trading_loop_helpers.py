@@ -397,7 +397,10 @@ class TrailingStopManager:
                         continue
 
                     candidate = hw - trail_dist
-                    candidate = min(candidate, current_price)
+                    # Never clamp to mark — that parked stops on price and
+                    # scratched winners on the next tick. Skip wrong-side candidates.
+                    if candidate >= current_price:
+                        continue
                     old_stop = trade.stop_loss if trade.stop_loss is not None else float("-inf")
                     if candidate > old_stop:
                         trade.stop_loss = candidate
@@ -420,7 +423,9 @@ class TrailingStopManager:
                         continue
 
                     candidate = lw + trail_dist
-                    candidate = max(candidate, current_price)
+                    # Never clamp to mark — skip wrong-side candidates instead.
+                    if candidate <= current_price:
+                        continue
                     old_stop = trade.stop_loss if trade.stop_loss is not None else float("inf")
                     if candidate < old_stop:
                         trade.stop_loss = candidate
@@ -461,6 +466,7 @@ class PartialTPManager:
         risk_config,
         strategy_name: str,
     ) -> None:
+        """Paper / non-live: close a fraction of each DB row independently."""
         if not getattr(risk_config, "partial_tp_enabled", False):
             return
         if not bars or len(bars) < 16:
@@ -530,6 +536,146 @@ class PartialTPManager:
                     logger.warning(f"  [ {symbol} ] PARTIAL TP failed: {res.message}")
         except Exception as e:
             logger.warning(f"  [ {symbol} ] partial-TP error: {e}")
+
+    @staticmethod
+    def apply_partial_tp_live(
+        db,
+        symbol: str,
+        bars: list[dict],
+        risk_config,
+        broker,
+    ) -> None:
+        """Live Binance: one reduce-only close sized from exchange qty (not per DB row).
+
+        Pyramid stacks multiple DB rows against a single hedge leg. Closing
+        close_pct of each row over-closes the exchange position. Exchange qty
+        is the source of truth; DB rows are rescaled after a confirmed fill.
+        """
+        if not getattr(risk_config, "partial_tp_enabled", False):
+            return
+        if not bars or len(bars) < 16:
+            return
+        try:
+            trades = (
+                db.query(Trade)
+                .filter(Trade.symbol == symbol, Trade.status.in_(["open", "filled"]))
+                .all()
+            )
+            if not trades:
+                return
+            # Symbol-level idempotency: any row already stamped → skip.
+            if any("PARTIAL_TP_DONE" in (t.notes or "") for t in trades):
+                return
+
+            direction = (trades[0].direction or "").upper()
+            if direction not in ("BUY", "SELL"):
+                return
+            # Require a consistent side across pyramid layers.
+            if any((t.direction or "").upper() != direction for t in trades):
+                logger.warning(f"  [ {symbol} ] PARTIAL TP live skipped: mixed directions")
+                return
+
+            current_price = bars[-1]["close"]
+            atr = atr_from_bars(bars, current_price)
+            if atr <= 0:
+                atr = current_price * 0.02
+            partial_dist = risk_config.partial_tp_atr_mult * atr
+            close_pct = float(risk_config.partial_tp_close_pct)
+
+            # VWAP of open rows as the profit reference.
+            total_qty = sum(float(t.quantity or 0) for t in trades)
+            if total_qty <= 0:
+                return
+            vwap = sum(float(t.entry_price) * float(t.quantity or 0) for t in trades) / total_qty
+            if direction == "BUY":
+                profit_dist = current_price - vwap
+            else:
+                profit_dist = vwap - current_price
+            if profit_dist < partial_dist:
+                return
+
+            futures_sym = broker._to_futures_symbol(symbol) if hasattr(broker, "_to_futures_symbol") else symbol
+            if not futures_sym:
+                return
+            position_side = "LONG" if direction == "BUY" else "SHORT"
+            try:
+                live_qty = float(broker._live_position_qty(futures_sym, position_side, raise_on_error=True))
+            except Exception as e:
+                logger.warning(f"  [ {symbol} ] PARTIAL TP live qty check failed: {e}")
+                return
+            if live_qty <= 0:
+                return
+
+            raw_close = live_qty * close_pct
+            if hasattr(broker, "_round_qty"):
+                close_qty = broker._round_qty(futures_sym, raw_close)
+                remainder = broker._round_qty(futures_sym, live_qty - close_qty)
+            else:
+                close_qty = raw_close
+                remainder = live_qty - close_qty
+            if close_qty <= 0 or remainder <= 0:
+                logger.info(
+                    f"  [ {symbol} ] PARTIAL TP live skipped: close={close_qty} remainder={remainder} "
+                    f"(live={live_qty})"
+                )
+                return
+
+            ut = UnifiedTrading()
+            close_side = OrderSide.SELL if direction == "BUY" else OrderSide.BUY
+            res = ut.place_order(UnifiedOrder(
+                symbol=symbol,
+                side=close_side,
+                order_type=OrderType.MARKET,
+                quantity=close_qty,
+                reduce_only=True,
+            ))
+            if not res.success:
+                logger.warning(f"  [ {symbol} ] PARTIAL TP live failed: {res.message}")
+                return
+
+            # Re-read exchange qty after fill; fall back to arithmetic remainder.
+            try:
+                remaining_live = float(
+                    broker._live_position_qty(futures_sym, position_side, raise_on_error=True)
+                )
+            except Exception:
+                remaining_live = remainder
+            if remaining_live < 0:
+                remaining_live = 0.0
+
+            filled_px = res.filled_price or current_price
+            if direction == "BUY":
+                partial_pnl = (filled_px - vwap) * close_qty
+            else:
+                partial_pnl = (vwap - filled_px) * close_qty
+
+            # Rescale DB rows so sum(qty) == remaining exchange qty.
+            db_total = sum(float(t.quantity or 0) for t in trades)
+            scale = (remaining_live / db_total) if db_total > 0 else 0.0
+            note = (
+                f" | PARTIAL_TP_DONE: live closed {close_pct*100:.0f}% "
+                f"({close_qty:.6f}) @ {filled_px:.6f}, partial PnL=${partial_pnl:+.4f}"
+            )
+            for trade in trades:
+                trade.quantity = float(trade.quantity or 0) * scale
+                trade.notes = (trade.notes or "") + note
+
+            logger.info(
+                f"  [ {symbol} ] PARTIAL TP live: closed {close_qty:.6f} @ {filled_px:.6f} "
+                f"(remaining_live={remaining_live:.6f})"
+            )
+            try:
+                asyncio.get_event_loop().create_task(
+                    influx._write(
+                        influx.BUCKET_SYSTEM, "partial_tp",
+                        {"symbol": symbol, "direction": direction, "mode": "live"},
+                        {"pnl": partial_pnl, "close_qty": close_qty, "filled_price": filled_px},
+                    )
+                )
+            except Exception:
+                pass
+        except Exception as e:
+            logger.warning(f"  [ {symbol} ] partial-TP live error: {e}")
 
 
 class ExchangeProtectionManager:

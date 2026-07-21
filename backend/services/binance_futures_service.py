@@ -847,7 +847,7 @@ class BinanceFuturesService:
             result = None
             order_id = ''
             filled_price = 0.0
-            maker_enabled = os.getenv("MAKER_ENTRY_ENABLED", "false").lower() in ("1", "true", "yes")
+            maker_enabled = os.getenv("MAKER_ENTRY_ENABLED", "true").lower() in ("1", "true", "yes")
 
             if maker_enabled and not reduce_only:
                 try:

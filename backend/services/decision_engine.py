@@ -1,6 +1,6 @@
 import os
 import logging
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Never
 from dataclasses import dataclass
 
 from backend.services.risk_config import RiskConfig
@@ -339,16 +339,20 @@ class DecisionEngine:
                 logger.info(f"[{symbol}] Kronos VETOED signal: {gate_result.reasoning}")
                 return None
             elif gate_result.action == "flip":
-                logger.info(f"[{symbol}] Kronos FLIPPED signal: {gate_result.reasoning}")
-                # Update signal direction and confidence from gate
-                signal.signal = gate_result.final_signal
-                signal.confidence = gate_result.confidence
+                # FLIP removed from Kronos gate (faded our edge). Treat as veto.
+                logger.info(f"[{symbol}] Kronos FLIP→VETO (legacy): {gate_result.reasoning}")
+                return None
             elif gate_result.action == "boost":
                 logger.info(f"[{symbol}] Kronos BOOSTED signal: {gate_result.reasoning}")
                 signal.confidence = gate_result.confidence
             elif gate_result.action == "dampen":
                 logger.info(f"[{symbol}] Kronos DAMPENED signal: {gate_result.reasoning}")
                 signal.confidence = gate_result.confidence
+            elif gate_result.action == "pass":
+                pass
+            else:
+                _unreachable: Never = gate_result.action  # type: ignore[assignment]
+                raise AssertionError(f"Unhandled Kronos gate action: {_unreachable}")
 
         # Re-check after gate modification
         if signal.signal not in ["BUY", "SELL"] or signal.confidence < self.config.min_signal_strength:
@@ -472,8 +476,8 @@ class DecisionEngine:
         notional = max(notional, _bn_min)
         quantity = notional / entry_price if entry_price > 0 else 0
 
-        # Min-edge / fee-churn gate: reject trades whose TP can't clear cost.
-        if not self._passes_min_edge(symbol, entry_price, tp, quantity):
+        # Min-edge / fee-churn gate: reject trades whose *captured* move can't clear cost.
+        if not self._passes_min_edge(symbol, entry_price, tp, quantity, bars):
             return None
 
         return Decision(
@@ -488,12 +492,23 @@ class DecisionEngine:
             is_pyramid=is_pyramid
         )
 
-    def _passes_min_edge(self, symbol: str, entry_price: float, tp: float, quantity: float) -> bool:
+    def _passes_min_edge(
+        self,
+        symbol: str,
+        entry_price: float,
+        tp: float,
+        quantity: float,
+        bars: Optional[List[Dict[str, Any]]] = None,
+    ) -> bool:
         """Min-edge / fee-churn gate.
 
-        A trade is only worth taking if its gross expected move to TP clears a
-        multiple of the round-trip cost (fees + slippage). Tight-TP scratch
-        entries that can never out-earn their own fees are rejected here.
+        A trade is only worth taking if its gross *expected captured* move
+        clears a multiple of the round-trip cost (fees + slippage).
+
+        When trailing is enabled, winners are typically scratched near the
+        trail lock (activation − trail distance), not at full TP. Gate on
+        that captured move so fee-unsafe trail scratches are rejected.
+
         FAILS OPEN: any bad input / disabled config -> allow the trade.
         """
         try:
@@ -505,14 +520,26 @@ class DecisionEngine:
             notional = entry_price * quantity
             if notional <= 0:
                 return True
-            gross_tp_profit = abs(tp - entry_price) * quantity
+
+            tp_distance = abs(tp - entry_price)
+            expected_move = tp_distance
+            if getattr(self.config, "trailing_stop_enabled", False):
+                atr = atr_from_bars(bars or [], entry_price)
+                if atr <= 0:
+                    atr = entry_price * 0.02
+                activation = float(getattr(self.config, "trail_activation_atr", 0.0) or 0.0)
+                trail_mult = float(getattr(self.config, "trail_atr_mult", 0.0) or 0.0)
+                captured_atr = max(0.0, activation - trail_mult)
+                expected_move = min(tp_distance, captured_atr * atr)
+
+            gross_expected = expected_move * quantity
             roundtrip_cost = self.config.roundtrip_cost_rate * notional
             required = mult * roundtrip_cost
-            if gross_tp_profit < required:
+            if gross_expected < required:
                 logger.info(
-                    f"  [ {symbol} ] SKIP (min-edge): TP profit ${gross_tp_profit:.4f} "
+                    f"  [ {symbol} ] SKIP (min-edge): expected capture ${gross_expected:.4f} "
                     f"< {mult:.1f}x round-trip cost ${roundtrip_cost:.4f} "
-                    f"(need >= ${required:.4f})"
+                    f"(need >= ${required:.4f}; tp_move=${tp_distance * quantity:.4f})"
                 )
                 return False
             return True
