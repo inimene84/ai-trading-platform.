@@ -185,7 +185,31 @@ services:
       - trading-net
     depends_on:
       - backend
+  kronos-infer:
+    build:
+      context: ./kronos-infer
+      dockerfile: Dockerfile
+    container_name: ai-trading-kronos
+    restart: unless-stopped
+    ports:
+      - "8001:8001"
+    environment:
+      - KRONOS_MODEL=NeoQuasar/Kronos-mini
+      - KRONOS_TOKENIZER=NeoQuasar/Kronos-Tokenizer-2k
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 4G
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - trading-net
 networks:
+
   trading-net:
     external: true
   n8n_default:

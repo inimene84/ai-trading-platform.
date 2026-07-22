@@ -18,6 +18,9 @@ from backend.services.ctrader_service import ctrader_broker
 from backend.services.binance_futures_service import binance_futures_broker
 from backend.services.influxdb_writer import influx
 from backend.services.binance_market_data import binance_market_data
+from backend.services.binance_websocket import binance_ws
+from backend.services.multi_provider_data import multi_provider_data
+
 from backend.strategies.market_regime import MarketRegimeDetector
 from backend.services.unified_trading import UnifiedTrading, UnifiedOrder, OrderSide, OrderType
 from backend.services.position_manager import get_position_manager
@@ -1577,8 +1580,17 @@ class TradingLoopService:
             return candidates
 
     async def _fetch_bars(self, symbol: str) -> list[dict]:
-        """Fetch OHLCV bars. Try Binance Futures API first, fallback to yfinance."""
-        # Try Binance klines first (native format, no conversion needed)
+        """Fetch OHLCV bars. Order: 1. WS Cache (0 REST calls) -> 2. Binance REST -> 3. CCXT Futures (Bybit/OKX/KuCoin) -> 4. yfinance (equities)."""
+        # 1. Check WebSocket in-memory candle ring buffer (zero network latency / zero REST requests)
+        try:
+            ws_bars = binance_ws.get_candle_history(symbol, limit=1500)
+            if ws_bars and len(ws_bars) >= 50:
+                logger.info(f"  [{symbol}] WS candle cache hit: {len(ws_bars)} bars")
+                return ws_bars
+        except Exception as e:
+            logger.debug(f"  [{symbol}] WS candle cache read exception: {e}")
+
+        # 2. Try Binance Futures REST API (cached with TTL)
         try:
             bars = await binance_market_data.get_klines(
                 symbol, interval='1h', limit=1500
@@ -1586,13 +1598,26 @@ class TradingLoopService:
             if bars and len(bars) >= 50:
                 logger.info(f"  [{symbol}] Binance klines: {len(bars)} bars")
                 return bars
-            else:
-                logger.warning(f"  [{symbol}] Binance klines insufficient ({len(bars) if bars else 0}), trying yfinance")
         except Exception as e:
-            logger.warning(f"  [{symbol}] Binance klines failed: {e}, trying yfinance")
+            logger.warning(f"  [{symbol}] Binance klines failed: {e}")
 
-        # Fallback to yfinance
-        return await asyncio.to_thread(self._fetch_bars_yfinance, symbol)
+        # 3. Fallback to alternative crypto futures venues (Bybit / OKX / KuCoin)
+        try:
+            mp_bars = await multi_provider_data.get_ohlcv(symbol, interval='1h', limit=500)
+            if mp_bars and len(mp_bars) >= 50:
+                logger.info(f"  [{symbol}] Multi-provider CCXT fallback: {len(mp_bars)} bars")
+                return mp_bars
+        except Exception as e:
+            logger.warning(f"  [{symbol}] Multi-provider fallback failed: {e}")
+
+        # 4. Fallback to yfinance (equities ONLY — skipped for crypto if symbol ends in USDT/USDC)
+        if not symbol.upper().endswith(("USDT", "USDC")):
+            return await asyncio.to_thread(self._fetch_bars_yfinance, symbol)
+
+        logger.error(f"  [{symbol}] All OHLCV bar fetch sources exhausted")
+        return []
+
+
 
     def _fetch_bars_yfinance(self, symbol: str) -> list[dict]:
         """Fallback: Fetch OHLCV bars via yfinance."""
