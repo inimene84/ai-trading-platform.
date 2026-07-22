@@ -247,6 +247,7 @@ def test_min_edge_full_tp_when_trailing_disabled():
 
 
 def test_kronos_strong_opposition_vetoes_not_flips():
+    # Active mode: hard veto must neutralize (never FLIP).
     result = apply_kronos_gate(
         strategy_signal="BUY",
         strategy_confidence=0.8,
@@ -254,12 +255,15 @@ def test_kronos_strong_opposition_vetoes_not_flips():
             "signal": "SELL",
             "confidence": 0.75,
             "predicted_change_pct": -1.5,
+            "cum_change_5_pct": -1.5,
         },
+        shadow_mode=False,
         symbol="ETHUSDT",
     )
     assert result.action == "veto"
     assert result.final_signal == "NEUTRAL"
     assert result.confidence == 0.0
+    assert result.is_shadow_veto is False
 
 
 def test_kronos_boost_still_works():
@@ -270,7 +274,9 @@ def test_kronos_boost_still_works():
             "signal": "BUY",
             "confidence": 0.8,
             "predicted_change_pct": 1.2,
+            "cum_change_5_pct": 1.2,
         },
+        shadow_mode=False,
         symbol="ETHUSDT",
     )
     assert result.action == "boost"

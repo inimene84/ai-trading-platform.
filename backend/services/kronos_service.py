@@ -3,26 +3,28 @@ Kronos Financial Foundation Model Service (WP3)
 ==============================================
 Client wrapper for Kronos sidecar microservice (ai-trading-kronos).
 Performs 5/10-candle trajectory prediction, path metric extraction, and response caching.
+
+When the sidecar is unreachable, defaults to NEUTRAL (fail-closed for gating).
+Set KRONOS_ALLOW_LOCAL_STUB=true only for offline unit tests / local dev.
 """
 
-import asyncio
 import logging
 import os
 import time
-from typing import Dict, List, Optional, Any
+from typing import Any, Dict, Optional
+
 import httpx
 import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-# Sidecar configuration
 KRONOS_SIDECAR_URL = os.getenv("KRONOS_SIDECAR_URL", "http://kronos-infer:8001")
-FALLBACK_LOCAL_URL = "http://localhost:8001"
-SIDECAR_TIMEOUT_SEC = 10.0
+FALLBACK_LOCAL_URL = os.getenv("KRONOS_LOCAL_URL", "http://127.0.0.1:8002")
+SIDECAR_TIMEOUT_SEC = float(os.getenv("KRONOS_TIMEOUT_SEC", "10.0"))
+ALLOW_LOCAL_STUB = os.getenv("KRONOS_ALLOW_LOCAL_STUB", "false").lower() == "true"
 
-# Prediction Cache: (symbol, interval, last_bar_date) -> (timestamp, prediction_dict)
 _prediction_cache: Dict[str, tuple] = {}
-CACHE_TTL_SEC = 3600  # 1 hour
+CACHE_TTL_SEC = int(os.getenv("KRONOS_CACHE_TTL_SEC", "3600"))
 
 
 def _make_neutral(error: Optional[str] = None) -> Dict[str, Any]:
@@ -48,7 +50,6 @@ async def predict(bars: Any, symbol: str, interval: str = "1h") -> Dict[str, Any
     if bars is None:
         return _make_neutral("No bars provided")
 
-    # Standardize input bars to list of dicts
     if isinstance(bars, pd.DataFrame):
         bar_list = bars.to_dict(orient="records")
     elif isinstance(bars, list):
@@ -63,14 +64,12 @@ async def predict(bars: Any, symbol: str, interval: str = "1h") -> Dict[str, Any
     last_bar_date = str(last_bar.get("date", last_bar.get("timestamp", "")))
     cache_key = f"{symbol.upper()}:{interval}:{last_bar_date}"
 
-    # Check cache
     if cache_key in _prediction_cache:
         ts, cached_res = _prediction_cache[cache_key]
         if (time.time() - ts) < CACHE_TTL_SEC:
             logger.debug(f"KronosService: cache hit for {cache_key}")
             return cached_res
 
-    # Prepare payload for sidecar
     payload = {
         "symbol": symbol.upper(),
         "bars": [
@@ -83,12 +82,14 @@ async def predict(bars: Any, symbol: str, interval: str = "1h") -> Dict[str, Any
                 "volume": float(b["volume"]),
                 "amount": float(b.get("amount", float(b["close"]) * float(b["volume"]))),
             }
-            for b in bar_list[-400:]  # Limit lookback to 400 bars
+            for b in bar_list[-400:]
         ],
-        "pred_len": 10
+        "pred_len": 10,
     }
 
-    urls_to_try = [f"{KRONOS_SIDECAR_URL}/predict", f"{FALLBACK_LOCAL_URL}/predict"]
+    urls_to_try = [f"{KRONOS_SIDECAR_URL.rstrip('/')}/predict"]
+    if FALLBACK_LOCAL_URL and FALLBACK_LOCAL_URL.rstrip("/") not in KRONOS_SIDECAR_URL:
+        urls_to_try.append(f"{FALLBACK_LOCAL_URL.rstrip('/')}/predict")
 
     for url in urls_to_try:
         try:
@@ -97,15 +98,32 @@ async def predict(bars: Any, symbol: str, interval: str = "1h") -> Dict[str, Any
                 if resp.status_code == 200:
                     data = resp.json()
                     _prediction_cache[cache_key] = (time.time(), data)
-                    logger.info(f"KronosService: predicted {data.get('signal')} ({data.get('cum_change_5_pct'):+.2f}% 5-bar) for {symbol}")
+                    logger.info(
+                        "KronosService: predicted %s (%+.2f%% 5-bar) for %s via %s",
+                        data.get("signal"),
+                        float(data.get("cum_change_5_pct") or 0.0),
+                        symbol,
+                        url,
+                    )
                     return data
+                logger.warning(
+                    "KronosService: sidecar %s returned HTTP %s", url, resp.status_code
+                )
         except Exception as e:
-            logger.debug(f"KronosService: sidecar endpoint {url} unavailable: {e}")
+            logger.debug("KronosService: sidecar endpoint %s unavailable: %s", url, e)
             continue
 
-    # Fallback to local stub in kronos.py if sidecar is unreachable
+    if not ALLOW_LOCAL_STUB:
+        logger.warning(
+            "KronosService: sidecar unreachable for %s — returning NEUTRAL (fail-closed)",
+            symbol,
+        )
+        return _make_neutral("Sidecar unreachable (fail-closed)")
+
+    # Explicit opt-in local stub for offline tests only.
     try:
         from backend.services.kronos import KronosPredictor
+
         df = pd.DataFrame(bar_list)
         predictor = KronosPredictor()
         pred_df = predictor.predict(df, pred_len=5)
@@ -122,13 +140,12 @@ async def predict(bars: Any, symbol: str, interval: str = "1h") -> Dict[str, Any
             "cum_change_5_pct": round(cum_5, 4),
             "cum_change_10_pct": round(cum_5, 4),
             "path_volatility": 0.01,
-            "max_adverse_excursion_pct": round(cum_5, 4),
+            "max_adverse_excursion_pct": round(min(cum_5, 0.0), 4),
             "reversal_risk": False,
-            "error": "Local fallback used (sidecar offline)",
+            "error": "Local stub used (KRONOS_ALLOW_LOCAL_STUB=true)",
         }
         _prediction_cache[cache_key] = (time.time(), fallback_res)
         return fallback_res
-
     except Exception as e:
-        logger.warning(f"KronosService fallback error for {symbol}: {e}")
+        logger.warning("KronosService stub error for %s: %s", symbol, e)
         return _make_neutral(str(e))
