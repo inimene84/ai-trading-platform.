@@ -1,5 +1,5 @@
 """
-Unit tests for Heuristic Timing Guard and PreExecutionGate (WP4)
+Unit tests for Heuristic Timing Guard and PreExecutionGate (WP4 + WP5)
 """
 
 import pytest
@@ -41,7 +41,7 @@ def test_heuristic_timing_rejection():
     assert len(res.warning_signals) > 0
 
 
-def test_gate_kronos_cum5_veto():
+def test_gate_kronos_cum5_veto_active():
     kronos_res = {
         "signal": "SELL",
         "confidence": 0.8,
@@ -50,16 +50,43 @@ def test_gate_kronos_cum5_veto():
         "reversal_risk": True
     }
 
+    # Active Mode (shadow_mode=False) -> final_signal becomes NEUTRAL
     res = apply_pre_execution_gate(
         strategy_signal="BUY",
         strategy_confidence=0.75,
         kronos_result=kronos_res,
+        shadow_mode=False,
         symbol="BTCUSDT"
     )
 
     assert res.action == "veto"
     assert res.final_signal == "NEUTRAL"
     assert "opposing drop" in res.reasoning
+    assert res.is_shadow_veto is False
+
+
+def test_gate_kronos_cum5_veto_shadow():
+    kronos_res = {
+        "signal": "SELL",
+        "confidence": 0.8,
+        "cum_change_5_pct": -1.8,
+        "max_adverse_excursion_pct": -2.2,
+        "reversal_risk": True
+    }
+
+    # Shadow Mode (shadow_mode=True) -> final_signal remains BUY
+    res = apply_pre_execution_gate(
+        strategy_signal="BUY",
+        strategy_confidence=0.75,
+        kronos_result=kronos_res,
+        shadow_mode=True,
+        symbol="BTCUSDT"
+    )
+
+    assert res.action == "veto"
+    assert res.final_signal == "BUY"
+    assert "SHADOW VETO" in res.reasoning
+    assert res.is_shadow_veto is True
 
 
 def test_gate_vision_veto():
@@ -68,6 +95,7 @@ def test_gate_vision_veto():
         strategy_confidence=0.70,
         kronos_result={"signal": "BUY", "confidence": 0.6, "cum_change_5_pct": 1.0},
         vision_approved=False,
+        shadow_mode=False,
         symbol="ETHUSDT"
     )
 
@@ -89,6 +117,7 @@ def test_gate_boost():
         strategy_signal="BUY",
         strategy_confidence=0.60,
         kronos_result=kronos_res,
+        shadow_mode=False,
         symbol="SOLUSDT"
     )
 
