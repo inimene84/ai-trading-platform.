@@ -316,47 +316,66 @@ class DecisionEngine:
             self._record_eval(symbol, "HOLD", signal.confidence, "blocked by funding rate")
             return None
 
-        # 4. Kronos foundation-model prediction (only for directional signals)
+        # 4. Multi-model Pre-Execution Gating (Kronos Sidecar + Heuristic Timing Guard)
         kronos_result = {}
-        if self.enable_kronos:
+        if self.enable_kronos and bars:
             try:
-                import pandas as pd
-                df = pd.DataFrame(bars)
-                kronos_result = await kronos_service.predict(df, symbol)
+                kronos_result = await kronos_service.predict(bars, symbol)
             except Exception as e:
                 logger.warning(f"Kronos prediction failed for {symbol}: {e}")
                 kronos_result = {}
 
-        # 4b. Apply Kronos Gate to the strategy signal
-        if kronos_result:
-            gate_result = apply_kronos_gate(
-                strategy_signal=signal.signal,
-                strategy_confidence=signal.confidence,
-                kronos_result=kronos_result,
-                symbol=symbol,
+        # Optional Vision timing verification if enabled
+        vision_approved = None
+        if bars:
+            try:
+                from backend.services.vision_timing import evaluate_vision_timing_optional
+                vision_approved = await evaluate_vision_timing_optional(
+                    bars=bars,
+                    symbol=symbol,
+                    proposed_signal=signal.signal,
+                )
+            except Exception as e:
+                logger.debug(f"Vision timing check notice for {symbol}: {e}")
+
+        # 4b. Apply Pre-Execution Gate (shadow-aware; FLIP removed)
+        gate_result = apply_kronos_gate(
+            strategy_signal=signal.signal,
+            strategy_confidence=signal.confidence,
+            kronos_result=kronos_result,
+            bars=bars,
+            vision_approved=vision_approved,
+            symbol=symbol,
+        )
+        if gate_result.action == "veto":
+            if gate_result.final_signal == "NEUTRAL":
+                logger.info(f"[{symbol}] PreExecutionGate ACTIVE VETO: {gate_result.reasoning}")
+                self._record_eval(symbol, "HOLD", signal.confidence, f"vetoed: {gate_result.reasoning}")
+                return None
+            logger.info(f"[{symbol}] PreExecutionGate SHADOW VETO (allowed): {gate_result.reasoning}")
+            self._record_eval(
+                symbol, "SHADOW_VETO", signal.confidence, f"shadow_vetoed: {gate_result.reasoning}",
             )
-            if gate_result.action == "veto":
-                logger.info(f"[{symbol}] Kronos VETOED signal: {gate_result.reasoning}")
-                return None
-            elif gate_result.action == "flip":
-                # FLIP removed from Kronos gate (faded our edge). Treat as veto.
-                logger.info(f"[{symbol}] Kronos FLIP→VETO (legacy): {gate_result.reasoning}")
-                return None
-            elif gate_result.action == "boost":
-                logger.info(f"[{symbol}] Kronos BOOSTED signal: {gate_result.reasoning}")
-                signal.confidence = gate_result.confidence
-            elif gate_result.action == "dampen":
-                logger.info(f"[{symbol}] Kronos DAMPENED signal: {gate_result.reasoning}")
-                signal.confidence = gate_result.confidence
-            elif gate_result.action == "pass":
-                pass
-            else:
-                _unreachable: Never = gate_result.action  # type: ignore[assignment]
-                raise AssertionError(f"Unhandled Kronos gate action: {_unreachable}")
+        elif gate_result.action == "boost":
+            logger.info(f"[{symbol}] PreExecutionGate BOOST: {gate_result.reasoning}")
+            signal.confidence = gate_result.confidence
+        elif gate_result.action == "dampen":
+            logger.info(f"[{symbol}] PreExecutionGate DAMPEN: {gate_result.reasoning}")
+            signal.confidence = gate_result.confidence
+        elif gate_result.action == "pass":
+            pass
+        elif gate_result.action == "flip":
+            # Legacy: FLIP removed — treat as active veto.
+            logger.info(f"[{symbol}] PreExecutionGate FLIP→VETO (legacy): {gate_result.reasoning}")
+            return None
+        else:
+            _unreachable: Never = gate_result.action  # type: ignore[assignment]
+            raise AssertionError(f"Unhandled PreExecutionGate action: {_unreachable}")
 
         # Re-check after gate modification
         if signal.signal not in ["BUY", "SELL"] or signal.confidence < self.config.min_signal_strength:
             return None
+
 
         # 5. AI Opinion Layer — multi-agent weighted consensus
         if self.config.enable_personas:
@@ -364,7 +383,9 @@ class DecisionEngine:
                 opinion = await opinion_analyze(
                     symbol=symbol,
                     bars=bars,
-                    include_kronos=True,
+                    # Kronos already ran above; reuse cache via sidecar client,
+                    # but skip a second opinion-layer forecast call.
+                    include_kronos=False,
                     include_social=True,
                     include_alerts=True,
                     include_personas=True,

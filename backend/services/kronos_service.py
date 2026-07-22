@@ -1,178 +1,134 @@
 """
-Kronos Financial Foundation Model Service
-Integrates the Kronos time-series prediction model for market forecasting.
-Model: NeoQuasar/Kronos-mini | Tokenizer: NeoQuasar/Kronos-Tokenizer-2k
+Kronos Financial Foundation Model Service (WP3)
+==============================================
+Client wrapper for Kronos sidecar microservice (ai-trading-kronos).
+Performs 5/10-candle trajectory prediction, path metric extraction, and response caching.
 """
 
 import asyncio
 import logging
 import os
-from typing import Optional
-
+import time
+from typing import Dict, List, Optional, Any
+import httpx
 import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-_BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-_MODEL_CACHE_DIR = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)),  # backend/services/
-    '..', '..', 'models', 'kronos'
-)
-_MODEL_CACHE_DIR = os.path.realpath(_MODEL_CACHE_DIR)
+# Sidecar configuration
+KRONOS_SIDECAR_URL = os.getenv("KRONOS_SIDECAR_URL", "http://kronos-infer:8001")
+FALLBACK_LOCAL_URL = "http://localhost:8001"
+SIDECAR_TIMEOUT_SEC = 10.0
 
-_MODEL_NAME = "NeoQuasar/Kronos-mini"
-_TOKENIZER_NAME = "NeoQuasar/Kronos-Tokenizer-2k"
-
-# Module-level singleton
-_predictor = None
-_load_failed = False  # If loading fails, we don't retry every call
+# Prediction Cache: (symbol, interval, last_bar_date) -> (timestamp, prediction_dict)
+_prediction_cache: Dict[str, tuple] = {}
+CACHE_TTL_SEC = 3600  # 1 hour
 
 
-def _load_predictor():
-    """Lazy-load Kronos model. Returns predictor or None on failure."""
-    global _predictor, _load_failed
-    if _predictor is not None:
-        return _predictor
-    if _load_failed:
-        return None
-
-    try:
-        import sys
-        # Ensure the backend/services dir is in path so 'kronos' package is importable
-        _svc_dir = os.path.dirname(os.path.abspath(__file__))
-        if _svc_dir not in sys.path:
-            sys.path.insert(0, _svc_dir)
-
-        from kronos import Kronos, KronosTokenizer, KronosPredictor
-
-        os.makedirs(_MODEL_CACHE_DIR, exist_ok=True)
-        logger.info(f"Loading Kronos tokenizer from {_TOKENIZER_NAME} (cache: {_MODEL_CACHE_DIR})")
-        tokenizer = KronosTokenizer.from_pretrained(
-            _TOKENIZER_NAME,
-            cache_dir=_MODEL_CACHE_DIR,
-        )
-        logger.info(f"Loading Kronos model from {_MODEL_NAME}")
-        model = Kronos.from_pretrained(
-            _MODEL_NAME,
-            cache_dir=_MODEL_CACHE_DIR,
-        )
-        _predictor = KronosPredictor(model, tokenizer, max_context=512)
-        logger.info("Kronos model loaded successfully")
-        return _predictor
-    except Exception as e:
-        logger.warning(f"Kronos model load failed (will return NEUTRAL): {e}")
-        _load_failed = True
-        return None
-
-
-def _make_neutral(error: Optional[str] = None) -> dict:
+def _make_neutral(error: Optional[str] = None) -> Dict[str, Any]:
     return {
         "signal": "NEUTRAL",
         "confidence": 0.0,
         "predicted_close": None,
         "predicted_change_pct": 0.0,
+        "cum_change_5_pct": 0.0,
+        "cum_change_10_pct": 0.0,
+        "path_volatility": 0.0,
+        "max_adverse_excursion_pct": 0.0,
+        "reversal_risk": False,
         "error": error,
     }
 
 
-def _run_prediction(bars: pd.DataFrame, symbol: str) -> dict:
-    """Synchronous prediction — runs in a thread pool."""
-    predictor = _load_predictor()
-    if predictor is None:
-        return _make_neutral("Model not available")
+async def predict(bars: Any, symbol: str, interval: str = "1h") -> Dict[str, Any]:
+    """
+    Query Kronos sidecar for 5/10-bar trajectory prediction and path metrics.
+    Deduplicated by (symbol, interval, last_bar_date).
+    """
+    if bars is None:
+        return _make_neutral("No bars provided")
 
+    # Standardize input bars to list of dicts
+    if isinstance(bars, pd.DataFrame):
+        bar_list = bars.to_dict(orient="records")
+    elif isinstance(bars, list):
+        bar_list = bars
+    else:
+        return _make_neutral("Invalid bars format")
+
+    if len(bar_list) < 5:
+        return _make_neutral("Insufficient bar count (minimum 5 required)")
+
+    last_bar = bar_list[-1]
+    last_bar_date = str(last_bar.get("date", last_bar.get("timestamp", "")))
+    cache_key = f"{symbol.upper()}:{interval}:{last_bar_date}"
+
+    # Check cache
+    if cache_key in _prediction_cache:
+        ts, cached_res = _prediction_cache[cache_key]
+        if (time.time() - ts) < CACHE_TTL_SEC:
+            logger.debug(f"KronosService: cache hit for {cache_key}")
+            return cached_res
+
+    # Prepare payload for sidecar
+    payload = {
+        "symbol": symbol.upper(),
+        "bars": [
+            {
+                "date": str(b.get("date", "")),
+                "open": float(b["open"]),
+                "high": float(b["high"]),
+                "low": float(b["low"]),
+                "close": float(b["close"]),
+                "volume": float(b["volume"]),
+                "amount": float(b.get("amount", float(b["close"]) * float(b["volume"]))),
+            }
+            for b in bar_list[-400:]  # Limit lookback to 400 bars
+        ],
+        "pred_len": 10
+    }
+
+    urls_to_try = [f"{KRONOS_SIDECAR_URL}/predict", f"{FALLBACK_LOCAL_URL}/predict"]
+
+    for url in urls_to_try:
+        try:
+            async with httpx.AsyncClient(timeout=SIDECAR_TIMEOUT_SEC) as client:
+                resp = await client.post(url, json=payload)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    _prediction_cache[cache_key] = (time.time(), data)
+                    logger.info(f"KronosService: predicted {data.get('signal')} ({data.get('cum_change_5_pct'):+.2f}% 5-bar) for {symbol}")
+                    return data
+        except Exception as e:
+            logger.debug(f"KronosService: sidecar endpoint {url} unavailable: {e}")
+            continue
+
+    # Fallback to local stub in kronos.py if sidecar is unreachable
     try:
-        pred_len = 5
-        lookback = min(400, len(bars))
-        x_df = bars.iloc[-lookback:][['open', 'high', 'low', 'close', 'volume', 'amount']].copy()
+        from backend.services.kronos import KronosPredictor
+        df = pd.DataFrame(bar_list)
+        predictor = KronosPredictor()
+        pred_df = predictor.predict(df, pred_len=5)
 
-        # Build timestamps
-        if 'date' in bars.columns:
-            try:
-                x_ts = pd.to_datetime(bars['date'].iloc[-lookback:]).reset_index(drop=True)
-            except Exception:
-                x_ts = pd.date_range(end=pd.Timestamp.utcnow(), periods=lookback, freq='1h')
-        else:
-            x_ts = pd.date_range(end=pd.Timestamp.utcnow(), periods=lookback, freq='1h')
+        last_close = float(df["close"].iloc[-1])
+        p5_close = float(pred_df["close"].iloc[-1]) if "close" in pred_df.columns else last_close
+        cum_5 = ((p5_close - last_close) / last_close) * 100.0
 
-        # Generate future timestamps (hourly)
-        last_ts = x_ts.iloc[-1] if hasattr(x_ts, 'iloc') else x_ts[-1]
-        y_ts = pd.date_range(start=last_ts, periods=pred_len + 1, freq='1h')[1:]
-
-        pred_df = predictor.predict(
-            df=x_df.reset_index(drop=True),
-            x_timestamp=x_ts.reset_index(drop=True) if hasattr(x_ts, 'reset_index') else pd.Series(x_ts),
-            y_timestamp=pd.Series(y_ts),
-            pred_len=pred_len,
-            T=1.0,
-            top_p=0.9,
-            sample_count=1,
-            verbose=False,
-        )
-
-        if pred_df is None or len(pred_df) == 0:
-            return _make_neutral("Empty prediction")
-
-        current_close = float(bars['close'].iloc[-1])
-        predicted_close = float(pred_df['close'].iloc[0])  # next candle
-        predicted_change_pct = ((predicted_close - current_close) / current_close) * 100.0
-
-        # Signal logic
-        if predicted_change_pct > 1.0:
-            signal = "BUY"
-        elif predicted_change_pct < -1.0:
-            signal = "SELL"
-        else:
-            signal = "NEUTRAL"
-
-        confidence = min(abs(predicted_change_pct) / 5.0, 1.0)
-
-        return {
-            "signal": signal,
-            "confidence": round(confidence, 4),
-            "predicted_close": round(predicted_close, 6),
-            "predicted_change_pct": round(predicted_change_pct, 4),
-            "error": None,
+        fallback_res = {
+            "signal": "BUY" if cum_5 > 1.0 else ("SELL" if cum_5 < -1.0 else "NEUTRAL"),
+            "confidence": round(min(abs(cum_5) / 5.0, 1.0), 4),
+            "predicted_close": round(p5_close, 6),
+            "predicted_change_pct": round(cum_5, 4),
+            "cum_change_5_pct": round(cum_5, 4),
+            "cum_change_10_pct": round(cum_5, 4),
+            "path_volatility": 0.01,
+            "max_adverse_excursion_pct": round(cum_5, 4),
+            "reversal_risk": False,
+            "error": "Local fallback used (sidecar offline)",
         }
+        _prediction_cache[cache_key] = (time.time(), fallback_res)
+        return fallback_res
 
     except Exception as e:
-        logger.warning(f"Kronos prediction error for {symbol}: {e}")
-        return _make_neutral(str(e))
-
-
-async def predict(bars: pd.DataFrame, symbol: str) -> dict:
-    """
-    Run Kronos prediction for the next candle.
-
-    Args:
-        bars: DataFrame with columns open, high, low, close, volume
-              (date column optional but used for timestamps)
-        symbol: Trading symbol for logging
-
-    Returns:
-        dict with keys: signal, confidence, predicted_close,
-                        predicted_change_pct, error
-    """
-    try:
-        # Validate input
-        if bars is None or len(bars) < 10:
-            return _make_neutral("Insufficient data")
-
-        # Ensure required columns
-        required = ['open', 'high', 'low', 'close', 'volume']
-        for col in required:
-            if col not in bars.columns:
-                return _make_neutral(f"Missing column: {col}")
-
-        # Add 'amount' column if not present (Kronos requires this)
-        if 'amount' not in bars.columns:
-            bars = bars.copy()
-            bars['amount'] = bars['close'] * bars['volume']
-
-        # Run in thread pool to avoid blocking event loop
-        result = await asyncio.to_thread(_run_prediction, bars, symbol)
-        return result
-
-    except Exception as e:
-        logger.warning(f"Kronos service error for {symbol}: {e}")
+        logger.warning(f"KronosService fallback error for {symbol}: {e}")
         return _make_neutral(str(e))
