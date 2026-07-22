@@ -609,12 +609,12 @@ async def analyze_symbol(
     if include_kronos:
         try:
             kronos_result = await kronos_service.predict(df, symbol)
-            k_sig = kronos_result.get("signal", "NEUTRAL").lower()
-            if k_sig == "up":
+            k_sig = str(kronos_result.get("signal", "NEUTRAL")).lower()
+            if k_sig in ("up", "buy", "bullish"):
                 k_sig = "bullish"
-            elif k_sig == "down":
+            elif k_sig in ("down", "sell", "bearish"):
                 k_sig = "bearish"
-            elif k_sig not in ("bullish", "bearish", "neutral"):
+            else:
                 k_sig = "neutral"
             opinions.append(AgentOpinion(
                 agent="kronos_foundation",

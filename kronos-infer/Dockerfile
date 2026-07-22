@@ -11,8 +11,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application source
+# Copy application source + vendored official Kronos model package (MIT)
 COPY main.py .
+COPY model ./model
 
 EXPOSE 8001
 
