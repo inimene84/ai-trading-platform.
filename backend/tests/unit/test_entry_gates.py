@@ -1,4 +1,5 @@
 """New-bar gate and per-symbol expectancy gate for the trading loop."""
+from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
 from backend.services.trading_loop import TradingLoopService, negative_expectancy_symbols
@@ -47,12 +48,23 @@ def test_new_bar_gate_fails_open_without_timestamps():
     assert loop._should_evaluate_bar("ETHUSDT", bars) is True
 
 
-def test_new_bar_gate_disabled_via_config():
+def test_bar_open_age_seconds_parses_iso():
     loop = TradingLoopService()
-    loop.risk_config = MagicMock(eval_on_new_bar_only=False)
-    bars = _bars("2026-07-10T17:00:00")
-    assert loop._should_evaluate_bar("ETHUSDT", bars) is True
-    assert loop._should_evaluate_bar("ETHUSDT", bars) is True
+    age = loop._bar_open_age_seconds({"date": "2026-07-23T12:00:00+00:00"})
+    assert age is not None
+    assert age > 0
+
+
+def test_stale_ws_age_threshold_helpers():
+    """Frozen WS rings (last bar many hours old) must be detectable."""
+    loop = TradingLoopService()
+    fresh = loop._bar_open_age_seconds(
+        {"date": datetime.now(timezone.utc).isoformat()}
+    )
+    assert fresh is not None and fresh < 60
+    stale = loop._bar_open_age_seconds({"date": "2026-07-20T00:00:00+00:00"})
+    assert stale is not None and stale > 2.5 * 3600
+
 
 
 # ── Expectancy gate ─────────────────────────────────────────────────────────

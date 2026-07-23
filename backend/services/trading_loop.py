@@ -18,6 +18,9 @@ from backend.services.ctrader_service import ctrader_broker
 from backend.services.binance_futures_service import binance_futures_broker
 from backend.services.influxdb_writer import influx
 from backend.services.binance_market_data import binance_market_data
+from backend.services.binance_websocket import binance_ws
+from backend.services.multi_provider_data import multi_provider_data
+
 from backend.strategies.market_regime import MarketRegimeDetector
 from backend.services.unified_trading import UnifiedTrading, UnifiedOrder, OrderSide, OrderType
 from backend.services.position_manager import get_position_manager
@@ -115,6 +118,23 @@ class TradingLoopService:
         # the same bar was re-decided up to 4x (churn + redundant LLM cost).
         self._last_eval_bar: dict = {}
 
+    @staticmethod
+    def _bar_open_age_seconds(bar: dict) -> Optional[float]:
+        """Seconds since bar open time, or None if unparseable."""
+        raw = bar.get("date") if bar else None
+        if not raw:
+            return None
+        try:
+            if isinstance(raw, datetime):
+                dt = raw if raw.tzinfo else raw.replace(tzinfo=timezone.utc)
+            else:
+                dt = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+            return (datetime.now(timezone.utc) - dt).total_seconds()
+        except Exception:
+            return None
+
     def _should_evaluate_bar(self, symbol: str, bars: list[dict]) -> bool:
         """Entry pipeline runs at most once per bar (exits still run every cycle).
 
@@ -128,6 +148,10 @@ class TradingLoopService:
         if not last_bar_ts:
             return True  # no timestamp info — don't block trading on it
         if self._last_eval_bar.get(symbol) == last_bar_ts:
+            logger.info(
+                f"  [{symbol}] new-bar gate: skip entry pipeline "
+                f"(already evaluated bar {last_bar_ts})"
+            )
             return False
         self._last_eval_bar[symbol] = last_bar_ts
         return True
@@ -1577,22 +1601,61 @@ class TradingLoopService:
             return candidates
 
     async def _fetch_bars(self, symbol: str) -> list[dict]:
-        """Fetch OHLCV bars. Try Binance Futures API first, fallback to yfinance."""
-        # Try Binance klines first (native format, no conversion needed)
+        """Fetch OHLCV bars. Order: 1. WS Cache (0 REST calls) -> 2. Binance REST -> 3. CCXT Futures (Bybit/OKX/KuCoin) -> 4. yfinance (equities)."""
+        # 1. Check WebSocket in-memory candle ring buffer (zero network latency / zero REST requests).
+        #    Reject stale rings: futures kline WS can connect yet deliver no closed
+        #    candles (seen live), which freezes bars[-1] and permanently trips the
+        #    new-bar gate after the first evaluation.
+        try:
+            ws_bars = binance_ws.get_candle_history(symbol, limit=1500)
+            if ws_bars and len(ws_bars) >= 50:
+                age = self._bar_open_age_seconds(ws_bars[-1])
+                # 1h pipeline: last bar open should be within ~2.5h (current hour
+                # forming candle, or previous closed hour right after the roll).
+                max_age = float(os.getenv("WS_CANDLE_MAX_AGE_SEC", str(2.5 * 3600)))
+                if age is None or age <= max_age:
+                    logger.info(f"  [{symbol}] WS candle cache hit: {len(ws_bars)} bars")
+                    return ws_bars
+                logger.warning(
+                    f"  [{symbol}] WS candle cache STALE "
+                    f"(last bar age={age/3600:.1f}h > {max_age/3600:.1f}h) — falling back to REST"
+                )
+        except Exception as e:
+            logger.debug(f"  [{symbol}] WS candle cache read exception: {e}")
+
+        # 2. Try Binance Futures REST API (cached with TTL)
         try:
             bars = await binance_market_data.get_klines(
                 symbol, interval='1h', limit=1500
             )
             if bars and len(bars) >= 50:
                 logger.info(f"  [{symbol}] Binance klines: {len(bars)} bars")
+                # Keep the WS ring honest so a recovered stream can resume later.
+                try:
+                    binance_ws.seed_candles(symbol, "1h", bars)
+                except Exception:
+                    pass
                 return bars
-            else:
-                logger.warning(f"  [{symbol}] Binance klines insufficient ({len(bars) if bars else 0}), trying yfinance")
         except Exception as e:
-            logger.warning(f"  [{symbol}] Binance klines failed: {e}, trying yfinance")
+            logger.warning(f"  [{symbol}] Binance klines failed: {e}")
 
-        # Fallback to yfinance
-        return await asyncio.to_thread(self._fetch_bars_yfinance, symbol)
+        # 3. Fallback to alternative crypto futures venues (Bybit / OKX / KuCoin)
+        try:
+            mp_bars = await multi_provider_data.get_ohlcv(symbol, interval='1h', limit=500)
+            if mp_bars and len(mp_bars) >= 50:
+                logger.info(f"  [{symbol}] Multi-provider CCXT fallback: {len(mp_bars)} bars")
+                return mp_bars
+        except Exception as e:
+            logger.warning(f"  [{symbol}] Multi-provider fallback failed: {e}")
+
+        # 4. Fallback to yfinance (equities ONLY — skipped for crypto if symbol ends in USDT/USDC)
+        if not symbol.upper().endswith(("USDT", "USDC")):
+            return await asyncio.to_thread(self._fetch_bars_yfinance, symbol)
+
+        logger.error(f"  [{symbol}] All OHLCV bar fetch sources exhausted")
+        return []
+
+
 
     def _fetch_bars_yfinance(self, symbol: str) -> list[dict]:
         """Fallback: Fetch OHLCV bars via yfinance."""

@@ -37,6 +37,10 @@ services:
       # MiCA/EEA: trade USDC-margined perpetuals (USDT restricted for EU users).
       # Override via TRADING_SYMBOLS in .env. ADA dropped (weekly loss leader).
       TRADING_SYMBOLS: ${TRADING_SYMBOLS:-BTCUSDC,ETHUSDC,SOLUSDC,BNBUSDC,XRPUSDC,AVAXUSDC,LINKUSDC,UNIUSDC}
+      KRONOS_SIDECAR_URL: ${KRONOS_SIDECAR_URL:-http://kronos-infer:8001}
+      TIMING_GATE_SHADOW: ${TIMING_GATE_SHADOW:-true}
+      ENABLE_VISION_TIMING: ${ENABLE_VISION_TIMING:-false}
+      KRONOS_ALLOW_LOCAL_STUB: ${KRONOS_ALLOW_LOCAL_STUB:-false}
       # Liquidity floor. 3M keeps USDC majors (USDC books are thinner than
       # USDT twins; 50M would silently drop AVAX/LINK/UNI). Override in .env.
       MIN_24H_QUOTE_VOLUME_USDT: ${MIN_24H_QUOTE_VOLUME_USDT:-3000000}
@@ -96,7 +100,8 @@ services:
     networks:
       - trading-net
   litellm:
-    image: ghcr.io/berriai/litellm:main-latest
+    # Pin digest (was main-latest) for reproducible deploys.
+    image: ghcr.io/berriai/litellm@sha256:2fdd90b14e3d9244ce297f418b983d8cfd90ba6e72a10a8ddb30f7cf64852390
     container_name: ai-trading-litellm
     environment:
       GEMINI_API_KEY: ${GOOGLE_API_KEY}
@@ -174,6 +179,8 @@ services:
     restart: unless-stopped
     ports:
       - "127.0.0.1:9100:9100"
+    env_file:
+      - .env
     environment:
       - BACKEND_BASE_URL=http://ai-trading-backend:8000
       - BACKEND_API_PREFIX=/api
@@ -185,12 +192,42 @@ services:
       - trading-net
     depends_on:
       - backend
+  kronos-infer:
+    build:
+      context: ./kronos-infer
+      dockerfile: Dockerfile
+    container_name: ai-trading-kronos
+    restart: unless-stopped
+    # Host 8001 is already used by backend API — publish Kronos on 8002.
+    ports:
+      - "127.0.0.1:8002:8001"
+    environment:
+      - KRONOS_MODEL=NeoQuasar/Kronos-mini
+      - KRONOS_TOKENIZER=NeoQuasar/Kronos-Tokenizer-2k
+      - KRONOS_ALLOW_ANALYTICAL_FALLBACK=${KRONOS_ALLOW_ANALYTICAL_FALLBACK:-false}
+    volumes:
+      - kronos-model-cache:/root/.cache/huggingface
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 4G
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+    networks:
+      - trading-net
 networks:
+
   trading-net:
     external: true
   n8n_default:
     external: true
 volumes:
-  app-data: 
-  app-logs: 
+  app-data:
+  app-logs:
   influxdb-storage:
+  kronos-model-cache:
