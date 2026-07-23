@@ -44,6 +44,19 @@ def test_ws_candle_ring_buffer():
     assert cached["close"] == 60400.0
 
 
+def test_seed_candles_replaces_ring():
+    ws = BinanceWebSocketService()
+    bars = [
+        {"date": "2026-07-23T10:00:00+00:00", "open": 1, "high": 2, "low": 0.5, "close": 1.5, "volume": 10},
+        {"date": "2026-07-23T11:00:00+00:00", "open": 1.5, "high": 2.5, "low": 1.4, "close": 2.0, "volume": 12},
+    ]
+    ws.seed_candles("BTCUSDC", "1h", bars)
+    got = ws.get_candle_history("BTCUSDC", "1h", 10)
+    assert len(got) == 2
+    assert got[-1]["close"] == 2.0
+    assert ws._last_closed_ts["btcusdc:1h"] > 0
+
+
 def test_ws_candle_deduplication():
     ws = BinanceWebSocketService()
     symbol = "ethusdt"
