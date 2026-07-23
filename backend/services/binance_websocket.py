@@ -99,13 +99,29 @@ class BinanceWebSocketService:
         ring = self._candles.get(key)
         return len(ring) if ring else 0
 
-    async def start(self):
-        """Start the WebSocket connection."""
-        if self._task and not self._task.done():
-            logger.info("WebSocket already running")
+    def seed_candles(self, symbol: str, interval: str, bars: List[dict]) -> None:
+        """Replace the ring buffer from REST (completed + optional forming bar).
+
+        Used when the live kline stream is silent/stale so the new-bar gate and
+        strategy still see advancing timestamps.
+        """
+        if not bars:
             return
-        self._task = asyncio.create_task(self._connect())
-        logger.info("Binance WebSocket task started")
+        key = f"{symbol.lower()}:{interval.lower()}"
+        ring = deque(maxlen=MAX_RING_SIZE)
+        ring.extend(bars)
+        self._candles[key] = ring
+        self._last_closed_ts[key] = _bar_open_ms(bars[-1])
+
+    async def start(self):
+        """Start the WebSocket connection and keep it supervised.
+
+        Awaits the reconnect loop so ``run_supervised_task`` restarts us on
+        crash. Previously ``create_task`` returned immediately, the supervisor
+        exited, and a hung/silent stream was never restarted.
+        """
+        logger.info("Binance WebSocket streamer starting")
+        await self._connect()
 
     async def stop(self):
         """Stop the WebSocket connection."""
