@@ -26,18 +26,32 @@ chmod +x scripts/vps_connect_a0_hermes_mcp.sh scripts/vps_apply_small_restart.sh
 That script:
 1. Finds the backend Docker network (`*trading-net*`)
 2. Ensures `mcp-server` is up
-3. Attaches `a0-instance` to that network
-4. Prints A0 MCP URL + Hermes curl examples
+3. Attaches `a0-instance` + `hermes-webui` to that network
+4. Writes `quantumtrade` into A0 `settings.json` and Hermes `config.yaml`
+5. Restarts clients and prints REST fallback for a remote Hermes VPS
+
+## Two-VPS layout
+
+| Host | Role |
+| --- | --- |
+| Trading VPS (`$SSH_HOST`) | backend, MCP `:9100` (localhost), nginx `:8081`, A0, hermes-webui |
+| Hermes VPS (optional second host) | hermes-agent + hermes-webui (other stacks) |
+
+- **A0 / hermes-webui on trading VPS** → MCP `http://ai-trading-mcp:9100/mcp` on `trading-net`
+- **Hermes on another VPS** → REST `http://$SSH_HOST:8081/api/...` (MCP port is not public)
 
 ## A0 configuration
 
-Inside Agent Zero, add an MCP server:
+The connect script writes this automatically. Manual equivalent inside Agent Zero:
 
 | Field | Value |
 | --- | --- |
+| Name | `quantumtrade` |
 | URL | `http://ai-trading-mcp:9100/mcp` |
-| Transport | HTTP |
+| Transport | streamable-http / HTTP |
 | Auth | Bearer / API key = `ADMIN_API_KEY` (if client supports headers) |
+
+A0 stores servers under `mcp_servers.mcpServers.<name>` (not as a sibling of `mcpServers`).
 
 Suggested A0 system prompt snippet:
 
@@ -45,14 +59,27 @@ Suggested A0 system prompt snippet:
 
 ## Hermes configuration
 
-### Option A — MCP
+### Option A — MCP (trading VPS only)
 
-Point Hermes at `http://127.0.0.1:9100/mcp` (host) or `http://ai-trading-mcp:9100/mcp` if Hermes runs on `trading-net`.
+On the trading VPS, Hermes `~/.hermes/config.yaml`:
 
-### Option B — REST skill
+```yaml
+mcp_servers:
+  quantumtrade:
+    url: http://ai-trading-mcp:9100/mcp
+    timeout: 120
+    connect_timeout: 60
+```
+
+Host loopback also works from the host namespace: `http://127.0.0.1:9100/mcp`.
+
+### Option B — REST (local or remote Hermes)
 
 ```bash
+# On trading VPS host:
 export QT_BASE=http://127.0.0.1:8001
+# From remote Hermes VPS (nginx):
+export QT_BASE=http://$SSH_HOST:8081/api
 export QT_KEY=<ADMIN_API_KEY>
 
 curl -s "$QT_BASE/trading/positions"
@@ -64,6 +91,30 @@ curl -s -X PUT  "$QT_BASE/trading/positions/<ID>/modify" \
   -H "X-API-Key: $QT_KEY" -H 'Content-Type: application/json' \
   -d '{"stop_loss":12345.0,"take_profit":13000.0}'
 ```
+
+### Verify
+
+```bash
+# A0 logs should show quantumtrade tools loaded
+docker logs a0-instance 2>&1 | grep -i quantumtrade | tail
+
+# Platform
+curl -sf http://127.0.0.1:8001/health
+curl -sf http://127.0.0.1:8001/trading/loop/status
+```
+
+## SSH recovery (trading VPS)
+
+If SSH suddenly returns `Permission denied (publickey)` while HTTP `:8081` still works, `/root` ownership/modes are usually wrong (often after a container bind-mounts host `/root`). From Hostinger **Browser Terminal**:
+
+```bash
+chown root:root /root && chmod 700 /root
+chown -R root:root /root/.ssh
+chmod 700 /root/.ssh
+chmod 600 /root/.ssh/authorized_keys
+```
+
+Do **not** bind-mount host `/root` into `hermes-webui` — mount only `/root/.hermes`.
 
 ## Curated MCP oversight tools
 
