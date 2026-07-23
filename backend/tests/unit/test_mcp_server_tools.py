@@ -46,6 +46,9 @@ def test_url_prepends_api_prefix(monkeypatch):
     mod = _load_mcp_server(monkeypatch)
     assert mod._url("/trading/positions") == "http://backend:8000/api/trading/positions"
     assert mod._url("/api/trading/positions") == "http://backend:8000/api/trading/positions"
+    # Sentry + health are dual-mounted under /api on the backend
+    assert mod._url("/sentry/status") == "http://backend:8000/api/sentry/status"
+    assert mod._url("/health") == "http://backend:8000/api/health"
 
 
 def test_headers_include_bearer_and_api_key(monkeypatch):

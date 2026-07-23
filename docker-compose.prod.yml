@@ -90,7 +90,8 @@ services:
     ports:
       - "127.0.0.1:8001:8000"
   litellm:
-    image: ghcr.io/berriai/litellm:main-latest
+    # Pin digest (was main-latest) — matches current VPS image for stable restarts.
+    image: ghcr.io/berriai/litellm@sha256:2fdd90b14e3d9244ce297f418b983d8cfd90ba6e72a10a8ddb30f7cf64852390
     container_name: ai-trading-litellm
     environment:
       GEMINI_API_KEY: ${GOOGLE_API_KEY}
@@ -218,12 +219,16 @@ services:
     restart: unless-stopped
     ports:
       - "127.0.0.1:9100:9100"
+    env_file:
+      - .env
     environment:
       - BACKEND_BASE_URL=http://ai-trading-backend:8000
       - BACKEND_API_PREFIX=/api
       - MCP_TRANSPORT=http
       - MCP_HOST=0.0.0.0
       - MCP_PORT=9100
+      # Compose interpolates ADMIN_API_KEY from project .env; env_file keeps
+      # other runtime secrets available inside the container as well.
       - MCP_API_TOKEN=${ADMIN_API_KEY:?ADMIN_API_KEY must be set}
     networks:
       - trading-net

@@ -116,6 +116,11 @@ chmod 600 /root/.ssh/authorized_keys
 
 Do **not** bind-mount host `/root` into `hermes-webui` — mount only `/root/.hermes`.
 
+Also **do not** mount host `/root/.ssh` into Hermes. A container process can change
+ownership/modes on that bind and break host SSH again (`Permission denied (publickey)`
+while HTTP still works). Hermes should oversee trading via MCP/REST on `trading-net`,
+not via SSH into localhost.
+
 One-shot fix (Browser Terminal or SSH) for hermes mount + Kronos + MCP rewire:
 
 ```bash
