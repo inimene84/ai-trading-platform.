@@ -13,22 +13,20 @@ names and docstrings so LLM agents call them reliably:
 
 | Tool | Backend route | Purpose |
 | --- | --- | --- |
-| `get_trading_opinion(symbol)` | `GET /trading/opinion/{symbol}` | Full multi-agent opinion (direction, confidence, per-agent votes) |
-| `get_opinion_weights()` | `GET /trading/opinion/weights` | Current agent voting weights |
-| `set_opinion_weight(agent, weight)` | `POST /trading/opinion/weights` | Tune one agent's weight |
-| `trade_memory_status()` | `GET /trading/trade-memory/status` | Semantic trade-memory store status |
-| `recall_similar_trades(context, …)` | `POST /trading/trade-memory/recall` | Recall similar past trades + outcomes |
-| `trade_memory_backfill(limit)` | `POST /trading/trade-memory/backfill` | Vectorise closed trades from SQL |
-| `list_strategy_skills(active_only, limit)` | `GET /trading/skills` | All learned strategy skills |
-| `skills_leaderboard(limit)` | `GET /trading/skills/leaderboard` | Top skills by edge score |
-| `mine_skills(limit)` | `POST /trading/skills/mine` | Trigger a skill-mining pass |
-| `match_skill(context)` | `POST /trading/skills/match` | Best learned skill for a context |
-| `get_portfolio()` | `GET /trading/portfolio` | Positions, equity, PnL |
-| `get_loop_status()` | `GET /trading/loop/status` | Trading loop status |
-| `get_trading_config()` | `GET /trading/config` | Active trading config |
-| `sentiment_loop_status()` | `GET /news/sentiment-loop/status` | Native sentiment loop status (Track A) |
-| `run_sentiment_loop(dry_run)` | `POST /news/sentiment-loop/run` | Run one sentiment pass |
-| `call_backend(method, path, …)` | any | Escape hatch for routes without a curated tool |
+| `get_trading_opinion(symbol, bars?)` | `POST /trading/opinion/analyze` | Multi-agent opinion |
+| `get_opinion_weights()` / `set_opinion_weight` | `/trading/opinion/weights` | Tune agent weights |
+| `trade_memory_*` / `*_skills` / `match_skill` | `/trading/trade-memory/*`, `/trading/skills/*` | Learning loop |
+| `get_portfolio()` | `GET /trading/portfolio` | Equity / PnL |
+| `list_positions()` / `list_binance_positions()` / `list_trades()` | positions & trades | Oversight |
+| `close_position(id)` / `modify_position(id, sl, tp)` | close / modify | Intervene |
+| `get_loop_status()` / `start_trading_loop` / `stop_trading_loop` | `/trading/loop/*` | Loop control |
+| `get_trading_config()` / `update_trading_config` | `/trading/config*` | Risk/sizing |
+| `sentry_status` / `sentry_halt` / `emergency_halt` / `sentry_resume` | `/sentry/*` | Safety |
+| `sentiment_loop_status()` / `run_sentiment_loop` | `/news/sentiment-loop/*` | Sentiment |
+| `backend_health()` | `GET /health` | Liveness |
+| `call_backend(method, path, …)` | GET/POST/**PUT** | Escape hatch |
+
+See also: [`docs/ops/A0_HERMES_MCP.md`](../docs/ops/A0_HERMES_MCP.md) for Agent Zero + Hermes wiring.
 
 Set `FULL_API=true` to instead **auto-generate one tool per FastAPI route** from
 the backend's live `/openapi.json`. Comprehensive but noisy — prefer the curated
