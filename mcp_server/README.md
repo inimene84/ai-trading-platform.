@@ -21,7 +21,8 @@ names and docstrings so LLM agents call them reliably:
 | `close_position(id)` / `modify_position(id, sl, tp)` | close / modify | Intervene |
 | `get_loop_status()` / `start_trading_loop` / `stop_trading_loop` | `/trading/loop/*` | Loop control |
 | `get_trading_config()` / `update_trading_config` | `/trading/config*` | Risk/sizing |
-| `sentry_status` / `sentry_halt` / `emergency_halt` / `sentry_resume` | `/sentry/*` | Safety |
+| `sentry_status` / `sentry_halt` / `emergency_halt` / `sentry_resume` | `/sentry/*` and `/api/sentry/*` | Safety |
+| `backend_health` | `/health` and `/api/health` | Health |
 | `sentiment_loop_status()` / `run_sentiment_loop` | `/news/sentiment-loop/*` | Sentiment |
 | `backend_health()` | `GET /health` | Liveness |
 | `call_backend(method, path, …)` | GET/POST/**PUT** | Escape hatch |
