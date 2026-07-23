@@ -116,6 +116,15 @@ chmod 600 /root/.ssh/authorized_keys
 
 Do **not** bind-mount host `/root` into `hermes-webui` — mount only `/root/.hermes`.
 
+One-shot fix (Browser Terminal or SSH) for hermes mount + Kronos + MCP rewire:
+
+```bash
+cd /root/ai-trading-platform-v3
+git fetch origin && git checkout cursor/a0-hermes-mcp-oversight-523e && git pull
+chmod +x scripts/vps_fix_hermes_kronos_gaps.sh
+./scripts/vps_fix_hermes_kronos_gaps.sh
+```
+
 ## Curated MCP oversight tools
 
 | Tool | Purpose |
