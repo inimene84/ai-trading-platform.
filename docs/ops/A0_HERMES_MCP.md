@@ -153,6 +153,31 @@ Sets:
 - `TIMING_GATE_SHADOW=true` (log timing vetoes, do not hard-block yet)
 - Restarts backend / MCP / Kronos sidecar when present
 
+## A0 memory / forced re-login (OOM)
+
+If A0 randomly asks you to log in again while the container stays “Up”, it is usually **cgroup OOM**, not internet:
+
+- Host hard-limits `a0-instance` (historically 8–10 GiB, no swap)
+- `run_ui.py` can grow past ~6–7 GiB under multi-subagent load
+- OOM kills the UI process → Flask session/CSRF resets → forced re-login
+
+Mitigation on the trading VPS (~15 GiB host):
+
+```bash
+cd /root/ai-trading-platform-v3
+chmod +x scripts/vps_fix_a0_memory.sh
+./scripts/vps_fix_a0_memory.sh
+```
+
+That script:
+
+1. Enables a persistent **4 GiB** host swapfile (`/swapfile-a0`)
+2. Raises A0 to **12G RAM / 14G memswap** in `/docker/agent-zero/docker-compose.yml`
+3. Applies live `docker update` + `compose up -d a0`
+4. Checks UI HTTP, cgroup `oom`/`oom_kill`, and trading health/loop
+
+Scheduled trading overview tasks live in the `a0-data` volume (`/a0/usr/scheduler/tasks.json`) and survive recreate. Prefer read-only scheduled jobs that do **not** spawn many parallel subagents while RAM is tight.
+
 ## Security notes
 
 1. Do **not** publish `:9100` to the public internet without auth/VPN.
