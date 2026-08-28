@@ -140,14 +140,42 @@ class TradingLoopService:
             and get_trading_mode() == TradingMode.LIVE
         )
 
-    @property
-    def status(self) -> dict:
+    def _get_effective_balance(self) -> dict:
+        """Fetch balance from paper portfolio in paper mode, or live broker in live mode."""
+        from backend.services.trading_mode import TradingMode, get_trading_mode
+        if get_trading_mode() == TradingMode.PAPER:
+            try:
+                from backend.services.unified_trading import trading_router
+                pf = trading_router.get_paper_portfolio()
+                if pf:
+                    cash = float(pf.get("cash", 100000.0))
+                    equity = float(pf.get("equity", cash))
+                    return {
+                        "balance": cash,
+                        "available": cash,
+                        "equity": equity,
+                        "margin_used": float(pf.get("margin_used", 0.0)),
+                        "broker": "paper_trading",
+                    }
+            except Exception as e:
+                logger.warning(f"Could not fetch paper portfolio balance: {e}")
+            return {
+                "balance": 100000.0,
+                "available": 100000.0,
+                "equity": 100000.0,
+                "margin_used": 0.0,
+                "broker": "paper_trading",
+            }
         broker = get_active_broker()
-        balance_info = (
+        return (
             broker.get_balance()
             if hasattr(broker, "get_balance")
             else {"balance": 0.0, "available": 0.0, "equity": 0.0, "margin_used": 0.0}
         )
+
+    @property
+    def status(self) -> dict:
+        balance_info = self._get_effective_balance()
         return {
             "state": self._state,
             "running": self._running,
@@ -411,7 +439,7 @@ class TradingLoopService:
         # margin gates (was 2x futures_account() per cycle).
         kill_switch_verified = True
         try:
-            self._cycle_balance = get_active_broker().get_balance()
+            self._cycle_balance = self._get_effective_balance()
         except Exception as _be:
             logger.warning(f"Could not fetch balance for cycle: {_be}")
             self._cycle_balance = {}
