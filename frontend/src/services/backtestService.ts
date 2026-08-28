@@ -1,6 +1,5 @@
 import { Node as FlowNode, Edge } from '@xyflow/react';
 
-import { geminiService } from './geminiService';
 import { apiService } from './apiService';
 
 export interface BacktestResult {
@@ -163,6 +162,8 @@ class BacktestService {
   }
 
   async getAiAnalysis(results: BacktestResult) {
+    // Imported on demand so `@google/genai` stays out of the entry chunk.
+    const { geminiService } = await import('./geminiService');
     const analysis = await geminiService.analyzeBacktest(results);
     return { summary: analysis };
   }

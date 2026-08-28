@@ -7,6 +7,23 @@ export default defineConfig(({mode}) => {
   const env = loadEnv(mode, '.', '');
   return {
     plugins: [react(), tailwindcss()],
+    build: {
+      rolldownOptions: {
+        output: {
+          // Split long-lived vendor code out of the entry chunk so a change to
+          // app code doesn't invalidate the whole download for returning users.
+          advancedChunks: {
+            groups: [
+              { name: 'vendor-react', test: /node_modules[\\/](react|react-dom|scheduler)[\\/]/ },
+              { name: 'vendor-flow', test: /node_modules[\\/]@xyflow[\\/]/ },
+              { name: 'vendor-motion', test: /node_modules[\\/]motion/ },
+              { name: 'vendor-icons', test: /node_modules[\\/]lucide-react[\\/]/ },
+              { name: 'vendor-genai', test: /node_modules[\\/]@google[\\/]genai[\\/]/ },
+            ],
+          },
+        },
+      },
+    },
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),

@@ -2,7 +2,7 @@
  * @license
  * SPDX-License-Identifier: Apache-2.0
  */
-import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react';
+import React, { useState, useCallback, useMemo, useEffect, useRef, lazy, Suspense } from 'react';
 import {
   TrendingUp,
   Search,
@@ -41,17 +41,6 @@ import {
   FlaskConical
 } from 'lucide-react';
 import {
-  AreaChart,
-  Area,
-  LineChart,
-  Line,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer
-} from 'recharts';
-import {
   ReactFlow,
   Background,
   Controls,
@@ -68,18 +57,50 @@ import {
 } from '@xyflow/react';
 import { cn } from './lib/utils';
 import { motion, AnimatePresence } from 'motion/react';
-import { geminiService } from './services/geminiService';
 import { configService } from './services/configService';
-import { SettingsView } from './components/SettingsView';
-import { PortfolioView } from './components/PortfolioView';
-import { WalletView } from './components/WalletView';
-import { MarketsView } from './components/MarketsView';
-import { SignalsView } from './components/SignalsView';
-import { StatusView } from './components/StatusView';
-import PaperTradingView from './components/PaperTradingView';
-import { TradingChart } from './components/TradingChart';
-import { OpinionLayerView } from './components/OpinionLayerView';
-import { OperationsPage } from './components/OperationsPage';
+// `@google/genai` is only needed once the user actually invokes an AI action,
+// so the service is imported on demand rather than at module load.
+const loadGeminiService = () =>
+  import('./services/geminiService').then((m) => m.geminiService);
+// Route-level code splitting: each mode view (and the heavy chart libs they
+// pull in) is fetched on first navigation instead of shipping in the entry
+// chunk. Named exports are unwrapped to the `default` shape React.lazy wants.
+const SettingsView = lazy(() =>
+  import('./components/SettingsView').then((m) => ({ default: m.SettingsView })),
+);
+const PortfolioView = lazy(() =>
+  import('./components/PortfolioView').then((m) => ({ default: m.PortfolioView })),
+);
+const WalletView = lazy(() =>
+  import('./components/WalletView').then((m) => ({ default: m.WalletView })),
+);
+const MarketsView = lazy(() =>
+  import('./components/MarketsView').then((m) => ({ default: m.MarketsView })),
+);
+const SignalsView = lazy(() =>
+  import('./components/SignalsView').then((m) => ({ default: m.SignalsView })),
+);
+const StatusView = lazy(() =>
+  import('./components/StatusView').then((m) => ({ default: m.StatusView })),
+);
+const PaperTradingView = lazy(() => import('./components/PaperTradingView'));
+const OpinionLayerView = lazy(() =>
+  import('./components/OpinionLayerView').then((m) => ({ default: m.OpinionLayerView })),
+);
+const OperationsPage = lazy(() =>
+  import('./components/OperationsPage').then((m) => ({ default: m.OperationsPage })),
+);
+const EquityCurveChart = lazy(() => import('./components/EquityCurveChart'));
+
+/** Shared fallback shown while a lazily-loaded view chunk is in flight. */
+const ViewFallback = () => (
+  <div className="flex-1 flex items-center justify-center">
+    <div className="flex items-center gap-3 text-zinc-500">
+      <div className="w-4 h-4 border-2 border-zinc-700 border-t-emerald-400 rounded-full animate-spin" />
+      <span className="text-[10px] uppercase font-bold tracking-widest">Loading</span>
+    </div>
+  </div>
+);
 import { marketDataService, MarketProvider } from './services/marketDataService';
 import { brokerService, OrderParams } from './services/brokerService';
 import { backtestService, BacktestResult } from './services/backtestService';
@@ -1111,7 +1132,7 @@ export default function App() {
         role: m.role,
         parts: [{ text: m.text }]
       }));
-      const response = await geminiService.chat(text, history);
+      const response = await (await loadGeminiService()).chat(text, history);
       setMessages(prev => [...prev, { role: 'model', text: response || 'No response' }]);
     } catch (error: any) {
       console.error('Gemini Chat Error:', error);
@@ -1127,7 +1148,7 @@ export default function App() {
     setAiInsight('Analyzing market data...');
     setIsAiLoading(true);
     try {
-      const insight = await geminiService.analyzeMarket(candles.slice(-10));
+      const insight = await (await loadGeminiService()).analyzeMarket(candles.slice(-10));
       setAiInsight(insight || 'No insight available.');
 
       // Also post to chat for history
@@ -1151,7 +1172,7 @@ export default function App() {
     showToast('Optimizing workflow with Gemini...', 'info');
 
     try {
-      const suggestion = await geminiService.optimizeWorkflow({ nodes, edges });
+      const suggestion = await (await loadGeminiService()).optimizeWorkflow({ nodes, edges });
 
       setMessages(prev => [...prev,
       { role: 'user', text: 'Optimize my current trading workflow and suggest improvements.' },
@@ -1175,7 +1196,7 @@ export default function App() {
     showToast('Gemini is analyzing backtest results...', 'info');
 
     try {
-      const analysis = await geminiService.analyzeBacktest(backtestResults);
+      const analysis = await (await loadGeminiService()).analyzeBacktest(backtestResults);
       setMessages(prev => [...prev,
       { role: 'user', text: 'Analyze these backtest results and suggest how to improve this strategy.' },
       { role: 'model', text: analysis || 'No analysis available.' }
@@ -1568,6 +1589,7 @@ export default function App() {
         </header>
 
         <AnimatePresence mode="wait">
+          <Suspense fallback={<ViewFallback />}>
           {mode === 'manual' ? (
             <motion.div
               key="manual"
@@ -2140,34 +2162,9 @@ export default function App() {
                       <LineChartIcon size={16} className="text-emerald-400" /> Equity Curve
                     </h3>
                     <div className="flex-1">
-                      <ResponsiveContainer width="100%" height="100%">
-                        <LineChart data={backtestResults.equityCurve}>
-                          <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" vertical={false} />
-                          <XAxis
-                            dataKey="time"
-                            hide
-                          />
-                          <YAxis
-                            domain={['auto', 'auto']}
-                            stroke="#4b5563"
-                            fontSize={10}
-                            tickLine={false}
-                            axisLine={false}
-                            tickFormatter={(v) => `$${v}`}
-                          />
-                          <Tooltip
-                            contentStyle={{ backgroundColor: '#111827', border: '1px solid #374151', borderRadius: '8px', fontSize: '10px' }}
-                            itemStyle={{ color: '#10b981' }}
-                          />
-                          <Line
-                            type="monotone"
-                            dataKey="value"
-                            stroke="#10b981"
-                            strokeWidth={2}
-                            dot={false}
-                          />
-                        </LineChart>
-                      </ResponsiveContainer>
+                      <Suspense fallback={<ViewFallback />}>
+                        <EquityCurveChart data={backtestResults.equityCurve} />
+                      </Suspense>
                     </div>
                   </div>
 
@@ -2273,6 +2270,7 @@ export default function App() {
           ) : mode === 'operations' ? (
             <OperationsPage />
           ) : null}
+          </Suspense>
         </AnimatePresence>
       </main>
 
