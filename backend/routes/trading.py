@@ -192,31 +192,55 @@ async def get_portfolio():
     db = SessionLocal()
     try:
         open_trades = db.query(Trade).filter(Trade.status.in_(["open", "filled"])).all()
+        mark_prices = _fetch_mark_prices_for_symbols({t.symbol for t in open_trades})
+
+        total_notional = 0.0
+        total_unrealized_pnl = 0.0
         positions = []
         for t in open_trades:
+            cur_price = mark_prices.get(t.symbol) or t.entry_price or 0.0
+            notional = (t.quantity or 0.0) * (t.entry_price or 0.0)
+            total_notional += notional
+
+            if t.direction == "BUY":
+                u_pnl = (cur_price - (t.entry_price or cur_price)) * (t.quantity or 0.0)
+            else:
+                u_pnl = ((t.entry_price or cur_price) - cur_price) * (t.quantity or 0.0)
+            total_unrealized_pnl += u_pnl
+
             positions.append({
                 "id": t.id,
                 "symbol": t.symbol,
                 "direction": t.direction,
                 "quantity": t.quantity,
                 "entry_price": t.entry_price,
+                "current_price": cur_price,
                 "stop_loss": t.stop_loss,
                 "take_profit": t.take_profit,
+                "unrealized_pnl": round(u_pnl, 2),
                 "strategy": t.strategy,
                 "opened_at": t.timestamp.isoformat() if t.timestamp else None,
             })
 
         # Prefer live broker/paper balance over stale DB snapshot
-        balance = 0.0
-        available = 0.0
-        equity = 0.0
-        positions_value = 0.0
+        balance = 100000.0
+        available = 100000.0
+        equity = 100000.0
+        positions_value = total_notional
         try:
             bal = await _get_current_balance()
-            balance = bal.get("balance", 0.0)
-            available = bal.get("available", balance)
-            equity = bal.get("equity", balance)
-            positions_value = bal.get("margin_used", 0.0)
+            balance = float(bal.get("balance", 100000.0))
+            is_paper = bal.get("broker") == "paper_trading" or os.getenv("TRADING_MODE", "paper") == "paper"
+
+            if is_paper:
+                positions_value = total_notional
+                available = max(0.0, balance - total_notional)
+                equity = balance + total_unrealized_pnl
+            else:
+                margin_used = float(bal.get("margin_used", 0.0))
+                positions_value = margin_used if margin_used > 0 else total_notional
+                available = float(bal.get("available", balance - positions_value))
+                equity = float(bal.get("equity", balance + total_unrealized_pnl))
         except Exception:
             snap = (
                 db.query(PortfolioSnapshot)
@@ -225,9 +249,9 @@ async def get_portfolio():
             )
             if snap:
                 balance = snap.cash or 0.0
-                available = snap.cash or 0.0
-                equity = snap.total_value or balance
-                positions_value = snap.positions_value or 0.0
+                available = max(0.0, balance - total_notional)
+                equity = balance + total_unrealized_pnl
+                positions_value = total_notional
 
         # Compute realized PnL from all closed trades
         closed_pnl = db.query(Trade).filter(Trade.status == "closed").with_entities(
@@ -237,13 +261,14 @@ async def get_portfolio():
         pnl_pct = round((total_pnl / equity * 100) if equity > 0 else 0.0, 2)
 
         return {
-            "balance": round(balance, 6),
-            "available": round(available, 6),
-            "equity": round(equity, 6),
+            "balance": round(balance, 2),
+            "available": round(available, 2),
+            "equity": round(equity, 2),
+            "unrealized_pnl": round(total_unrealized_pnl, 2),
             "positions": positions,
             "total_pnl": total_pnl,
             "total_pnl_pct": pnl_pct,
-            "positions_value": round(positions_value, 6),
+            "positions_value": round(positions_value, 2),
             "open_positions_count": len(positions),
             "last_updated": datetime.now().isoformat(),
         }
@@ -1739,9 +1764,9 @@ async def get_price(symbol: str = "BTCUSDT"):
 async def get_account_summary():
     """Return live account equity and balance for workflow engine."""
     try:
-        bal = await _get_current_balance()
-        equity = bal.get("equity", bal.get("balance", 0.0))
-        available = bal.get("available", equity)
+        pf = await get_portfolio()
+        equity = float(pf.get("equity", 100000.0))
+        available = float(pf.get("available", equity))
         db = SessionLocal()
         try:
             from sqlalchemy import func
