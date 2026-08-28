@@ -156,9 +156,39 @@ async def run_backtest(request: dict):
         }
 
 
+async def _get_current_balance() -> dict:
+    """Resolve current balance depending on trading mode (paper vs live)."""
+    from backend.services.trading_mode import TradingMode, get_trading_mode
+    if get_trading_mode() == TradingMode.PAPER:
+        try:
+            from backend.services.unified_trading import trading_router
+            pf = trading_router.get_paper_portfolio()
+            if pf:
+                cash = float(pf.get("cash", 100000.0))
+                equity = float(pf.get("equity", cash))
+                return {
+                    "balance": cash,
+                    "available": cash,
+                    "equity": equity,
+                    "margin_used": float(pf.get("margin_used", 0.0)),
+                    "broker": "paper_trading",
+                }
+        except Exception as e:
+            logger.warning(f"Could not fetch paper portfolio: {e}")
+        return {
+            "balance": 100000.0,
+            "available": 100000.0,
+            "equity": 100000.0,
+            "margin_used": 0.0,
+            "broker": "paper_trading",
+        }
+    from backend.services.binance_futures_service import binance_futures_broker
+    return await asyncio.to_thread(binance_futures_broker.get_balance)
+
+
 @router.get("/portfolio")
 async def get_portfolio():
-    """Get current portfolio state with live Binance balance."""
+    """Get current portfolio state with live Binance balance (or paper portfolio in paper mode)."""
     db = SessionLocal()
     try:
         open_trades = db.query(Trade).filter(Trade.status.in_(["open", "filled"])).all()
@@ -176,14 +206,13 @@ async def get_portfolio():
                 "opened_at": t.timestamp.isoformat() if t.timestamp else None,
             })
 
-        # Prefer live broker balance over stale DB snapshot
+        # Prefer live broker/paper balance over stale DB snapshot
         balance = 0.0
         available = 0.0
         equity = 0.0
         positions_value = 0.0
         try:
-            from backend.services.binance_futures_service import binance_futures_broker
-            bal = await asyncio.to_thread(binance_futures_broker.get_balance)
+            bal = await _get_current_balance()
             balance = bal.get("balance", 0.0)
             available = bal.get("available", balance)
             equity = bal.get("equity", balance)
@@ -234,8 +263,7 @@ async def get_performance():
         realized = round(sum((t.pnl or 0.0) for t in closed), 4)
         equity = 0.0
         try:
-            from backend.services.binance_futures_service import binance_futures_broker
-            bal = await asyncio.to_thread(binance_futures_broker.get_balance)
+            bal = await _get_current_balance()
             equity = bal.get("equity", bal.get("balance", 0.0))
         except Exception:
             pass
@@ -300,6 +328,14 @@ async def get_status():
     llm_providers = []
 
     # Cloud providers
+    if os.getenv('OMNIROUTE_API_KEY') and os.getenv('OMNIROUTE_API_KEY') != 'omni_live_key_placeholder':
+        llm_providers.append({
+            'name': 'OmniRoute',
+            'model': os.getenv('PERSONA_LLM_MODEL', 'auto/smart'),
+            'status': 'configured',
+            'type': 'cloud',
+            'role': 'Primary (Auto-Select Routing)',
+        })
     if os.getenv('XAI_API_KEY') and os.getenv('XAI_API_KEY') != 'your_xai_api_key_here':
         llm_providers.append({'name': 'xAI (Grok)', 'model': os.getenv('XAI_MODEL', 'grok-beta'), 'status': 'configured', 'type': 'cloud'})
     if os.getenv('KIE_API_KEY') and os.getenv('KIE_API_KEY') != 'your_kie_api_key_here':
@@ -1667,8 +1703,7 @@ async def get_price(symbol: str = "BTCUSDT"):
 async def get_account_summary():
     """Return live account equity and balance for workflow engine."""
     try:
-        from backend.services.binance_futures_service import binance_futures_broker
-        bal = await asyncio.to_thread(binance_futures_broker.get_balance)
+        bal = await _get_current_balance()
         equity = bal.get("equity", bal.get("balance", 0.0))
         available = bal.get("available", equity)
         db = SessionLocal()
