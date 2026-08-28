@@ -1,4 +1,4 @@
-import { Node, Edge } from '@xyflow/react';
+import type { Node, Edge } from '@xyflow/react';
 import { brokerService } from './brokerService';
 import { marketDataService } from './marketDataService';
 import { apiService } from './apiService';

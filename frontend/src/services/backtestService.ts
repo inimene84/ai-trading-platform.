@@ -1,4 +1,4 @@
-import { Node as FlowNode, Edge } from '@xyflow/react';
+import type { Node as FlowNode, Edge } from '@xyflow/react';
 
 import { apiService } from './apiService';
 

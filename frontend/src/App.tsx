@@ -40,21 +40,8 @@ import {
   Newspaper,
   FlaskConical
 } from 'lucide-react';
-import {
-  ReactFlow,
-  Background,
-  Controls,
-  MiniMap,
-  useNodesState,
-  useEdgesState,
-  addEdge,
-  Panel,
-  Handle,
-  Position,
-  NodeProps,
-  Edge,
-  Node as FlowNode
-} from '@xyflow/react';
+import type { Node as FlowNode, Edge } from '@xyflow/react';
+import type { WorkflowNodeData } from './components/WorkflowBuilder/types';
 import { cn } from './lib/utils';
 import { motion, AnimatePresence } from 'motion/react';
 import { configService } from './services/configService';
@@ -91,6 +78,9 @@ const OperationsPage = lazy(() =>
   import('./components/OperationsPage').then((m) => ({ default: m.OperationsPage })),
 );
 const EquityCurveChart = lazy(() => import('./components/EquityCurveChart'));
+// Agent Builder is the only consumer of @xyflow/react (~173 kB); keep it out
+// of the entry chunk.
+const WorkflowBuilder = lazy(() => import('./components/WorkflowBuilder'));
 
 /** Shared fallback shown while a lazily-loaded view chunk is in flight. */
 const ViewFallback = () => (
@@ -106,25 +96,10 @@ import { brokerService, OrderParams } from './services/brokerService';
 import { backtestService, BacktestResult } from './services/backtestService';
 import { apiService } from './services/apiService';
 import { workflowEngine } from './services/workflowEngine';
-import { FilterNode, PositionSizerNode, RiskManagementNode, KillswitchNode } from './components/WorkflowNodes';
 
 // --- Types ---
 type AppMode = 'manual' | 'ai' | 'backtest' | 'settings' | 'markets' | 'portfolio' | 'wallet' | 'signals' | 'status' | 'opinion' | 'operations' | 'paper';
 
-interface WorkflowNodeData {
-  label: string;
-  type: string;
-  icon: any;
-  color?: string;
-  config?: {
-    symbol: string;
-    quantity: number;
-    orderType: 'market' | 'limit';
-    side: 'buy' | 'sell';
-    broker: 'binance' | 'ctrader';
-    price?: number;
-  };
-}
 
 // --- Mock Data ---
 const generateCandleData = () => {
@@ -157,287 +132,7 @@ const generateCandleData = () => {
 
 const candleData = generateCandleData();
 
-// --- AI Builder Components ---
 
-const CustomNode = ({ data, selected }: NodeProps) => {
-  const nodeData = data as unknown as WorkflowNodeData;
-  const Icon = nodeData.icon as any;
-  const isConfigured = !!(nodeData.config && ((nodeData.config as any).symbol || (nodeData.config as any).rsiPeriod));
-
-  // Map category to accent colors
-  const accentColor =
-    nodeData.type === 'Trigger' ? "blue" :
-      nodeData.type === 'Condition' ? "amber" :
-        nodeData.type === 'Action' ? "emerald" :
-          nodeData.type === 'Integration' ? "indigo" : "zinc";
-
-  return (
-    <motion.div
-      initial={{ scale: 0.9, opacity: 0 }}
-      animate={{ scale: 1, opacity: 1 }}
-      whileHover={{ y: -2, scale: 1.02 }}
-      className={cn(
-        "px-4 py-3 rounded-2xl bg-zinc-900/40 backdrop-blur-xl border transition-all min-w-[200px] relative group",
-        selected
-          ? `border-${accentColor}-500/50 shadow-[0_0_25px_rgba(var(--${accentColor}-500-rgb),0.2)]`
-          : "border-zinc-800/50 hover:border-zinc-700 shadow-xl"
-      )}
-      style={{
-        boxShadow: selected ? `0 0 20px -5px var(--tw-shadow-color)` : undefined,
-      }}
-    >
-      <Handle type="target" position={Position.Top} className="w-1.5 h-1.5 bg-zinc-700 border-none !-top-1" />
-
-      <div className="flex items-center gap-3">
-        <div className={cn(
-          "w-10 h-10 rounded-xl flex items-center justify-center relative overflow-hidden",
-          nodeData.color || "bg-zinc-800"
-        )}>
-          {/* Subtle icon background glow */}
-          <div className="absolute inset-0 opacity-20 bg-white" />
-          {Icon ? <Icon size={20} className="relative z-10 text-white" /> : <Activity size={20} className="relative z-10 text-white" />}
-
-          {/* Status pulse */}
-          <div className="absolute top-1 right-1">
-            <div className={cn(
-              "w-1.5 h-1.5 rounded-full animate-pulse",
-              accentColor === 'emerald' ? "bg-emerald-400" :
-                accentColor === 'blue' ? "bg-blue-400" :
-                  accentColor === 'amber' ? "bg-amber-400" : "bg-zinc-400"
-            )} />
-          </div>
-        </div>
-
-        <div className="flex-1 min-w-0">
-          <p className="text-[9px] uppercase text-zinc-500 font-black tracking-[0.1em] leading-none mb-1.5">{nodeData.type}</p>
-          <p className="text-xs font-bold text-white leading-none truncate pr-4">{nodeData.label}</p>
-        </div>
-      </div>
-
-      {isConfigured && (
-        <div className="mt-3 pt-3 border-t border-zinc-800/30 flex flex-col gap-1.5">
-          <div className="flex items-center justify-between text-[8px] font-mono font-medium tracking-tight text-zinc-500">
-            <span className="flex items-center gap-1">
-              <Globe size={10} className="opacity-50" /> {nodeData.config?.symbol || 'GLOBAL'}
-            </span>
-            <span className="bg-zinc-800/50 px-1.5 py-0.5 rounded uppercase">Configured</span>
-          </div>
-        </div>
-      )}
-
-      {selected && (
-        <motion.div
-          initial={{ scale: 0, opacity: 0 }}
-          animate={{ scale: 1, opacity: 1 }}
-          className="absolute -top-1.5 -right-1.5 w-5 h-5 bg-emerald-500 rounded-full flex items-center justify-center shadow-[0_0_10px_rgba(16,185,129,0.5)] z-20"
-        >
-          <Check size={12} className="text-black font-bold" />
-        </motion.div>
-      )}
-
-      <Handle type="source" position={Position.Bottom} className="w-1.5 h-1.5 bg-zinc-700 border-none !-bottom-1" />
-    </motion.div>
-  );
-};
-
-const NodeProperties = ({ node, onUpdate }: { node: FlowNode, onUpdate: (id: string, config: any) => void }) => {
-  const nodeData = node.data as unknown as WorkflowNodeData;
-  const label = nodeData.label.toLowerCase();
-
-  const [config, setConfig] = useState<any>(nodeData.config || {});
-
-  useEffect(() => {
-    setConfig(nodeData.config || {});
-  }, [node.id]);
-
-  const handleChange = (field: string, value: any) => {
-    const newConfig = { ...config, [field]: value };
-    setConfig(newConfig);
-    onUpdate(node.id, newConfig);
-  };
-
-  const renderConfigFields = () => {
-    if (label.includes('rsi')) {
-      return (
-        <div className="space-y-3">
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
-              <label className="text-[9px] uppercase text-zinc-500 font-bold tracking-wider">Period</label>
-              <input type="number" value={config.rsiPeriod} onChange={(e) => handleChange('rsiPeriod', parseInt(e.target.value))} className="w-full bg-zinc-900 border border-zinc-800 rounded-lg py-2 px-3 text-xs font-mono text-white focus:outline-none focus:border-emerald-500/50" />
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-[9px] uppercase text-zinc-500 font-bold tracking-wider">Symbol</label>
-              <input type="text" value={config.symbol} onChange={(e) => handleChange('symbol', e.target.value.toUpperCase())} className="w-full bg-zinc-900 border border-zinc-800 rounded-lg py-2 px-3 text-xs font-mono text-white focus:outline-none focus:border-emerald-500/50" />
-            </div>
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
-              <label className="text-[9px] uppercase text-zinc-500 font-bold tracking-wider">Overbought</label>
-              <input type="number" value={config.rsiUpper} onChange={(e) => handleChange('rsiUpper', parseInt(e.target.value))} className="w-full bg-zinc-900 border border-zinc-800 rounded-lg py-2 px-3 text-xs font-mono text-white focus:outline-none focus:border-emerald-500/50" />
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-[9px] uppercase text-zinc-500 font-bold tracking-wider">Oversold</label>
-              <input type="number" value={config.rsiLower} onChange={(e) => handleChange('rsiLower', parseInt(e.target.value))} className="w-full bg-zinc-900 border border-zinc-800 rounded-lg py-2 px-3 text-xs font-mono text-white focus:outline-none focus:border-emerald-500/50" />
-            </div>
-          </div>
-        </div>
-      );
-    }
-
-    if (label.includes('trend') || label.includes('ema')) {
-      return (
-        <div className="space-y-3">
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
-              <label className="text-[9px] uppercase text-zinc-500 font-bold tracking-wider">EMA Fast</label>
-              <input type="number" value={config.emaFast} onChange={(e) => handleChange('emaFast', parseInt(e.target.value))} className="w-full bg-zinc-900 border border-zinc-800 rounded-lg py-2 px-3 text-xs font-mono text-white focus:outline-none focus:border-emerald-500/50" />
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-[9px] uppercase text-zinc-500 font-bold tracking-wider">EMA Slow</label>
-              <input type="number" value={config.emaSlow} onChange={(e) => handleChange('emaSlow', parseInt(e.target.value))} className="w-full bg-zinc-900 border border-zinc-800 rounded-lg py-2 px-3 text-xs font-mono text-white focus:outline-none focus:border-emerald-500/50" />
-            </div>
-          </div>
-        </div>
-      );
-    }
-
-    if (label.includes('telegram') || label.includes('discord')) {
-      return (
-        <div className="space-y-3">
-          <div className="space-y-1.5">
-            <label className="text-[9px] uppercase text-zinc-500 font-bold tracking-wider">{label.includes('telegram') ? 'Chat ID' : 'Webhook URL'}</label>
-            <input
-              type="text"
-              value={config.target || ''}
-              onChange={(e) => handleChange('target', e.target.value)}
-              placeholder={label.includes('telegram') ? '@my_chat_id' : 'https://discord.com/api/webhooks/...'}
-              className="w-full bg-zinc-900 border border-zinc-800 rounded-lg py-2 px-3 text-xs font-mono text-white focus:outline-none focus:border-emerald-500/50"
-            />
-          </div>
-          <div className="space-y-1.5">
-            <label className="text-[9px] uppercase text-zinc-500 font-bold tracking-wider">Message Template</label>
-            <textarea
-              value={config.message || ''}
-              onChange={(e) => handleChange('message', e.target.value)}
-              placeholder="Signal alert: {{symbol}} {{side}} at {{price}}"
-              className="w-full h-24 bg-zinc-900 border border-zinc-800 rounded-lg py-2 px-3 text-xs font-mono text-white focus:outline-none focus:border-emerald-500/50 resize-none"
-            />
-          </div>
-        </div>
-      );
-    }
-
-    if (label.includes('sql') || label.includes('postgres') || label.includes('mysql')) {
-      return (
-        <div className="space-y-3">
-          <div className="space-y-1.5">
-            <label className="text-[9px] uppercase text-zinc-500 font-bold tracking-wider">SQL Query</label>
-            <textarea
-              value={config.query || ''}
-              onChange={(e) => handleChange('query', e.target.value)}
-              placeholder="INSERT INTO trades (symbol, price) VALUES ('BTCUSDT', 65000);"
-              className="w-full h-32 bg-zinc-900 border border-zinc-800 rounded-lg py-2 px-3 text-xs font-mono text-white focus:outline-none focus:border-emerald-500/50 resize-none"
-            />
-          </div>
-        </div>
-      );
-    }
-
-    if (label.includes('delay')) {
-      return (
-        <div className="space-y-3">
-          <div className="space-y-1.5">
-            <label className="text-[9px] uppercase text-zinc-500 font-bold tracking-wider">Duration (ms)</label>
-            <input type="number" value={config.delayMs} onChange={(e) => handleChange('delayMs', parseInt(e.target.value))} className="w-full bg-zinc-900 border border-zinc-800 rounded-lg py-2 px-3 text-xs font-mono text-white focus:outline-none focus:border-emerald-500/50" />
-          </div>
-        </div>
-      );
-    }
-
-    if (label.includes('switch') || label.includes('filter')) {
-      return (
-        <div className="space-y-3">
-          <div className="space-y-1.5">
-            <label className="text-[9px] uppercase text-zinc-500 font-bold tracking-wider">Condition Expression (JS)</label>
-            <textarea
-              value={config.expression || ''}
-              onChange={(e) => handleChange('expression', e.target.value)}
-              placeholder="data.price > 60000 && data.rsi < 30"
-              className="w-full h-24 bg-zinc-900 border border-zinc-800 rounded-lg py-2 px-3 text-xs font-mono text-white focus:outline-none focus:border-emerald-500/50 resize-none"
-            />
-          </div>
-        </div>
-      );
-    }
-
-    if (label.includes('buy') || label.includes('sell') || nodeData.type === 'Integration' || nodeData.type === 'Action') {
-      return (
-        <div className="space-y-3">
-          <div className="space-y-1.5">
-            <label className="text-[9px] uppercase text-zinc-500 font-bold tracking-wider">Symbol</label>
-            <input type="text" value={config.symbol} onChange={(e) => handleChange('symbol', e.target.value.toUpperCase())} className="w-full bg-zinc-900 border border-zinc-800 rounded-lg py-2 px-3 text-xs font-mono text-white focus:outline-none focus:border-emerald-500/50" />
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
-              <label className="text-[9px] uppercase text-zinc-500 font-bold tracking-wider">Quantity</label>
-              <input type="number" value={config.quantity} onChange={(e) => handleChange('quantity', parseFloat(e.target.value))} className="w-full bg-zinc-900 border border-zinc-800 rounded-lg py-2 px-3 text-xs font-mono text-white focus:outline-none focus:border-emerald-500/50" />
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-[9px] uppercase text-zinc-500 font-bold tracking-wider">Side</label>
-              <select value={config.side} onChange={(e) => handleChange('side', e.target.value)} className="w-full bg-zinc-900 border border-zinc-800 rounded-lg py-2 px-3 text-xs font-mono text-white focus:outline-none focus:border-emerald-500/50">
-                <option value="buy">Buy</option>
-                <option value="sell">Sell</option>
-              </select>
-            </div>
-          </div>
-          <div className="space-y-1.5">
-            <label className="text-[9px] uppercase text-zinc-500 font-bold tracking-wider">Order Type</label>
-            <div className="flex bg-zinc-900 rounded-lg p-1 border border-zinc-800">
-              {['market', 'limit'].map(t => (
-                <button key={t} onClick={() => handleChange('orderType', t)} className={cn("flex-1 py-1.5 text-[10px] font-bold rounded-md transition-all uppercase tracking-tighter", config.orderType === t ? "bg-zinc-800 text-white shadow-sm" : "text-zinc-500 hover:text-zinc-400")}>{t}</button>
-              ))}
-            </div>
-          </div>
-          {config.orderType === 'limit' && (
-            <div className="space-y-1.5">
-              <label className="text-[9px] uppercase text-zinc-500 font-bold tracking-wider">Limit Price</label>
-              <input type="number" value={config.price || ''} onChange={(e) => handleChange('price', parseFloat(e.target.value))} className="w-full bg-zinc-900 border border-zinc-800 rounded-lg py-2 px-3 text-xs font-mono text-white focus:outline-none focus:border-emerald-500/50" placeholder="0.00" />
-            </div>
-          )}
-        </div>
-      );
-    }
-
-    return (
-      <div className="p-4 bg-zinc-900/50 border border-dashed border-zinc-800 rounded-lg text-center">
-        <p className="text-[10px] text-zinc-500">No specific configuration available for this node type.</p>
-      </div>
-    );
-  };
-
-  return (
-    <div className="bg-[#141416] border border-zinc-800 rounded-xl p-4 shadow-2xl min-w-[280px] space-y-4">
-      <div className="flex items-center gap-2 border-b border-zinc-800 pb-3">
-        <div className={cn("p-1.5 rounded-lg", nodeData.color)}>
-          {React.createElement(nodeData.icon as any, { size: 14, className: "text-white" })}
-        </div>
-        <div>
-          <h3 className="text-xs font-bold text-white">{nodeData.label}</h3>
-          <p className="text-[9px] text-zinc-500 uppercase font-bold tracking-widest">{nodeData.type} Configuration</p>
-        </div>
-      </div>
-      {renderConfigFields()}
-    </div>
-  );
-};
-
-const nodeTypes = {
-  workflow: CustomNode,
-  filter: FilterNode,
-  positionSizer: PositionSizerNode,
-  riskManagement: RiskManagementNode,
-  killswitch: KillswitchNode,
-};
 
 const initialNodes: FlowNode[] = [
   {
@@ -887,8 +582,8 @@ export default function App() {
   }, [symbol, provider]);
 
   // React Flow State
-  const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
-  const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
+  const [nodes, setNodes] = useState<FlowNode[]>(initialNodes);
+  const [edges, setEdges] = useState<Edge[]>(initialEdges);
   const [workflows, setWorkflows] = useState<{ id: string; name: string; nodes: FlowNode[]; edges: Edge[]; isRunning: boolean }[]>(() => {
     try {
       const saved = localStorage.getItem('quantum_custom_workflows');
@@ -902,21 +597,6 @@ export default function App() {
   }, [workflows]);
   const [activeWorkflowId, setActiveWorkflowId] = useState<string | null>(null);
 
-  const selectedNodes = useMemo(() => nodes.filter((n) => n.selected), [nodes]);
-
-  const onConnect = useCallback(
-    (params: any) => setEdges((eds) => addEdge({ ...params, animated: true, style: { stroke: '#10b981' } }, eds)),
-    [setEdges]
-  );
-
-  const updateNodeConfig = useCallback((nodeId: string, config: any) => {
-    setNodes((nds) => nds.map((node) => {
-      if (node.id === nodeId) {
-        return { ...node, data: { ...node.data, config } };
-      }
-      return node;
-    }));
-  }, [setNodes]);
 
   const executeNodeTrade = async (node: FlowNode) => {
     const nodeData = node.data as unknown as WorkflowNodeData;
@@ -1022,78 +702,6 @@ export default function App() {
     showToast('Created new empty workflow.', 'info');
   }, [setNodes, setEdges]);
 
-  const handleBatchDelete = useCallback(() => {
-    const selectedIds = new Set(selectedNodes.map((n) => n.id));
-    setNodes((nds) => nds.filter((n) => !selectedIds.has(n.id)));
-    setEdges((eds) => eds.filter((e) => !selectedIds.has(e.source) && !selectedIds.has(e.target)));
-  }, [selectedNodes, setNodes, setEdges]);
-
-  const handleBatchColorChange = useCallback((color: string) => {
-    setNodes((nds) =>
-      nds.map((node) => {
-        if (selectedNodes.find((sn) => sn.id === node.id)) {
-          return {
-            ...node,
-            data: { ...node.data, color },
-          };
-        }
-        return node;
-      })
-    );
-  }, [selectedNodes, setNodes]);
-
-  const handleGroupNodes = useCallback(() => {
-    if (selectedNodes.length < 2) return;
-
-    const minX = Math.min(...selectedNodes.map((n) => n.position.x));
-    const minY = Math.min(...selectedNodes.map((n) => n.position.y));
-    const maxX = Math.max(...selectedNodes.map((n) => n.position.x + 180)); // Approx width
-    const maxY = Math.max(...selectedNodes.map((n) => n.position.y + 60));  // Approx height
-
-    const groupId = `group-${Date.now()}`;
-    const groupNode: FlowNode = {
-      id: groupId,
-      type: 'group',
-      data: { label: 'New Group' },
-      position: { x: minX - 20, y: minY - 40 },
-      style: {
-        width: maxX - minX + 40,
-        height: maxY - minY + 60,
-        backgroundColor: 'rgba(16, 185, 129, 0.05)',
-        border: '1px dashed #10b981',
-        borderRadius: '12px',
-      },
-    };
-
-    setNodes((nds) => [
-      ...nds.map((node) => {
-        if (selectedNodes.find((sn) => sn.id === node.id)) {
-          return {
-            ...node,
-            parentId: groupId,
-            extent: 'parent' as const,
-            position: {
-              x: node.position.x - (minX - 20),
-              y: node.position.y - (minY - 40),
-            },
-          };
-        }
-        return node;
-      }),
-      groupNode,
-    ]);
-  }, [selectedNodes, setNodes]);
-
-  const updateNodeData = useCallback((nodeId: string, newData: any) => {
-    setNodes((nds) =>
-      nds.map((node) => {
-        if (node.id === nodeId) {
-          return { ...node, data: { ...node.data, ...newData } };
-        }
-        return node;
-      })
-    );
-  }, [setNodes]);
 
   const handleRunBacktest = async () => {
     setIsBacktesting(true);
@@ -1837,265 +1445,25 @@ export default function App() {
             >
               {/* AI Workflow Builder View */}
               <div className="flex-1 relative">
-                <ReactFlow
-                  nodes={nodes}
-                  edges={edges}
-                  onNodesChange={onNodesChange}
-                  onEdgesChange={onEdgesChange}
-                  onConnect={onConnect}
-                  nodeTypes={nodeTypes}
-                  fitView
-                  className="bg-[#0A0A0B]"
-                >
-                  <Background color="#27272a" gap={20} />
-                  <Controls className="bg-zinc-900 border-zinc-800 fill-white" />
-                  <MiniMap
-                    nodeColor="#10b981"
-                    maskColor="rgba(0,0,0,0.5)"
-                    className="bg-zinc-900 border border-zinc-800 rounded-xl"
+                <Suspense fallback={<ViewFallback />}>
+                  <WorkflowBuilder
+                    nodes={nodes}
+                    edges={edges}
+                    setNodes={setNodes}
+                    setEdges={setEdges}
+                    workflows={workflows}
+                    activeWorkflowId={activeWorkflowId}
+                    isZenMode={isZenMode}
+                    isOptimizing={isOptimizing}
+                    createNewWorkflow={createNewWorkflow}
+                    loadWorkflow={loadWorkflow}
+                    toggleWorkflowRun={toggleWorkflowRun}
+                    saveWorkflow={saveWorkflow}
+                    addNewNode={addNewNode}
+                    handleWorkflowOptimization={handleWorkflowOptimization}
+                    executeNodeTrade={executeNodeTrade}
                   />
-
-                  <Panel position="top-left" className={cn("flex flex-col gap-2 transition-all duration-300 max-h-[80vh] w-[260px]", isZenMode && "opacity-0 pointer-events-none -translate-x-10")}>
-                    <div className="bg-[#141416] border border-zinc-800 rounded-xl p-4 shadow-2xl flex-shrink-0">
-                      <div className="flex items-center justify-between mb-4">
-                        <h3 className="text-sm font-bold flex items-center gap-2">
-                          <Layers size={16} className="text-emerald-400" /> Workflows
-                        </h3>
-                        <button
-                          onClick={createNewWorkflow}
-                          className="p-1 hover:bg-white/5 rounded-md text-zinc-500 hover:text-emerald-400 transition-colors"
-                        >
-                          <Plus size={16} />
-                        </button>
-                      </div>
-                      <div className="space-y-2 max-h-[150px] overflow-y-auto pr-2 scrollbar-default">
-                        {workflows.length === 0 && (
-                          <p className="text-[10px] text-zinc-500 italic text-center py-4">No saved workflows</p>
-                        )}
-                        {workflows.map(wf => (
-                          <div
-                            key={wf.id}
-                            className={cn(
-                              "group flex items-center justify-between p-2 rounded-lg border transition-all cursor-pointer",
-                              activeWorkflowId === wf.id ? "bg-emerald-500/10 border-emerald-500/30" : "bg-zinc-900/50 border-zinc-800 hover:border-zinc-700"
-                            )}
-                            onClick={() => loadWorkflow(wf.id)}
-                          >
-                            <div className="flex items-center gap-2 overflow-hidden">
-                              <div className={cn(
-                                "w-1.5 h-1.5 rounded-full flex-shrink-0",
-                                wf.isRunning ? "bg-emerald-500 animate-pulse" : "bg-zinc-700"
-                              )} />
-                              <span className="text-xs font-medium truncate">{wf.name}</span>
-                            </div>
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                toggleWorkflowRun(wf.id);
-                              }}
-                              className={cn(
-                                "p-1 rounded transition-colors",
-                                wf.isRunning ? "text-rose-400 hover:bg-rose-500/10" : "text-emerald-400 hover:bg-emerald-500/10"
-                              )}
-                            >
-                              {wf.isRunning ? <Pause size={12} /> : <Play size={12} />}
-                            </button>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-
-                    <div className="bg-[#141416] border border-zinc-800 rounded-xl p-4 shadow-2xl flex-1 flex flex-col min-h-0 overflow-hidden">
-                      <h3 className="text-sm font-bold mb-4 flex-shrink-0 flex items-center gap-2">
-                        <Layers size={16} className="text-emerald-400" /> Components
-                      </h3>
-                      <div className="space-y-2 flex-1 overflow-y-auto min-h-0 pr-2 scrollbar-default">
-                        <DraggableComponent icon={<Activity size={14} />} label="RSI Indicator" type="Trigger" />
-                        <DraggableComponent icon={<Clock size={14} />} label="Time Delay" type="Condition" />
-                        <DraggableComponent icon={<Zap size={14} />} label="Market Buy" type="Action" />
-                        <DraggableComponent icon={<TrendingUp size={14} />} label="Take Profit" type="Condition" />
-                        <DraggableComponent icon={<Shield size={14} />} label="Stop Loss" type="Action" />
-                        <DraggableComponent icon={<Globe size={14} />} label="Webhook" type="Trigger" />
-                        <DraggableComponent icon={<Globe size={14} />} label="cTrader API" type="Integration" />
-                        <DraggableComponent icon={<Zap size={14} />} label="Binance API" type="Integration" />
-                        <DraggableComponent icon={<Database size={14} />} label="PostgreSQL" type="Integration" />
-                        <DraggableComponent icon={<Cloud size={14} />} label="Supabase" type="Integration" />
-                        <DraggableComponent icon={<BarChart3 size={14} />} label="Grafana" type="Integration" />
-                        <DraggableComponent icon={<Sparkles size={14} />} label="Gemini Agent" type="Action" />
-                      </div>
-                      <div className="pt-4 mt-2 border-t border-zinc-800 flex-shrink-0">
-                        <button
-                          onClick={addNewNode}
-                          className="w-full py-2.5 bg-emerald-500 hover:bg-emerald-400 text-black rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-all shadow-lg shadow-emerald-500/20"
-                        >
-                          <Plus size={16} /> Create New Node
-                        </button>
-                      </div>
-                    </div>
-                  </Panel>
-
-                  <Panel position="top-right" className={cn("flex flex-col gap-2 transition-all duration-300", isZenMode && "opacity-0 pointer-events-none translate-x-10")}>
-                    <div className="bg-[#141416] border border-zinc-800 rounded-xl p-4 shadow-2xl min-w-[200px]">
-                      <h3 className="text-sm font-bold mb-4 flex items-center gap-2">
-                        <Cpu size={16} className="text-emerald-400" /> Agent Status
-                      </h3>
-                      <div className="space-y-4">
-                        <div className="flex items-center justify-between">
-                          <span className="text-xs text-zinc-500">Status</span>
-                          <span className="text-xs font-bold text-emerald-400 flex items-center gap-1">
-                            <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse" /> Running
-                          </span>
-                        </div>
-                        <div className="flex items-center justify-between">
-                          <span className="text-xs text-zinc-500">Total Trades</span>
-                          <span className="text-xs font-bold">142</span>
-                        </div>
-                        <div className="flex items-center justify-between">
-                          <span className="text-xs text-zinc-500">Win Rate</span>
-                          <span className="text-xs font-bold text-emerald-400">68.4%</span>
-                        </div>
-                        <div className="pt-2 border-t border-zinc-800 flex flex-col gap-2">
-                          <button
-                            onClick={handleWorkflowOptimization}
-                            disabled={isOptimizing}
-                            className="w-full bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 py-2 rounded-lg text-[10px] font-bold flex items-center justify-center gap-1 border border-indigo-500/20 transition-all"
-                          >
-                            <BrainCircuit size={12} /> {isOptimizing ? 'Optimizing...' : 'Optimize with Gemini'}
-                          </button>
-                          <div className="flex gap-2">
-                            <button className="flex-1 bg-zinc-800 hover:bg-zinc-700 py-2 rounded-lg text-[10px] font-bold flex items-center justify-center gap-1">
-                              <Pause size={12} /> Pause
-                            </button>
-                            <button
-                              onClick={saveWorkflow}
-                              className="flex-1 bg-emerald-500 text-black py-2 rounded-lg text-[10px] font-bold flex items-center justify-center gap-1"
-                            >
-                              <Save size={12} /> Save
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Node Properties Panel */}
-                    <AnimatePresence>
-                      {selectedNodes.length === 1 && (
-                        <motion.div
-                          initial={{ x: 50, opacity: 0 }}
-                          animate={{ x: 0, opacity: 1 }}
-                          exit={{ x: 50, opacity: 0 }}
-                          className="bg-[#141416] border border-zinc-800 rounded-xl p-4 shadow-2xl min-w-[260px] mt-2"
-                        >
-                          <h3 className="text-sm font-bold mb-4 flex items-center gap-2">
-                            <Settings size={16} className="text-emerald-400" /> Node Properties
-                          </h3>
-                          <div className="space-y-4">
-                            <div className="space-y-1.5">
-                              <label className="text-[10px] uppercase text-zinc-500 font-bold">Label</label>
-                              <input
-                                type="text"
-                                value={selectedNodes[0].data.label as string}
-                                onChange={(e) => updateNodeData(selectedNodes[0].id, { label: e.target.value })}
-                                aria-label="Node Label"
-                                className="w-full bg-zinc-900 border border-zinc-800 rounded-lg py-2 px-3 text-xs focus:outline-none focus:border-emerald-500/50"
-                              />
-                            </div>
-                            <div className="space-y-1.5">
-                              <label className="text-[10px] uppercase text-zinc-500 font-bold">Type</label>
-                              <select
-                                value={selectedNodes[0].data.type as string}
-                                onChange={(e) => updateNodeData(selectedNodes[0].id, { type: e.target.value })}
-                                aria-label="Node Type"
-                                className="w-full bg-zinc-900 border border-zinc-800 rounded-lg py-2 px-3 text-xs focus:outline-none focus:border-emerald-500/50 appearance-none"
-                              >
-                                <option value="Trigger">Trigger</option>
-                                <option value="Condition">Condition</option>
-                                <option value="Action">Action</option>
-                                <option value="Integration">Integration</option>
-                              </select>
-                            </div>
-                            <div className="space-y-1.5">
-                              <label className="text-[10px] uppercase text-zinc-500 font-bold">Custom Logic</label>
-                              <textarea
-                                placeholder="Enter expression..."
-                                aria-label="Custom Logic Expression"
-                                className="w-full bg-zinc-900 border border-zinc-800 rounded-lg py-2 px-3 text-xs focus:outline-none focus:border-emerald-500/50 min-h-[80px] resize-none"
-                              />
-                            </div>
-                          </div>
-                        </motion.div>
-                      )}
-                    </AnimatePresence>
-                  </Panel>
-
-                  {/* Batch Actions Panel */}
-                  <AnimatePresence>
-                    {selectedNodes.length > 1 && (
-                      <Panel position="bottom-center">
-                        <motion.div
-                          initial={{ y: 50, opacity: 0 }}
-                          animate={{ y: 0, opacity: 1 }}
-                          exit={{ y: 50, opacity: 0 }}
-                          className="bg-[#141416] border border-emerald-500/50 rounded-2xl p-4 shadow-2xl flex items-center gap-6 mb-8"
-                        >
-                          <div className="flex items-center gap-3 pr-6 border-r border-zinc-800">
-                            <div className="w-8 h-8 bg-emerald-500/20 rounded-lg flex items-center justify-center text-emerald-400 font-bold text-xs">
-                              {selectedNodes.length}
-                            </div>
-                            <span className="text-sm font-semibold">Nodes Selected</span>
-                          </div>
-
-                          <div className="flex items-center gap-2">
-                            <button
-                              onClick={handleGroupNodes}
-                              className="flex items-center gap-2 px-4 py-2 bg-zinc-800 hover:bg-zinc-700 rounded-xl text-xs font-bold transition-colors"
-                            >
-                              <Layers size={14} className="text-emerald-400" /> Group Selected
-                            </button>
-
-                            <div className="h-8 w-px bg-zinc-800 mx-2" />
-
-                            <div className="flex items-center gap-1">
-                              {['bg-blue-500/20', 'bg-amber-500/20', 'bg-emerald-500/20', 'bg-rose-500/20'].map(color => (
-                                <button
-                                  key={color}
-                                  onClick={() => handleBatchColorChange(color)}
-                                  className={cn("w-6 h-6 rounded-full border border-zinc-800 hover:scale-110 transition-transform", color.replace('/20', ''))}
-                                  style={{ backgroundColor: color.includes('emerald') ? '#10b981' : color.includes('blue') ? '#3b82f6' : color.includes('amber') ? '#f59e0b' : '#f43f5e' }}
-                                />
-                              ))}
-                            </div>
-
-                            <div className="h-8 w-px bg-zinc-800 mx-2" />
-
-                            <button
-                              onClick={handleBatchDelete}
-                              className="flex items-center gap-2 px-4 py-2 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 rounded-xl text-xs font-bold transition-colors"
-                            >
-                              <Trash2 size={14} /> Delete All
-                            </button>
-                          </div>
-                        </motion.div>
-                      </Panel>
-                    )}
-                  </AnimatePresence>
-                  <Panel position="top-right" className={cn("flex flex-col gap-4 transition-all duration-300", isZenMode && "opacity-0 pointer-events-none translate-x-10")}>
-                    {selectedNodes.length === 1 && (selectedNodes[0].data.type === 'Integration' || selectedNodes[0].data.type === 'Action') && (
-                      <div className="space-y-4">
-                        <NodeProperties
-                          node={selectedNodes[0]}
-                          onUpdate={updateNodeConfig}
-                        />
-                        <button
-                          onClick={() => executeNodeTrade(selectedNodes[0])}
-                          className="w-full bg-emerald-500 hover:bg-emerald-400 text-black font-bold py-3 rounded-xl shadow-lg shadow-emerald-500/20 flex items-center justify-center gap-2 transition-all active:scale-95"
-                        >
-                          <Zap size={16} fill="currentColor" /> Execute Trade
-                        </button>
-                      </div>
-                    )}
-                  </Panel>
-                </ReactFlow>
+                </Suspense>
               </div>
             </motion.div>
           ) : mode === 'backtest' ? (
@@ -2451,21 +1819,3 @@ export default function App() {
   );
 }
 
-function DraggableComponent({ icon, label, type }: { icon: React.ReactNode, label: string, type: string }) {
-  return (
-    <div className="flex items-center gap-3 p-2 rounded-lg bg-zinc-900 border border-zinc-800 hover:border-emerald-500/50 cursor-grab active:cursor-grabbing transition-colors group">
-      <div className={cn(
-        "p-1.5 rounded-md shrink-0",
-        type === 'Trigger' ? "bg-blue-500/20 text-blue-400" :
-          type === 'Condition' ? "bg-amber-500/20 text-amber-400" : "bg-emerald-500/20 text-emerald-400"
-      )}>
-        {icon}
-      </div>
-      <div className="flex-1">
-        <p className="text-[9px] uppercase text-zinc-500 font-bold leading-none mb-0.5">{type}</p>
-        <p className="text-xs font-medium text-zinc-300">{label}</p>
-      </div>
-      <Plus size={14} className="text-zinc-600 group-hover:text-emerald-400 transition-colors" />
-    </div>
-  );
-}
