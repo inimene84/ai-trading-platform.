@@ -1,32 +1,39 @@
 name: VPS Deploy
 
+# Manual-only deploy for a LIVE real-money trading system.
+# Deliberately NOT triggered on push to main — a production deploy must be an
+# explicit, typed operator action. Protects against accidental deploys when the
+# SSH_PRIVATE_KEY secret is later configured.
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - "backend/**"
-      - "frontend/**"
-      - ".github/workflows/**"
-      - "scripts/**"
-      - "docker-compose*.yml"
-      - "Dockerfile*"
-      - "nginx.conf"
-      - "litellm-config.yaml"
+    inputs:
+      confirm:
+        description: "Type DEPLOY to confirm a live production deploy"
+        required: true
+        default: "no"
+
+# Never run two deploys at once — a rolling restart must be serialized.
+concurrency:
+  group: vps-deploy
+  cancel-in-progress: false
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    if: github.repository == 'inimene84/ai-trading-platform.'
+    # Optional: gate behind a GitHub `production` environment with required
+    # reviewers (Settings → Environments → production → Required reviewers).
+    environment: production
+    if: ${{ github.event.inputs.confirm == 'DEPLOY' }}
+
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup SSH key
+      - name: Fail closed if SSH key is missing
         env:
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
         run: |
           if [ -z "$SSH_PRIVATE_KEY" ]; then
-            echo "::error::SSH_PRIVATE_KEY secret is not configured in GitHub repo settings."
+            echo "::error::SSH_PRIVATE_KEY secret is not configured in GitHub repo settings. Configure it under Settings → Secrets and variables → Actions, or run the deploy manually on the VPS."
             exit 1
           fi
           mkdir -p ~/.ssh
@@ -45,6 +52,7 @@ jobs:
           PROJECT_DIR="${PROJECT_DIR:-/root/ai-trading-platform-v3}"
           cd "$PROJECT_DIR"
           git fetch origin main && git checkout main && git pull origin main
+          git log -1 --oneline
           chmod +x scripts/hostinger_vps_apply.sh scripts/lib/vps_ssh_hygiene.sh 2>/dev/null || true
           PROJECT_DIR="$PROJECT_DIR" ./scripts/hostinger_vps_apply.sh
           REMOTE

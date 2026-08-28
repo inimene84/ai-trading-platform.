@@ -1,0 +1,39 @@
+name: Frontend CI
+
+on:
+  push:
+    paths:
+      - "frontend/**"
+      - ".github/workflows/frontend-ci.yml"
+  pull_request:
+    paths:
+      - "frontend/**"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci --no-audit --no-fund
+
+      - name: Build (production gate)
+        working-directory: frontend
+        run: npm run build
+
+      - name: Type-check (advisory — known pre-existing errors)
+        # `tsc --noEmit` currently surfaces ~50 pre-existing type errors that
+        # esbuild skips during `vite build`. This step is non-blocking until the
+        # frontend modernization pass resolves them, then flip to blocking.
+        working-directory: frontend
+        run: npm run lint
+        continue-on-error: true
