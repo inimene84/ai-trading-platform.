@@ -21,12 +21,16 @@ services:
       BINANCE_DRY_RUN: false
       DRY_RUN_ALL: false
       GEMINI_API_KEY: ${GOOGLE_API_KEY}
-      PERSONA_LLM_PROVIDER: ${PERSONA_LLM_PROVIDER:-kie}
-      PERSONA_LLM_MODEL: ${PERSONA_LLM_MODEL:-claude-sonnet-4-6}
+      PERSONA_LLM_PROVIDER: ${PERSONA_LLM_PROVIDER:-omniroute}
+      PERSONA_LLM_MODEL: ${PERSONA_LLM_MODEL:-auto/smart}
       GROQ_API_KEY: ${GROQ_API_KEY:-}
-      PERSONA_LLM_BASE_URL: ${PERSONA_LLM_BASE_URL:-https://api.kie.ai/v1}
+      PERSONA_LLM_BASE_URL: ${PERSONA_LLM_BASE_URL:-https://omni.allikas.online/v1}
       KIE_MODEL: claude-sonnet-4-6
       KIE_OPUS_MODEL: ${KIE_OPUS_MODEL:-claude-opus-4-6}
+      # OmniRoute — primary LLM provider (https://omni.allikas.online)
+      # auto/* presets automatically pick best/free model for each task
+      OMNIROUTE_API_KEY: ${OMNIROUTE_API_KEY}
+      OMNIROUTE_BASE_URL: ${OMNIROUTE_BASE_URL:-https://omni.allikas.online/v1}
       # Safety: risk guard ENABLED by default. Only disable for explicit testing by setting DISABLE_RISK_GUARD=true in .env
       DISABLE_RISK_GUARD: ${DISABLE_RISK_GUARD:-false}
       # MiCA/EEA: trade USDC-margined perpetuals (USDT restricted for EU users).
