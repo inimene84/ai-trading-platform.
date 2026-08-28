@@ -1038,7 +1038,7 @@ class TradingLoopService:
                             f"({len(_same_dir_syms)}/{_dir_cap} {decision.action})"
                         )
                         decision = None
-                    elif decision.action == "BUY" and (_long_notional + _new_notional > self.risk_config.max_directional_exposure_usdt):
+                    elif not getattr(self.risk_config, "equity_sizing_enabled", False) and decision.action == "BUY" and (_long_notional + _new_notional > self.risk_config.max_directional_exposure_usdt):
                         logger.warning(f"  [ {symbol} ] BUY blocked: LONG exposure cap reached")
                         signal_status = "rejected"
                         signal_reason = f"{signal_reason} | LONG exposure cap reached"
@@ -1056,7 +1056,7 @@ class TradingLoopService:
                         signal_status = "rejected"
                         signal_reason = f"{signal_reason} | LONG direction notional cap ({_mult}x equity)"
                         decision = None
-                    elif decision.action == "SELL" and (_short_notional + _new_notional > self.risk_config.max_directional_exposure_usdt):
+                    elif not getattr(self.risk_config, "equity_sizing_enabled", False) and decision.action == "SELL" and (_short_notional + _new_notional > self.risk_config.max_directional_exposure_usdt):
                         logger.warning(f"  [ {symbol} ] SELL blocked: SHORT exposure cap reached")
                         signal_status = "rejected"
                         signal_reason = f"{signal_reason} | SHORT exposure cap reached"
