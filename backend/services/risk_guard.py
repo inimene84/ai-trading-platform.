@@ -98,15 +98,26 @@ def enforce_risk_limits(
             f"(symbols: {sorted(open_symbols)})"
         )
 
-    # 2. Max directional exposure (notional). Previously defined in config but
-    #    never enforced — an unbounded number of small entries could still pile
-    #    into a large aggregate notional.
-    if cfg.max_directional_exposure_usdt > 0:
+    # 2. Max directional exposure (notional).
+    # When equity_sizing_enabled is True, calculate dynamic cap based on equity * max_direction_notional_equity_mult.
+    effective_exposure_cap = cfg.max_directional_exposure_usdt
+    if getattr(cfg, "equity_sizing_enabled", False):
+        equity = 0.0
+        if latest_snapshot and latest_snapshot.total_value > 0:
+            equity = float(latest_snapshot.total_value)
+        else:
+            if get_trading_mode() == TradingMode.PAPER:
+                equity = 100000.0
+        if equity > 0:
+            mult = getattr(cfg, "max_direction_notional_equity_mult", 4.0)
+            effective_exposure_cap = max(cfg.max_directional_exposure_usdt, equity * mult)
+
+    if effective_exposure_cap > 0:
         exposure = _directional_exposure_usdt(open_trades)
-        if exposure > cfg.max_directional_exposure_usdt:
+        if exposure > effective_exposure_cap:
             raise RiskBreach(
                 f"Max directional exposure exceeded: ${exposure:.2f} > "
-                f"${cfg.max_directional_exposure_usdt:.2f}"
+                f"${effective_exposure_cap:.2f}"
             )
 
     if latest_snapshot:
