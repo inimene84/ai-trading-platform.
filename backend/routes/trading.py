@@ -1337,18 +1337,54 @@ async def session_status():
 
 @router.post("/paper/order")
 async def paper_place_order(request: dict):
-    """Place a paper/simulated order."""
+    """Place a paper/simulated order and persist to Trade table."""
     ut = UnifiedTrading()
+    sym = request.get("symbol", "").upper()
+    side_str = request.get("side", "buy").lower()
+    px = float(request.get("price", 0) or 0)
+    if px <= 0:
+        # If no explicit price provided for market order, fetch current price
+        try:
+            from backend.services.binance_futures_service import BinanceFuturesService
+            bfs = BinanceFuturesService()
+            ticker = await asyncio.to_thread(bfs._get_client().futures_symbol_ticker, symbol=sym)
+            px = float(ticker.get("price", 0) or 0)
+        except Exception:
+            pass
+
     order = UnifiedOrder(
-        symbol=request.get("symbol", "").upper(),
-        side=OrderSide(request.get("side", "buy").lower()),
+        symbol=sym,
+        side=OrderSide(side_str),
         order_type=OrderType(request.get("order_type", "market").lower()),
         quantity=float(request.get("quantity", 0)),
-        price=float(request.get("price", 0) or 0),
+        price=px,
         stop_loss=float(request.get("stop_loss", 0) or 0),
         take_profit=float(request.get("take_profit", 0) or 0),
     )
     resp = ut.place_order(order)
+    if resp.success:
+        db = SessionLocal()
+        try:
+            direction = "BUY" if side_str == "buy" else "SELL"
+            trade = Trade(
+                symbol=sym,
+                direction=direction,
+                quantity=float(resp.filled_qty or order.quantity),
+                entry_price=float(resp.filled_price or px),
+                status="open",
+                strategy="paper_manual",
+                binance_order_id=resp.order_id,
+                stop_loss=order.stop_loss or None,
+                take_profit=order.take_profit or None,
+                notes="Paper order placed via UI/API",
+            )
+            db.add(trade)
+            db.commit()
+        except Exception as e:
+            logger.warning(f"Could not persist paper trade to DB: {e}")
+        finally:
+            db.close()
+
     return {
         "success": resp.success,
         "order_id": resp.order_id,
