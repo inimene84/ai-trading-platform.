@@ -11,8 +11,6 @@ import os
 import time
 from typing import Optional
 
-import atexit
-
 import httpx
 from dotenv import load_dotenv
 from pathlib import Path

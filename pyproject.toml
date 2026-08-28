@@ -1,61 +1,98 @@
 [tool.poetry]
-name = "ai-hedge-fund"
-version = "1.0.0"
-description = "An AI-powered hedge fund that uses multiple agents to make trading decisions"
-authors = ["Your Name <your.email@example.com>"]
+name = "quantumtrade-pro"
+version = "1.1.0"
+description = "QuantumTrade Pro — AI-powered multi-agent hedge fund / crypto-futures trading platform"
+authors = ["Toomas Valk <valgutom@gmail.com>"]
 readme = "README.md"
 packages = [
     { include = "backend" }
 ]
 
+# NOTE: This file is kept in sync with backend/requirements.txt, which is the
+# single source of truth for production (see Dockerfile.backend). CI also
+# installs from backend/requirements.txt so that "CI green" == "production
+# behavior". When bumping a dependency, update BOTH this file and
+# backend/requirements.txt and re-run `pytest backend/tests`.
 [tool.poetry.dependencies]
-influxdb-client = "^1.50.0"
 python = "^3.11"
-langchain = "^0.3.7"
-langchain-anthropic = "0.3.5"
-langchain-groq = "0.2.3"
-langchain-openai = "^0.3.5"
-langchain-deepseek = "^0.1.2"
-langchain-ollama = "0.3.6"
-langgraph = "0.2.56"
-pandas = "^2.1.0"
-numpy = "^1.24.0"
-python-dotenv = "1.2.2"
-matplotlib = "^3.9.2"
-tabulate = "^0.9.0"
-colorama = "^0.4.6"
-questionary = "^2.1.0"
-rich = "^13.9.4"
-langchain-google-genai = "^2.0.11"
-# Backend dependencies
+# --- Web framework ---
 fastapi = {extras = ["standard"], version = ">=0.104.0"}
 fastapi-cli = ">=0.0.8"
-pydantic = "^2.4.2"
-httpx = "^0.27.0"
-sqlalchemy = "^2.0.22"
-alembic = "^1.12.0"
-langchain-gigachat = "^0.3.12"
-langchain-xai = "^0.2.5"
-yfinance = "^1.3.0"
-pydantic-settings = "^2.14.1"
-# Security patches (Dependabot): force patched versions of transitive deps
-langsmith = ">=0.8.0"
+uvicorn = {extras = ["standard"], version = ">=0.24.0"}
+pydantic = ">=2.7.4,<3.0.0"
+pydantic-settings = ">=2.14.1"
 starlette = ">=1.3.1"
+python-multipart = ">=0.0.6"
+jinja2 = ">=3.1.0"
+# --- Data layer ---
+sqlalchemy = ">=2.0.22"
+alembic = ">=1.12.0"
+psycopg2-binary = ">=2.9.9"
+asyncpg = ">=0.29.0"
+aiosqlite = ">=0.19.0"
+influxdb-client = ">=1.50.0"
+qdrant-client = ">=1.9.0"
+# --- HTTP / networking ---
+httpx = ">=0.27.0"
+requests = ">=2.31.0"
 aiohttp = ">=3.14.0"
-structlog = "^26.1.0"
-python-binance = "^1.0.37"
+websockets = ">=12.0"
+urllib3 = ">=2.7.0"
+idna = ">=3.15"
+# --- Brokers / market data ---
+python-binance = ">=1.0.19"
+ccxt = ">=4.2.0"
+yfinance = ">=0.2.25"
+feedparser = ">=6.0.0"
+# --- LLM / agents ---
+langchain = ">=0.3.30"
+langchain-core = ">=1.2.22"
+langchain-text-splitters = ">=1.1.2"
+langchain-anthropic = ">=0.3.5"
+langchain-openai = ">=1.1.14"
+langchain-groq = ">=0.2.3"
+langchain-deepseek = ">=0.1.2"
+langchain-ollama = ">=0.3.6"
+langchain-google-genai = ">=2.0.11"
+langchain-xai = ">=0.2.5"
+langchain-gigachat = ">=0.3.12"
+langgraph = ">=1.0.10"
+langgraph-checkpoint = ">=4.0.0"
+langsmith = ">=0.8.0"
+# --- Science / reporting ---
+pandas = ">=2.1.0"
+numpy = ">=1.24.0"
+matplotlib = ">=3.9.0"
+tabulate = ">=0.9.0"
+# --- CLI / UX / ops ---
+python-dotenv = ">=1.2.2"
+colorama = ">=0.4.6"
+questionary = ">=2.1.0"
+rich = ">=13.9.0"
+structlog = ">=24.1.0"
+# --- Auth / security ---
+pyjwt = ">=2.12.1"
+passlib = ">=1.7.4"
+bcrypt = ">=4.1.0"
+# --- Observability ---
+sentry-sdk = {extras = ["fastapi"], version = ">=2.0.0"}
+# --- Templating / misc (transitive pin) ---
+Mako = ">=1.3.12"
 
 [tool.poetry.group.dev.dependencies]
-pytest = "^7.4.0"
-black = "^23.7.0"
-isort = "^5.12.0"
-flake8 = "^6.1.0"
-pytest-asyncio = "^0.21.0"
-ruff = "^0.15.18"
+pytest = ">=9.0.3"
+pytest-asyncio = ">=0.23.5"
+black = ">=26.3.1"
+ruff = ">=0.6.0"
+isort = ">=5.12.0"
+flake8 = ">=6.1.0"
 
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
+
+[tool.poetry.scripts]
+backtester = "backend.backtesting.cli:main"
 
 [tool.black]
 line-length = 420
@@ -66,5 +103,29 @@ include = '\.pyi?$'
 profile = "black"
 force_alphabetical_sort_within_sections = true
 
-[tool.poetry.scripts]
-backtester = "backend.backtesting.cli:main"
+[tool.ruff]
+line-length = 420
+target-version = "py311"
+extend-exclude = [
+    "backend/alembic/versions",
+    "scripts",
+    "scratch",
+]
+src = ["backend"]
+
+[tool.ruff.lint]
+# Start permissive: surface only high-confidence issues. Tighten over time.
+select = [
+    "E9",   # syntax errors / runtime-undefined names (hard errors)
+    "F401", # unused imports
+    "F811", # redefined name
+    "F821", # undefined name
+    "F841", # unused variable
+    "W6",   # deprecated
+]
+ignore = [
+    "E501",  # line too long (black handles formatting; repo uses long lines)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"backend/tests/*" = ["F401", "F841"]

@@ -5,8 +5,6 @@ import os
 from datetime import datetime, timezone
 from typing import Any, List, Tuple
 
-import httpx
-
 from backend.services.crypto_news_service import crypto_news_service
 from backend.llm.router import call_llm_resilient
 from backend.services.influxdb_writer import influx

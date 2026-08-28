@@ -21,15 +21,23 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: backend/requirements.txt
 
-      - name: Install Poetry
+      - name: Install dependencies (mirror production)
+        # Production builds from backend/requirements.txt (see Dockerfile.backend).
+        # CI uses the SAME file so a green run reflects production behavior.
         run: |
-          pip install poetry
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt
+          pip install ruff
 
-      - name: Install dependencies
+      - name: Lint (ruff)
         run: |
-          poetry install
+          ruff check backend
 
       - name: Run tests
+        env:
+          PYTHONPATH: ${{ github.workspace }}
         run: |
-          poetry run pytest backend/tests
+          pytest backend/tests

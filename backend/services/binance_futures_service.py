@@ -1487,14 +1487,7 @@ class BinanceFuturesService:
                         f"  [TRAIL-SL] {futures_sym} STOP REPLACEMENT AND RESTORE FAILED: "
                         f"new={new_error}; restore={restore_error} — emergency closing position"
                     )
-                    emergency = {
-                        "symbol": futures_sym,
-                        "side": sl_side,
-                        "type": "MARKET",
-                        "quantity": qty,
-                        "positionSide": position_side,
-                    }
-                    # Instead of an dangerous, standalone market order, trigger the global emergency_halt
+                    # Instead of a dangerous, standalone market order, trigger the global emergency_halt
                     logger.critical(
                         f"  [TRAIL-SL] {futures_sym} STOP REPLACEMENT AND RESTORE FAILED. "
                         "Triggering Sentry Emergency Halt to protect the account."
