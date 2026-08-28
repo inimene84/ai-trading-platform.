@@ -88,7 +88,7 @@ import { workflowEngine } from './services/workflowEngine';
 import { FilterNode, PositionSizerNode, RiskManagementNode, KillswitchNode } from './components/WorkflowNodes';
 
 // --- Types ---
-type AppMode = 'manual' | 'ai' | 'backtest' | 'settings' | 'markets' | 'portfolio' | 'wallet' | 'signals' | 'status' | 'opinion' | 'operations';
+type AppMode = 'manual' | 'ai' | 'backtest' | 'settings' | 'markets' | 'portfolio' | 'wallet' | 'signals' | 'status' | 'opinion' | 'operations' | 'paper';
 
 interface WorkflowNodeData {
   label: string;
@@ -223,7 +223,7 @@ const NodeProperties = ({ node, onUpdate }: { node: FlowNode, onUpdate: (id: str
   const nodeData = node.data as unknown as WorkflowNodeData;
   const label = nodeData.label.toLowerCase();
 
-  const [config, setConfig] = useState(nodeData.config || {});
+  const [config, setConfig] = useState<any>(nodeData.config || {});
 
   useEffect(() => {
     setConfig(nodeData.config || {});
@@ -397,11 +397,11 @@ const NodeProperties = ({ node, onUpdate }: { node: FlowNode, onUpdate: (id: str
   return (
     <div className="bg-[#141416] border border-zinc-800 rounded-xl p-4 shadow-2xl min-w-[280px] space-y-4">
       <div className="flex items-center gap-2 border-b border-zinc-800 pb-3">
-        <div className={cn("p-1.5 rounded-lg", node.data.color)}>
-          {React.createElement(node.data.icon as any, { size: 14, className: "text-white" })}
+        <div className={cn("p-1.5 rounded-lg", nodeData.color)}>
+          {React.createElement(nodeData.icon as any, { size: 14, className: "text-white" })}
         </div>
         <div>
-          <h3 className="text-xs font-bold text-white">{node.data.label}</h3>
+          <h3 className="text-xs font-bold text-white">{nodeData.label}</h3>
           <p className="text-[9px] text-zinc-500 uppercase font-bold tracking-widest">{nodeData.type} Configuration</p>
         </div>
       </div>
@@ -1195,7 +1195,7 @@ export default function App() {
     setIsNodeSelectorOpen(true);
   }, []);
 
-  const createNode = useCallback((type: string, label: string, icon: React.ReactNode) => {
+  const createNode = useCallback((type: string, label: string, icon: React.ComponentType<any> | React.ReactNode) => {
     const id = `${type.toLowerCase()}-${Date.now()}`;
     const newNode: FlowNode = {
       id,
@@ -1395,7 +1395,7 @@ export default function App() {
           <NavItem icon={<History size={20} />} label="Backtesting" active={mode === 'backtest'} onClick={() => setMode('backtest')} />
           <NavItem icon={<Activity size={20} />} label="Markets" active={mode === 'markets'} onClick={() => setMode('markets')} />
           <NavItem icon={<PieChart size={20} />} label="Portfolio" active={mode === 'portfolio'} onClick={() => setMode('portfolio')} />
-//           <NavItem icon={<FlaskConical size={20} />} label="Paper Trading" active={mode === 'paper'} onClick={() => setMode('paper')} />
+          {/* <NavItem icon={<FlaskConical size={20} />} label="Paper Trading" active={mode === 'paper'} onClick={() => setMode('paper')} /> */}
           <NavItem icon={<Wallet size={20} />} label="Wallet" active={mode === 'wallet'} onClick={() => setMode('wallet')} />
           <div className="pt-2 mt-2 border-t border-zinc-800/50" />
           <NavItem icon={<Shield size={20} />} label="Trading Control" active={mode === 'operations'} onClick={() => setMode('operations')} />

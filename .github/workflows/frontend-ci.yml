@@ -30,10 +30,6 @@ jobs:
         working-directory: frontend
         run: npm run build
 
-      - name: Type-check (advisory — known pre-existing errors)
-        # `tsc --noEmit` currently surfaces ~50 pre-existing type errors that
-        # esbuild skips during `vite build`. This step is non-blocking until the
-        # frontend modernization pass resolves them, then flip to blocking.
+      - name: Type-check
         working-directory: frontend
         run: npm run lint
-        continue-on-error: true

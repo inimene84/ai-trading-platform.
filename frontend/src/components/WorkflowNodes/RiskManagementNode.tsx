@@ -1,11 +1,12 @@
 import React from 'react';
-import { Handle, Position, NodeProps } from '@xyflow/react';
+import { Handle, Position, NodeProps, Node } from '@xyflow/react';
 import { Shield, TrendingDown, TrendingUp, Move } from 'lucide-react';
 import { motion } from 'motion/react';
 import { cn } from '../../lib/utils';
 import { RiskManagementConfig } from '../../services/workflowEngine';
 
 interface RiskManagementNodeData {
+  [key: string]: unknown;
   label: string;
   type: string;
   icon?: any;
@@ -20,7 +21,7 @@ interface RiskManagementNodeData {
   entryPrice?: number;
 }
 
-export const RiskManagementNode: React.FC<NodeProps<RiskManagementNodeData>> = ({ data, selected }) => {
+export const RiskManagementNode: React.FC<NodeProps<Node<RiskManagementNodeData>>> = ({ data, selected }) => {
   const config = data.config;
   const isExecuting = data.executing;
   const levels = data.levels;

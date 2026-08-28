@@ -1,11 +1,12 @@
 import React from 'react';
-import { Handle, Position, NodeProps } from '@xyflow/react';
+import { Handle, Position, NodeProps, Node } from '@xyflow/react';
 import { Power, AlertTriangle, Lock, Unlock } from 'lucide-react';
 import { motion } from 'motion/react';
 import { cn } from '../../lib/utils';
 import { KillswitchConfig } from '../../services/workflowEngine';
 
 interface KillswitchNodeData {
+  [key: string]: unknown;
   label: string;
   type: string;
   icon?: any;
@@ -22,7 +23,7 @@ interface KillswitchNodeData {
   };
 }
 
-export const KillswitchNode: React.FC<NodeProps<KillswitchNodeData>> = ({ data, selected }) => {
+export const KillswitchNode: React.FC<NodeProps<Node<KillswitchNodeData>>> = ({ data, selected }) => {
   const config = data.config;
   const isExecuting = data.executing;
   const isActive = config?.enabled !== false;

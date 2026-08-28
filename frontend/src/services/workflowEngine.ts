@@ -249,7 +249,7 @@ class WorkflowEngine {
           break;
         default:
           // Try to match by label
-          const label = (node.data?.label || '').toLowerCase();
+          const label = ((node.data as { label?: string })?.label || '').toLowerCase();
           if (label.includes('rsi') || label.includes('ema') || label.includes('filter')) {
             result = await this.executeFilterNode(node);
           } else if (label.includes('buy') || label.includes('sell') || label.includes('execute')) {
@@ -267,7 +267,7 @@ class WorkflowEngine {
         if (!targetNode) continue;
 
         // Check edge condition if present
-        const edgeLabel = edge.label || '';
+        const edgeLabel = String(edge.label || '');
         const shouldContinue = this.evaluateEdgeCondition(edgeLabel, result, nodeType);
         
         if (shouldContinue) {
@@ -282,8 +282,9 @@ class WorkflowEngine {
   }
 
   private getNodeType(node: Node): string {
-    const type = (node.data?.type || '').toLowerCase();
-    const label = (node.data?.label || '').toLowerCase();
+    const data = (node.data || {}) as { label?: string; type?: string };
+    const type = (data.type || '').toLowerCase();
+    const label = (data.label || '').toLowerCase();
     
     if (type === 'trigger' || label.includes('trigger') || label.includes('volume') || label.includes('alert')) {
       return 'trigger';

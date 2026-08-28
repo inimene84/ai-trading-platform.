@@ -1,11 +1,12 @@
 import React from 'react';
-import { Handle, Position, NodeProps } from '@xyflow/react';
+import { Handle, Position, NodeProps, Node } from '@xyflow/react';
 import { Scale, DollarSign, Percent } from 'lucide-react';
 import { motion } from 'motion/react';
 import { cn } from '../../lib/utils';
 import { PositionSizerConfig } from '../../services/workflowEngine';
 
 interface PositionSizerNodeData {
+  [key: string]: unknown;
   label: string;
   type: string;
   icon?: any;
@@ -16,7 +17,7 @@ interface PositionSizerNodeData {
   equity?: number;
 }
 
-export const PositionSizerNode: React.FC<NodeProps<PositionSizerNodeData>> = ({ data, selected }) => {
+export const PositionSizerNode: React.FC<NodeProps<Node<PositionSizerNodeData>>> = ({ data, selected }) => {
   const config = data.config;
   const riskPct = config?.riskPerTradePct || 1;
   const useATR = config?.useATR !== false;

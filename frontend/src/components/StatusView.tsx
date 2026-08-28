@@ -59,7 +59,7 @@ const MarketDataStatus = () => {
   const [marketStatus, setMarketStatus] = useState(marketDataService.getStatus());
 
   useEffect(() => {
-    return marketDataService.onStatusChange(setMarketStatus);
+    return marketDataService.onStatusChange((status) => setMarketStatus(status as 'connected' | 'disconnected' | 'connecting' | 'error'));
   }, []);
 
   const isConnected = marketStatus === 'connected';
