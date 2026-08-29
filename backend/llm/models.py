@@ -30,6 +30,8 @@ class ModelProvider(str, Enum):
     GIGACHAT = "GigaChat"
     AZURE_OPENAI = "Azure OpenAI"
     XAI = "xAI"
+    KIE = "Kie.ai"
+    OMNIROUTE = "OmniRoute"
 
 
 class LLMModel(BaseModel):
@@ -74,14 +76,18 @@ class LLMModel(BaseModel):
 
 # Load models from JSON file
 def load_models_from_json(json_path: str) -> List[LLMModel]:
-    """Load models from a JSON file"""
+    """Load models from a JSON file, skipping unknown providers so startup cannot crash."""
     with open(json_path, 'r') as f:
         models_data = json.load(f)
-    
+
     models = []
     for model_data in models_data:
-        # Convert string provider to ModelProvider enum
-        provider_enum = ModelProvider(model_data["provider"])
+        provider_name = model_data.get("provider", "")
+        try:
+            provider_enum = ModelProvider(provider_name)
+        except ValueError:
+            print(f"Skipping model {model_data.get('model_name')}: unknown provider {provider_name!r}")
+            continue
         models.append(
             LLMModel(
                 display_name=model_data["display_name"],
@@ -235,6 +241,20 @@ def get_model(model_name: str, model_provider: ModelProvider, api_keys: dict = N
             print("Azure Deployment Name Error: Please make sure AZURE_OPENAI_DEPLOYMENT_NAME is set in your .env file.")
             raise ValueError("Azure OpenAI deployment name not found.  Please make sure AZURE_OPENAI_DEPLOYMENT_NAME is set in your .env file.")
         return AzureChatOpenAI(azure_endpoint=azure_endpoint, azure_deployment=azure_deployment_name, api_key=api_key, api_version="2024-10-21")
+    elif model_provider == ModelProvider.KIE:
+        api_key = (api_keys or {}).get("KIE_API_KEY") or os.getenv("KIE_API_KEY")
+        if not api_key:
+            print("API Key Error: Please make sure KIE_API_KEY is set in your .env file or provided via API keys.")
+            raise ValueError("Kie.ai API key not found. Please make sure KIE_API_KEY is set in your .env file or provided via API keys.")
+        base_url = os.getenv("KIE_BASE_URL", "https://api.kie.ai/v1")
+        return ChatOpenAI(model=model_name, api_key=api_key, base_url=base_url)
+    elif model_provider == ModelProvider.OMNIROUTE:
+        api_key = (api_keys or {}).get("OMNIROUTE_API_KEY") or os.getenv("OMNIROUTE_API_KEY")
+        if not api_key:
+            print("API Key Error: Please make sure OMNIROUTE_API_KEY is set in your .env file or provided via API keys.")
+            raise ValueError("OmniRoute API key not found. Please make sure OMNIROUTE_API_KEY is set in your .env file or provided via API keys.")
+        base_url = os.getenv("OMNIROUTE_BASE_URL", "https://omni.allikas.online/v1")
+        return ChatOpenAI(model=model_name, api_key=api_key, base_url=base_url)
     else:
         raise ValueError(
             f"Unsupported model provider: {model_provider}. "
