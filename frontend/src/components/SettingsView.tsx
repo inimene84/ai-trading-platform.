@@ -219,7 +219,7 @@ export const SettingsView = () => {
     const persistent: Record<string, string> = {};
     const secrets: Record<string, string> = {};
     Object.entries(settings).forEach(([key, value]) => {
-      (isSecret(key) ? secrets : persistent)[key] = value;
+      (isSecret(key) ? secrets : persistent)[key] = String(value ?? '');
     });
     localStorage.setItem('quantum_trade_settings', JSON.stringify(persistent));
     sessionStorage.setItem('quantum_trade_session_secrets', JSON.stringify(secrets));
