@@ -461,6 +461,57 @@ export const apiService = {
     });
   },
 
+  // ── Multi-Broker & Open API ────────────────────────────────────────────────
+  async getBrokers() {
+    return request('/trading/brokers');
+  },
+
+  async getMarkets() {
+    return request('/trading/markets');
+  },
+
+  async placeSmartOrder(order: {
+    symbol: string;
+    direction: 'BUY' | 'SELL';
+    quantity: number;
+    order_type?: 'MARKET' | 'LIMIT';
+    price?: number;
+    stop_loss?: number;
+    take_profit?: number;
+    broker_override?: 'binance_futures' | 'ctrader';
+  }) {
+    return request('/trading/order/smart', {
+      method: 'POST',
+      body: JSON.stringify(order),
+    });
+  },
+
+  async getCTraderTokens() {
+    return request('/trading/ctrader/tokens');
+  },
+
+  async saveCTraderTokens(tokens: {
+    account_id: number;
+    client_id: string;
+    client_secret?: string;
+    access_token: string;
+    refresh_token: string;
+    expires_in?: number;
+  }) {
+    return request('/trading/ctrader/tokens', {
+      method: 'POST',
+      body: JSON.stringify(tokens),
+    });
+  },
+
+  async enableCTraderLive() {
+    return request('/trading/ctrader/enable', { method: 'POST' });
+  },
+
+  async disableCTraderLive() {
+    return request('/trading/ctrader/disable', { method: 'POST' });
+  },
+
   // ── AI Agent ──────────────────────────────────────────────────────────────────────────────
   async aiAgentTrade(prompt: string, provider = 'xai', model = 'grok-beta') {
     return request('/trading/ai/agent-trade', {
