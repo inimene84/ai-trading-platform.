@@ -16,6 +16,8 @@ from backend.routes.telemetry import router as telemetry_router
 from backend.routes.backtest import router as backtest_router
 from backend.routes.sentry import router as sentry_router
 from backend.routes.signals import router as signals_router
+from backend.routes.assistant import router as assistant_router
+from backend.routes.agents import router as agents_router
 
 # Main API router
 api_router = APIRouter()
@@ -43,3 +45,9 @@ api_router.include_router(sentry_router, tags=["sentry"])
 api_router.include_router(sentry_router, prefix="/api", tags=["sentry-api"])
 api_router.include_router(signals_router, tags=["signals"])
 api_router.include_router(signals_router, prefix="/api", tags=["signals-api"])
+api_router.include_router(assistant_router, tags=["assistant"])
+api_router.include_router(assistant_router, prefix="/api", tags=["assistant-api"])
+api_router.include_router(assistant_router, prefix="/api/backend", tags=["assistant-backend"])
+api_router.include_router(agents_router, tags=["agents"])
+api_router.include_router(agents_router, prefix="/api", tags=["agents-api"])
+api_router.include_router(agents_router, prefix="/api/backend", tags=["agents-backend"])

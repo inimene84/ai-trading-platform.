@@ -1255,8 +1255,8 @@ class AIAgentTradeRequest(BaseModel):
     model: Optional[str] = "grok-beta"
 
 
-@router.post("/ai/agent-trade")
-async def ai_agent_trade(req: AIAgentTradeRequest):
+@router.post("/ai/parse-trade")
+async def ai_parse_trade(req: AIAgentTradeRequest):
     """
     Parses an AI trading instruction, extracts trading parameters,
     and executes via the multi-broker Smart Order router.
@@ -2188,6 +2188,7 @@ async def analyze_opinion(request: dict):
     include_kronos = request.get("include_kronos", True)
     include_social = request.get("include_social", True)
     include_alerts = request.get("include_alerts", True)
+    include_personas = request.get("include_personas", True)
 
     if not symbol or not bars:
         return {"error": "symbol and bars required"}
@@ -2198,9 +2199,13 @@ async def analyze_opinion(request: dict):
         include_kronos=include_kronos,
         include_social=include_social,
         include_alerts=include_alerts,
+        include_personas=include_personas,
     )
+    from backend.services.multi_asset_bars import classify_symbol
+    asset_class = classify_symbol(symbol)
     return {
         "symbol": opinion.symbol,
+        "asset_class": asset_class,
         "direction": opinion.direction,
         "confidence": opinion.confidence,
         "reasoning": opinion.reasoning,

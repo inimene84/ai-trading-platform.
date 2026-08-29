@@ -371,8 +371,10 @@ class CTraderService(BrokerService):
             return False
 
         # Host security gate: paper mode defaults to demo host
-        paper_mode = os.getenv("CTRADE_PAPER_MODE", "true").lower() == "true"
-        live_confirm = os.getenv("CTRADE_LIVE_CONFIRM", "").strip()
+        paper_mode = (
+            os.getenv("CTRADER_PAPER_MODE", os.getenv("CTRADE_PAPER_MODE", "true")).lower() == "true"
+        )
+        live_confirm = os.getenv("CTRADER_LIVE_CONFIRM", os.getenv("CTRADE_LIVE_CONFIRM", "")).strip()
         is_live = (not paper_mode) and (live_confirm == "I_UNDERSTAND")
         host = "live.ctraderapi.com" if is_live else "demo.ctraderapi.com"
         port = 5035

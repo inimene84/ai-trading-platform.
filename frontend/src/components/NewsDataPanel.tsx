@@ -420,9 +420,9 @@ export function NewsDataPanel({ isOpen, onClose }: NewsDataPanelProps) {
 
       {/* Panel */}
       <motion.div
-        className="fixed right-0 top-0 bottom-0 z-50 w-96 flex flex-col bg-gray-950 border-l border-gray-800 shadow-2xl"
-        initial={{ x: 384 }}
-        animate={{ x: isOpen ? 0 : 384 }}
+        className="fixed right-0 top-0 bottom-0 z-50 w-full max-w-full sm:max-w-md lg:w-96 flex flex-col bg-gray-950 border-l border-gray-800 shadow-2xl"
+        initial={{ x: '100%' }}
+        animate={{ x: isOpen ? 0 : '100%' }}
         transition={{ type: 'spring', damping: 30, stiffness: 300 }}
         aria-hidden={!isOpen}
       >

@@ -378,14 +378,15 @@ const GeminiChat = ({ isOpen, onClose, messages, onSendMessage, isLoading }: Gem
           initial={{ opacity: 0, y: 20, scale: 0.95 }}
           animate={{ opacity: 1, y: 0, scale: 1 }}
           exit={{ opacity: 0, y: 20, scale: 0.95 }}
-          className="fixed bottom-6 right-6 w-96 h-[500px] bg-[#141416] border border-zinc-800 rounded-2xl shadow-2xl flex flex-col z-50 overflow-hidden"
+          className="fixed inset-x-3 bottom-3 sm:inset-x-auto sm:right-6 sm:left-auto sm:bottom-6 w-auto sm:w-96 h-[min(500px,70vh)] bg-[#141416] border border-zinc-800 rounded-2xl shadow-2xl flex flex-col z-50 overflow-hidden"
         >
           <div className="p-4 border-b border-zinc-800 flex items-center justify-between bg-emerald-500/5">
             <div className="flex items-center gap-2">
               <div className="p-1.5 bg-emerald-500/20 rounded-lg">
                 <Sparkles size={16} className="text-emerald-400" />
               </div>
-              <span className="font-bold text-sm">Gemini Assistant</span>
+              <span className="font-bold text-sm">Trading Assistant</span>
+              <span className="text-[9px] text-emerald-500/80 font-mono uppercase tracking-wider hidden sm:inline">OmniRoute</span>
             </div>
             <button onClick={onClose} className="text-zinc-500 hover:text-white transition-colors">
               <X size={18} />
@@ -985,7 +986,7 @@ export default function App() {
   };
 
   return (
-    <div className="flex h-screen bg-[#0A0A0B] text-zinc-100 overflow-hidden font-sans">
+    <div className="flex h-screen bg-[#0A0A0B] text-zinc-100 overflow-hidden font-sans app-root">
       {/* Sidebar */}
       <aside className={cn(
         "border-r border-zinc-800 flex flex-col items-center lg:items-stretch bg-[#0D0D0E] transition-all duration-300 ease-in-out relative z-30",
@@ -1052,7 +1053,10 @@ export default function App() {
       </aside>
 
       {/* Main Content */}
-      <main className="flex-1 flex flex-col overflow-hidden relative" style={{ marginRight: newsPanel ? '384px' : '0', transition: 'margin-right 0.3s ease' }}>
+      <main className={cn(
+        "flex-1 flex flex-col overflow-hidden relative transition-[margin-right] duration-300",
+        newsPanel && "max-lg:mr-0 lg:mr-96"
+      )}>
         {/* Top Header */}
         <header className="h-16 border-b border-zinc-800 flex items-center justify-between px-6 bg-[#0D0D0E]/50 backdrop-blur-xl z-10">
           <div className="flex items-center gap-8">
@@ -1065,7 +1069,7 @@ export default function App() {
               <Layers size={20} className={cn(isSidebarHidden ? "text-emerald-400" : "")} />
             </button>
             <div className="flex items-center gap-3">
-              <h2 className="text-lg font-semibold">
+              <h2 className="text-base sm:text-lg font-semibold truncate max-w-[42vw] sm:max-w-none">
                 {mode === 'manual' ? 'Live Trading Desk' :
                   mode === 'timing-control' ? 'Strategy & Execution Timing Control' :
                     mode === 'charts' ? 'Spotware OpenAPI Pro Charts' :

@@ -3,7 +3,7 @@ import { motion } from 'motion/react';
 import {
   Cpu, Globe, Shield, Activity, Zap, Play, Pause, RefreshCw,
   CheckCircle2, XCircle, AlertCircle, Server, Wifi, WifiOff,
-  BarChart3, MessageSquare, Database, Cloud
+  BarChart3, MessageSquare, Database, Cloud, Bot, Link2
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { apiService, SystemStatus, LoopStatus } from '../services/apiService';
@@ -88,19 +88,25 @@ export const StatusView = () => {
   const [connected, setConnected] = useState<boolean | null>(null);
   const [loopAction, setLoopAction] = useState(false);
   const [brokerAction, setBrokerAction] = useState(false);
+  const [grokOverview, setGrokOverview] = useState<any>(null);
+  const [grokSummary, setGrokSummary] = useState<string | null>(null);
+  const [grokLoading, setGrokLoading] = useState(false);
+  const [agentManifest, setAgentManifest] = useState<any>(null);
 
   const fetchAll = useCallback(async () => {
     try {
-      const [st, ls, br, tk] = await Promise.all([
+      const [st, ls, br, tk, manifest] = await Promise.all([
         apiService.getStatus(),
         apiService.getLoopStatus(),
         apiService.getBrokers().catch(() => null),
         apiService.getCTraderTokens().catch(() => null),
+        apiService.getAgentConnectManifest().catch(() => null),
       ]);
       setStatus(st);
       setLoopStatus(ls);
       if (br) setBrokersData(br.brokers);
       if (tk) setCtraderTokens(tk);
+      if (manifest) setAgentManifest(manifest);
       setConnected(true);
     } catch (err) {
       console.warn('Backend unreachable:', err);
@@ -161,6 +167,33 @@ export const StatusView = () => {
       showToast('Failed to stop loop', 'error');
     } finally {
       setLoopAction(false);
+    }
+  };
+
+  const handleGrokOverview = async () => {
+    setGrokLoading(true);
+    try {
+      const overview = await apiService.getGrokOverseerOverview();
+      setGrokOverview(overview);
+      showToast('Grok overseer snapshot loaded', 'success');
+    } catch (err: any) {
+      showToast(`Grok overview failed: ${err.message}`, 'error');
+    } finally {
+      setGrokLoading(false);
+    }
+  };
+
+  const handleGrokAnalyze = async () => {
+    setGrokLoading(true);
+    try {
+      const res = await apiService.analyzeGrokOverseer('risk and operational health');
+      setGrokSummary(res.summary || null);
+      setGrokOverview(res.overview || grokOverview);
+      showToast('Grok overseer analysis complete', 'success');
+    } catch (err: any) {
+      showToast(`Grok analyze failed: ${err.message}`, 'error');
+    } finally {
+      setGrokLoading(false);
     }
   };
 
@@ -566,6 +599,70 @@ export const StatusView = () => {
               </div>
             ))}
           </div>
+        </div>
+      </div>
+
+      {/* GrokBOT Overseer & Agent API */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="bg-[#141416] border border-zinc-800 rounded-2xl p-6">
+          <h3 className="text-sm font-bold mb-4 flex items-center gap-2">
+            <Bot size={16} className="text-violet-400" /> GrokBOT Overseer
+          </h3>
+          <p className="text-xs text-zinc-500 mb-4">
+            Supervisor snapshot for overseer jobs. Endpoints: <code className="text-zinc-400">GET /api/agents/grok-overseer/overview</code>
+          </p>
+          <div className="flex flex-wrap gap-2 mb-4">
+            <button
+              onClick={handleGrokOverview}
+              disabled={grokLoading}
+              className="px-3 py-1.5 bg-violet-500/20 hover:bg-violet-500/30 text-violet-300 rounded-lg text-xs font-bold border border-violet-500/30 disabled:opacity-50"
+            >
+              {grokLoading ? 'Loading…' : 'Load Snapshot'}
+            </button>
+            <button
+              onClick={handleGrokAnalyze}
+              disabled={grokLoading}
+              className="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded-lg text-xs font-bold border border-zinc-700 disabled:opacity-50"
+            >
+              Run Grok Analysis
+            </button>
+          </div>
+          {grokSummary && (
+            <pre className="text-[10px] text-zinc-300 bg-zinc-900/60 p-3 rounded-lg border border-zinc-800 whitespace-pre-wrap max-h-48 overflow-y-auto">
+              {grokSummary}
+            </pre>
+          )}
+          {grokOverview?.sections && (
+            <div className="mt-3 grid grid-cols-2 gap-2 text-[10px]">
+              {Object.keys(grokOverview.sections).slice(0, 6).map((k) => (
+                <div key={k} className="px-2 py-1 bg-zinc-900/50 rounded border border-zinc-800 text-zinc-400 capitalize">
+                  {k.replace(/_/g, ' ')}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="bg-[#141416] border border-zinc-800 rounded-2xl p-6">
+          <h3 className="text-sm font-bold mb-4 flex items-center gap-2">
+            <Link2 size={16} className="text-sky-400" /> Agent Connect API
+          </h3>
+          {agentManifest ? (
+            <div className="space-y-2 text-xs">
+              <p className="text-zinc-400 font-mono truncate">{agentManifest.name} v{agentManifest.version}</p>
+              <p className="text-zinc-500">OAuth: <span className="text-zinc-300 font-mono">{agentManifest.auth_methods?.[2]?.token_url || '/api/agents/oauth/token'}</span></p>
+              <div className="flex flex-wrap gap-1 mt-2">
+                {(agentManifest.scopes || []).map((s: string) => (
+                  <span key={s} className="px-2 py-0.5 bg-sky-500/10 border border-sky-500/20 text-sky-300 rounded text-[9px] font-bold uppercase">
+                    {s}
+                  </span>
+                ))}
+              </div>
+              <p className="text-[10px] text-zinc-600 mt-3">Manifest: GET /api/agents/connect</p>
+            </div>
+          ) : (
+            <p className="text-xs text-zinc-500">Agent manifest unavailable — check backend /api/agents/connect</p>
+          )}
         </div>
       </div>
     </motion.div>

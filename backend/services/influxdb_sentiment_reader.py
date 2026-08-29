@@ -144,10 +144,24 @@ class SentimentReader:
             return None
 
         try:
-            base = symbol.replace("USDT", "").replace("PERP", "").upper()
+            base = symbol.replace("USDT", "").replace("USDC", "").replace("PERP", "").upper()
+            from backend.services.multi_asset_bars import classify_symbol
+            asset_class = classify_symbol(symbol)
 
-            # Try exact symbol first, then fallback chain
-            for tag in [base, symbol, "BTC", "CRYPTO"]:
+            # Try exact symbol first, then asset-class proxies
+            proxy_chain = [base, symbol]
+            if asset_class == "forex":
+                proxy_chain += ["EUR", "USD", "FOREX"]
+            elif asset_class == "metal":
+                proxy_chain += ["XAU", "GOLD", "METAL"]
+            elif asset_class == "oil":
+                proxy_chain += ["OIL", "WTI", "ENERGY"]
+            elif asset_class == "stock":
+                proxy_chain += ["SPY", "EQUITY", "STOCK"]
+            else:
+                proxy_chain += ["BTC", "CRYPTO"]
+
+            for tag in proxy_chain:
                 result = self._query_symbol_sentiment(client, tag, lookback_minutes)
                 if result is not None:
                     if tag not in (base, symbol):
@@ -179,13 +193,28 @@ class SentimentReader:
 
         try:
             query_api = client.query_api()
-            base = symbol.replace("USDT", "").replace("PERP", "").upper()
+            base = symbol.replace("USDT", "").replace("USDC", "").replace("PERP", "").upper()
+            from backend.services.multi_asset_bars import classify_symbol
+            asset_class = classify_symbol(symbol)
+            proxy_symbols = [base, symbol]
+            if asset_class == "forex":
+                proxy_symbols.append("FOREX")
+            elif asset_class == "metal":
+                proxy_symbols.append("METAL")
+            elif asset_class == "oil":
+                proxy_symbols.append("ENERGY")
+            elif asset_class == "stock":
+                proxy_symbols.append("EQUITY")
+            else:
+                proxy_symbols.append("CRYPTO")
+
+            sym_filter = " or ".join([f'r.symbol == "{s}"' for s in proxy_symbols])
 
             flux = f'''
             from(bucket: "{_INFLUXDB_BUCKET}")
                 |> range(start: -{lookback_minutes}m)
                 |> filter(fn: (r) => r._measurement == "market_alert")
-                |> filter(fn: (r) => r.symbol == "{base}" or r.symbol == "{symbol}" or r.symbol == "CRYPTO")
+                |> filter(fn: (r) => {sym_filter})
                 |> filter(fn: (r) => r._field == "score" or r._field == "impact_score")
                 |> last()
             '''

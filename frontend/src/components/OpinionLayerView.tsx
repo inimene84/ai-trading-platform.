@@ -349,8 +349,18 @@ const AlertsCard: React.FC<{ alerts: OpinionResult['alerts'] }> = ({ alerts }) =
   );
 };
 
+const ASSET_PRESETS: Record<string, string[]> = {
+  Crypto: ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT'],
+  Forex: ['EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD'],
+  Metals: ['XAUUSD', 'XAGUSD'],
+  Oil: ['USOIL', 'UKOIL'],
+  Stocks: ['AAPL', 'MSFT', 'NVDA', 'TSLA', 'SPY'],
+  Indices: ['SPX', 'QQQ', 'NDX'],
+};
+
 export const OpinionLayerView: React.FC = () => {
   const [symbol, setSymbol] = useState('BTCUSDT');
+  const [assetClass, setAssetClass] = useState<string>('crypto');
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<OpinionResult | null>(null);
   const [error, setError] = useState('');
@@ -359,12 +369,8 @@ export const OpinionLayerView: React.FC = () => {
     setLoading(true);
     setError('');
     try {
-      // Fetch bars directly through frontend proxy (not via apiService which prepends /api/backend)
-      const barsRes = await fetch(`/api/market-data/bars?symbol=${symbol}&timeframe=1h&limit=100`);
-      if (!barsRes.ok) {
-        throw new Error(`Market data error: ${barsRes.status}`);
-      }
-      const barsData = await barsRes.json();
+      const barsData = await apiService.getMultiAssetBars(symbol, '1h', 100);
+      setAssetClass(barsData.asset_class || 'crypto');
       const bars = barsData.data || barsData;
 
       const res = await apiService.analyzeOpinion(
@@ -407,10 +413,33 @@ export const OpinionLayerView: React.FC = () => {
             Opinion Layer
           </h1>
           <p className="text-xs text-zinc-500 mt-1">
-            Multi-agent consensus engine — Technical + Kronos + Social + Personas
+            Multi-agent consensus — forex, crypto, metals, oil, equities & indices
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+          <div className="flex flex-wrap gap-1 max-w-md">
+            {Object.entries(ASSET_PRESETS).map(([label, symbols]) => (
+              <div key={label} className="flex items-center gap-1">
+                <span className="text-[9px] text-zinc-600 uppercase font-bold px-1">{label}</span>
+                {symbols.slice(0, 2).map((s) => (
+                  <button
+                    key={s}
+                    type="button"
+                    onClick={() => setSymbol(s)}
+                    className={cn(
+                      "px-2 py-0.5 rounded text-[10px] font-mono border transition-colors",
+                      symbol === s
+                        ? "bg-violet-500/20 border-violet-500/40 text-violet-300"
+                        : "bg-zinc-900 border-zinc-800 text-zinc-500 hover:text-zinc-300"
+                    )}
+                  >
+                    {s}
+                  </button>
+                ))}
+              </div>
+            ))}
+          </div>
+          <div className="flex items-center gap-2">
           <input
             type="text"
             value={symbol}
@@ -418,6 +447,11 @@ export const OpinionLayerView: React.FC = () => {
             className="bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-xs font-mono text-white focus:outline-none focus:border-violet-500/50 w-28"
             placeholder="SYMBOL"
           />
+          {assetClass && (
+            <span className="text-[9px] uppercase font-bold text-zinc-500 px-2 py-1 bg-zinc-900 rounded border border-zinc-800">
+              {assetClass}
+            </span>
+          )}
           <button
             onClick={runAnalysis}
             disabled={loading}
@@ -431,6 +465,7 @@ export const OpinionLayerView: React.FC = () => {
             {loading ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />}
             {loading ? 'Analyzing...' : 'Run Analysis'}
           </button>
+          </div>
         </div>
       </div>
 

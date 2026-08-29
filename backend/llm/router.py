@@ -106,6 +106,28 @@ _DEFAULT_REGISTRY: dict[str, ModelConfig] = {
         api_key_env="OMNIROUTE_API_KEY",
     ),
 
+    # Dashboard assistant (Gemini UI → OmniRoute)
+    "assistant_chat": ModelConfig(
+        name=os.getenv("ASSISTANT_LLM_MODEL", "auto/smart"),
+        provider="omniroute",
+        tier="balanced",
+        base_url=_OMNIROUTE_BASE_URL,
+        max_tokens=1200,
+        temperature=0.35,
+        api_key_env="OMNIROUTE_API_KEY",
+    ),
+
+    # GrokBOT overseer summaries (prefers xAI when configured; chain falls back)
+    "grok_overseer": ModelConfig(
+        name=os.getenv("XAI_MODEL", "grok-beta"),
+        provider="xai",
+        tier="balanced",
+        base_url=os.getenv("XAI_BASE_URL", "https://api.x.ai/v1"),
+        max_tokens=900,
+        temperature=0.2,
+        api_key_env="XAI_API_KEY",
+    ),
+
     # ── Fallback chain entries (used if OmniRoute unavailable) ────────────────
     # KieAI fallback (direct Kie.ai GPT-5.6 Terra / Luna)
     "fallback_kie": ModelConfig(

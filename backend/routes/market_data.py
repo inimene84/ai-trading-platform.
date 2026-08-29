@@ -87,15 +87,18 @@ async def get_fear_greed():
 
 @router.get("/bars")
 async def get_bars(symbol: str, timeframe: str = "1h", limit: int = 100):
-    """Fetch OHLCV klines for a symbol from Binance Futures."""
+    """Fetch OHLCV bars — crypto (Binance), forex/metals (cTrader), stocks/oil (yfinance)."""
     try:
-        from backend.services.binance_market_data import binance_market_data
-        bars = await binance_market_data.get_klines(
-            symbol=symbol.upper(),
-            interval=timeframe,
-            limit=limit,
-        )
-        return JSONResponse(content={"status": "ok", "symbol": symbol.upper(), "data": bars, "count": len(bars)})
+        from backend.services.multi_asset_bars import fetch_bars
+        payload = await fetch_bars(symbol=symbol, timeframe=timeframe, limit=limit)
+        return JSONResponse(content={
+            "status": "ok",
+            "symbol": payload["symbol"],
+            "asset_class": payload["asset_class"],
+            "source": payload["source"],
+            "data": payload["data"],
+            "count": len(payload["data"]),
+        })
     except Exception as e:
         logger.error(f"Bars error for {symbol}: {e}")
         return JSONResponse(status_code=500, content={"error": str(e)})

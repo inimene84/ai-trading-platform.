@@ -593,6 +593,40 @@ export const apiService = {
       body: JSON.stringify({ prompt, provider, model }),
     });
   },
+
+  // ── Assistant (OmniRoute) ───────────────────────────────────────────────────────────────
+  async assistantChat(message: string, history: { role: string; text: string }[] = []) {
+    return request('/assistant/chat', {
+      method: 'POST',
+      body: JSON.stringify({ message, history }),
+    });
+  },
+
+  // ── External agents / Grok overseer ───────────────────────────────────────────────────────
+  async getAgentConnectManifest() {
+    return request('/agents/connect');
+  },
+
+  async getGrokOverseerOverview() {
+    return request('/agents/grok-overseer/overview');
+  },
+
+  async analyzeGrokOverseer(focus = 'risk and operational health', include_positions = true) {
+    return request('/agents/grok-overseer/analyze', {
+      method: 'POST',
+      body: JSON.stringify({ focus, include_positions }),
+    });
+  },
+
+  async getMultiAssetBars(symbol: string, timeframe = '1h', limit = 100) {
+    const params = new URLSearchParams({ symbol, timeframe, limit: String(limit) });
+    const res = await fetch(`/api/market-data/bars?${params.toString()}`);
+    if (!res.ok) {
+      const text = await res.text().catch(() => res.statusText);
+      throw new Error(`Market data error: ${text}`);
+    }
+    return res.json();
+  },
   // ── SSE ────────────────────────────────────────────────────────────────────────────────────
   connectEventStream(topics: string[], onMessage: (msg: any) => void) {
     const base = getBackendUrl();
