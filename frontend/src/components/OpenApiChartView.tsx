@@ -72,7 +72,7 @@ export const OpenApiChartView: React.FC<OpenApiChartViewProps> = ({
   const chartInstanceRef = useRef<any>(null);
   const [activeSymbol, setActiveSymbol] = useState(initialSymbol);
   const [activeTimeframe, setActiveTimeframe] = useState(initialTimeframe);
-  const [chartEngine, setChartEngine] = useState<'spotware' | 'lightweight'>('spotware');
+  const [chartEngine, setChartEngine] = useState<'spotware' | 'lightweight'>('lightweight');
   const [isLoading, setIsLoading] = useState(true);
   const [activeLayout, setActiveLayout] = useState(0);
   const [candleData, setCandleData] = useState<any[]>([]);
@@ -257,7 +257,16 @@ export const OpenApiChartView: React.FC<OpenApiChartViewProps> = ({
       script.src = '/libs/chart-api.min.js';
       script.async = true;
       script.onload = () => {
+        if (!(window as any).T4PChart) {
+          console.warn('T4PChart missing from chart-api.min.js — falling back to lightweight charts');
+          if (isMounted) setChartEngine('lightweight');
+          return;
+        }
         if (isMounted) initChart();
+      };
+      script.onerror = () => {
+        console.warn('Failed to load /libs/chart-api.min.js — falling back to lightweight charts');
+        if (isMounted) setChartEngine('lightweight');
       };
       document.body.appendChild(script);
     } else {
