@@ -108,7 +108,7 @@ services:
       KIE_MODEL: claude-sonnet-4-6
       KIE_OPUS_MODEL: ${KIE_OPUS_MODEL:-claude-opus-4-6}
       LITELLM_MODEL_FALLBACK: true
-      LITELLM_MASTER_KEY: ${LITELLM_API_KEY:?LITELLM_API_KEY must be set}
+      LITELLM_MASTER_KEY: ${LITELLM_API_KEY:-sk-local-litellm-key}
     command: --config /tmp/litellm-config.yaml --port 4000
     logging:
       driver: json-file
@@ -117,7 +117,7 @@ services:
         max-file: 5
     restart: unless-stopped
     ports:
-      - "127.0.0.1:4001:4000"
+      - "127.0.0.1:4100:4000"
     volumes:
       - ./litellm-config.yaml:/tmp/litellm-config.yaml:ro
     networks:
@@ -129,7 +129,7 @@ services:
     ports:
       - "127.0.0.1:6333:6333" # local diagnostics; backend uses Docker network
     environment:
-      QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY:?QDRANT_API_KEY must be set}
+      QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY:-local-qdrant-key}
     volumes:
       - ./qdrant-storage:/qdrant/storage
     networks:
@@ -140,11 +140,11 @@ services:
     environment:
       - DOCKER_INFLUXDB_INIT_MODE=setup
       - DOCKER_INFLUXDB_INIT_USERNAME=admin
-      - DOCKER_INFLUXDB_INIT_PASSWORD=${INFLUXDB_ADMIN_PASSWORD:?set INFLUXDB_ADMIN_PASSWORD in .env}
+      - DOCKER_INFLUXDB_INIT_PASSWORD=${INFLUXDB_ADMIN_PASSWORD:-quantum12345}
       - DOCKER_INFLUXDB_INIT_ORG=hedge-fund
       - DOCKER_INFLUXDB_INIT_BUCKET=news-sentiment
       - DOCKER_INFLUXDB_INIT_RETENTION=7d
-      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=${INFLUXDB_TOKEN}
+      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=${INFLUXDB_TOKEN:-local-dev-token}
     restart: unless-stopped
     ports:
       - "127.0.0.1:8086:8086"
@@ -180,7 +180,7 @@ services:
       - MCP_TRANSPORT=http
       - MCP_HOST=0.0.0.0
       - MCP_PORT=9100
-      - MCP_API_TOKEN=${ADMIN_API_KEY:?ADMIN_API_KEY must be set}
+      - MCP_API_TOKEN=${ADMIN_API_KEY:-local-admin-key}
     networks:
       - trading-net
     depends_on:
