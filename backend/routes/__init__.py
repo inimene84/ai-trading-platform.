@@ -20,7 +20,10 @@ from backend.routes.sentry import router as sentry_router
 api_router = APIRouter()
 
 # Include sub-routers
+# Health + sentry are dual-mounted under /api so MCP clients using
+# BACKEND_API_PREFIX=/api (same pattern as trading) do not 404.
 api_router.include_router(health_router, tags=["health"])
+api_router.include_router(health_router, prefix="/api", tags=["health-api"])
 api_router.include_router(hedge_fund_router, tags=["hedge-fund"])
 api_router.include_router(storage_router, tags=["storage"])
 api_router.include_router(flows_router, tags=["flows"])
@@ -36,3 +39,4 @@ api_router.include_router(historical_router)
 api_router.include_router(telemetry_router)
 api_router.include_router(backtest_router, prefix="/api/backtest", tags=["backtest"])
 api_router.include_router(sentry_router, tags=["sentry"])
+api_router.include_router(sentry_router, prefix="/api", tags=["sentry-api"])

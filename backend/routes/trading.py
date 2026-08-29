@@ -156,38 +156,91 @@ async def run_backtest(request: dict):
         }
 
 
+async def _get_current_balance() -> dict:
+    """Resolve current balance depending on trading mode (paper vs live)."""
+    from backend.services.trading_mode import TradingMode, get_trading_mode
+    if get_trading_mode() == TradingMode.PAPER:
+        try:
+            from backend.services.unified_trading import trading_router
+            pf = trading_router.get_paper_portfolio()
+            if pf:
+                cash = float(pf.get("cash", 100000.0))
+                equity = float(pf.get("equity", cash))
+                return {
+                    "balance": cash,
+                    "available": cash,
+                    "equity": equity,
+                    "margin_used": float(pf.get("margin_used", 0.0)),
+                    "broker": "paper_trading",
+                }
+        except Exception as e:
+            logger.warning(f"Could not fetch paper portfolio: {e}")
+        return {
+            "balance": 100000.0,
+            "available": 100000.0,
+            "equity": 100000.0,
+            "margin_used": 0.0,
+            "broker": "paper_trading",
+        }
+    from backend.services.binance_futures_service import binance_futures_broker
+    return await asyncio.to_thread(binance_futures_broker.get_balance)
+
+
 @router.get("/portfolio")
 async def get_portfolio():
-    """Get current portfolio state with live Binance balance."""
+    """Get current portfolio state with live Binance balance (or paper portfolio in paper mode)."""
     db = SessionLocal()
     try:
         open_trades = db.query(Trade).filter(Trade.status.in_(["open", "filled"])).all()
+        mark_prices = _fetch_mark_prices_for_symbols({t.symbol for t in open_trades})
+
+        total_notional = 0.0
+        total_unrealized_pnl = 0.0
         positions = []
         for t in open_trades:
+            cur_price = mark_prices.get(t.symbol) or t.entry_price or 0.0
+            notional = (t.quantity or 0.0) * (t.entry_price or 0.0)
+            total_notional += notional
+
+            if t.direction == "BUY":
+                u_pnl = (cur_price - (t.entry_price or cur_price)) * (t.quantity or 0.0)
+            else:
+                u_pnl = ((t.entry_price or cur_price) - cur_price) * (t.quantity or 0.0)
+            total_unrealized_pnl += u_pnl
+
             positions.append({
                 "id": t.id,
                 "symbol": t.symbol,
                 "direction": t.direction,
                 "quantity": t.quantity,
                 "entry_price": t.entry_price,
+                "current_price": cur_price,
                 "stop_loss": t.stop_loss,
                 "take_profit": t.take_profit,
+                "unrealized_pnl": round(u_pnl, 2),
                 "strategy": t.strategy,
                 "opened_at": t.timestamp.isoformat() if t.timestamp else None,
             })
 
-        # Prefer live broker balance over stale DB snapshot
-        balance = 0.0
-        available = 0.0
-        equity = 0.0
-        positions_value = 0.0
+        # Prefer live broker/paper balance over stale DB snapshot
+        balance = 100000.0
+        available = 100000.0
+        equity = 100000.0
+        positions_value = total_notional
         try:
-            from backend.services.binance_futures_service import binance_futures_broker
-            bal = await asyncio.to_thread(binance_futures_broker.get_balance)
-            balance = bal.get("balance", 0.0)
-            available = bal.get("available", balance)
-            equity = bal.get("equity", balance)
-            positions_value = bal.get("margin_used", 0.0)
+            bal = await _get_current_balance()
+            balance = float(bal.get("balance", 100000.0))
+            is_paper = bal.get("broker") == "paper_trading" or os.getenv("TRADING_MODE", "paper") == "paper"
+
+            if is_paper:
+                positions_value = total_notional
+                available = max(0.0, balance - total_notional)
+                equity = balance + total_unrealized_pnl
+            else:
+                margin_used = float(bal.get("margin_used", 0.0))
+                positions_value = margin_used if margin_used > 0 else total_notional
+                available = float(bal.get("available", balance - positions_value))
+                equity = float(bal.get("equity", balance + total_unrealized_pnl))
         except Exception:
             snap = (
                 db.query(PortfolioSnapshot)
@@ -196,9 +249,9 @@ async def get_portfolio():
             )
             if snap:
                 balance = snap.cash or 0.0
-                available = snap.cash or 0.0
-                equity = snap.total_value or balance
-                positions_value = snap.positions_value or 0.0
+                available = max(0.0, balance - total_notional)
+                equity = balance + total_unrealized_pnl
+                positions_value = total_notional
 
         # Compute realized PnL from all closed trades
         closed_pnl = db.query(Trade).filter(Trade.status == "closed").with_entities(
@@ -208,13 +261,14 @@ async def get_portfolio():
         pnl_pct = round((total_pnl / equity * 100) if equity > 0 else 0.0, 2)
 
         return {
-            "balance": round(balance, 6),
-            "available": round(available, 6),
-            "equity": round(equity, 6),
+            "balance": round(balance, 2),
+            "available": round(available, 2),
+            "equity": round(equity, 2),
+            "unrealized_pnl": round(total_unrealized_pnl, 2),
             "positions": positions,
             "total_pnl": total_pnl,
             "total_pnl_pct": pnl_pct,
-            "positions_value": round(positions_value, 6),
+            "positions_value": round(positions_value, 2),
             "open_positions_count": len(positions),
             "last_updated": datetime.now().isoformat(),
         }
@@ -234,8 +288,7 @@ async def get_performance():
         realized = round(sum((t.pnl or 0.0) for t in closed), 4)
         equity = 0.0
         try:
-            from backend.services.binance_futures_service import binance_futures_broker
-            bal = await asyncio.to_thread(binance_futures_broker.get_balance)
+            bal = await _get_current_balance()
             equity = bal.get("equity", bal.get("balance", 0.0))
         except Exception:
             pass
@@ -300,15 +353,23 @@ async def get_status():
     llm_providers = []
 
     # Cloud providers
+    if os.getenv('OMNIROUTE_API_KEY') and os.getenv('OMNIROUTE_API_KEY') != 'omni_live_key_placeholder':
+        llm_providers.append({
+            'name': 'OmniRoute',
+            'model': os.getenv('PERSONA_LLM_MODEL', 'auto/smart'),
+            'status': 'configured',
+            'type': 'cloud',
+            'role': 'Primary (Auto-Select Routing)',
+        })
     if os.getenv('XAI_API_KEY') and os.getenv('XAI_API_KEY') != 'your_xai_api_key_here':
         llm_providers.append({'name': 'xAI (Grok)', 'model': os.getenv('XAI_MODEL', 'grok-beta'), 'status': 'configured', 'type': 'cloud'})
     if os.getenv('KIE_API_KEY') and os.getenv('KIE_API_KEY') != 'your_kie_api_key_here':
         llm_providers.append({
             'name': 'Kie.ai',
-            'model': os.getenv('KIE_MODEL', 'claude-sonnet-4-6'),
+            'model': os.getenv('KIE_MODEL', 'gpt-5-6-terra'),
             'status': 'configured',
             'type': 'cloud',
-            'role': 'primary via LiteLLM',
+            'role': 'fallback / direct via Kie.ai',
         })
     if os.getenv('ANTHROPIC_API_KEY') and os.getenv('ANTHROPIC_API_KEY') != 'your_anthropic_api_key_here':
         llm_providers.append({'name': 'Anthropic', 'model': 'claude', 'status': 'configured', 'type': 'cloud'})
@@ -1301,18 +1362,54 @@ async def session_status():
 
 @router.post("/paper/order")
 async def paper_place_order(request: dict):
-    """Place a paper/simulated order."""
+    """Place a paper/simulated order and persist to Trade table."""
     ut = UnifiedTrading()
+    sym = request.get("symbol", "").upper()
+    side_str = request.get("side", "buy").lower()
+    px = float(request.get("price", 0) or 0)
+    if px <= 0:
+        # If no explicit price provided for market order, fetch current price
+        try:
+            from backend.services.binance_futures_service import BinanceFuturesService
+            bfs = BinanceFuturesService()
+            ticker = await asyncio.to_thread(bfs._get_client().futures_symbol_ticker, symbol=sym)
+            px = float(ticker.get("price", 0) or 0)
+        except Exception:
+            pass
+
     order = UnifiedOrder(
-        symbol=request.get("symbol", "").upper(),
-        side=OrderSide(request.get("side", "buy").lower()),
+        symbol=sym,
+        side=OrderSide(side_str),
         order_type=OrderType(request.get("order_type", "market").lower()),
         quantity=float(request.get("quantity", 0)),
-        price=float(request.get("price", 0) or 0),
+        price=px,
         stop_loss=float(request.get("stop_loss", 0) or 0),
         take_profit=float(request.get("take_profit", 0) or 0),
     )
     resp = ut.place_order(order)
+    if resp.success:
+        db = SessionLocal()
+        try:
+            direction = "BUY" if side_str == "buy" else "SELL"
+            trade = Trade(
+                symbol=sym,
+                direction=direction,
+                quantity=float(resp.filled_qty or order.quantity),
+                entry_price=float(resp.filled_price or px),
+                status="open",
+                strategy="paper_manual",
+                binance_order_id=resp.order_id,
+                stop_loss=order.stop_loss or None,
+                take_profit=order.take_profit or None,
+                notes="Paper order placed via UI/API",
+            )
+            db.add(trade)
+            db.commit()
+        except Exception as e:
+            logger.warning(f"Could not persist paper trade to DB: {e}")
+        finally:
+            db.close()
+
     return {
         "success": resp.success,
         "order_id": resp.order_id,
@@ -1667,10 +1764,9 @@ async def get_price(symbol: str = "BTCUSDT"):
 async def get_account_summary():
     """Return live account equity and balance for workflow engine."""
     try:
-        from backend.services.binance_futures_service import binance_futures_broker
-        bal = await asyncio.to_thread(binance_futures_broker.get_balance)
-        equity = bal.get("equity", bal.get("balance", 0.0))
-        available = bal.get("available", equity)
+        pf = await get_portfolio()
+        equity = float(pf.get("equity", 100000.0))
+        available = float(pf.get("available", equity))
         db = SessionLocal()
         try:
             from sqlalchemy import func

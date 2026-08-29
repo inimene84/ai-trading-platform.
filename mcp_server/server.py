@@ -2,39 +2,24 @@
 QuantumTrade Pro — MCP Server
 =============================
 Exposes the live trading backend to MCP-compatible agents (Claude Desktop,
-Cursor, Agent Zero, etc.) as a curated set of tools. Runs as its own
-lightweight process/container and talks to the backend over HTTP, so it needs
-no database, exchange, or model credentials of its own.
+Cursor, Agent Zero / A0, Hermes) as a curated set of tools.
 
-Two ways to expose tools:
-
-  1. CURATED TOOLS (default, recommended) — a hand-picked, well-described set of
-     high-value tools (opinion, trade memory, skills, portfolio, loop control).
-     Clear names + docstrings make them reliable for LLM agents.
-
-  2. AUTO-GENERATED (FULL_API=true) — mirror *every* FastAPI route as an MCP tool
-     via FastMCP.from_fastapi. Comprehensive but noisy; use for power users.
+Runs as its own lightweight process/container and talks to the backend over
+HTTP, so it needs no database, exchange, or model credentials of its own.
 
 Env:
-  BACKEND_BASE_URL   default http://ai-trading-backend:8000  (Docker internal)
-                     external: http://72.60.18.113:8001/api  or  http://localhost:8001/api
-  BACKEND_API_PREFIX default /api   (the FastAPI app mounts routes under /api)
-  MCP_API_TOKEN      optional bearer token sent to the backend
+  BACKEND_BASE_URL   default http://ai-trading-backend:8000
+  BACKEND_API_PREFIX default /api
+  MCP_API_TOKEN      bearer token sent to the backend (ADMIN_API_KEY)
   MCP_TRANSPORT      default http   (stdio | http | sse)
-  MCP_HOST           default 0.0.0.0
-  MCP_PORT           default 9100
-  FULL_API           default false  (true -> auto-generate from OpenAPI)
-
-Run:
-  python -m mcp_server.server
-  # or
-  fastmcp run mcp_server/server.py:mcp --transport http --host 0.0.0.0 --port 9100
+  MCP_HOST / MCP_PORT
+  FULL_API           default false
 """
 
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import httpx
 
@@ -46,7 +31,6 @@ except ImportError as e:  # pragma: no cover
     ) from e
 
 
-# ── Config ────────────────────────────────────────────────────────────────────
 BACKEND_BASE_URL = os.getenv("BACKEND_BASE_URL", "http://ai-trading-backend:8000")
 API_PREFIX = os.getenv("BACKEND_API_PREFIX", "/api").rstrip("/")
 API_TOKEN = os.getenv("MCP_API_TOKEN", "")
@@ -54,33 +38,19 @@ TIMEOUT = float(os.getenv("MCP_HTTP_TIMEOUT", "20"))
 
 
 def _headers() -> Dict[str, str]:
-    h = {"Accept": "application/json"}
+    h = {"Accept": "application/json", "Content-Type": "application/json"}
     if API_TOKEN:
         h["Authorization"] = f"Bearer {API_TOKEN}"
+        # Some routes also accept x-api-key
+        h["X-API-Key"] = API_TOKEN
     return h
 
 
 def _url(path: str) -> str:
     path = path if path.startswith("/") else "/" + path
-    # Allow callers to pass either "/trading/..." or "/api/trading/..."
     if API_PREFIX and not path.startswith(API_PREFIX + "/") and path != API_PREFIX:
         path = API_PREFIX + path
     return f"{BACKEND_BASE_URL.rstrip('/')}{path}"
-
-
-async def _get(path: str, params: Optional[Dict[str, Any]] = None) -> Any:
-    async with httpx.AsyncClient(timeout=TIMEOUT) as cx:
-        r = await cx.get(_url(path), params=params, headers=_headers())
-        r.raise_for_status()
-        return _safe_json(r)
-
-
-async def _post(path: str, params: Optional[Dict[str, Any]] = None,
-                json_body: Optional[Dict[str, Any]] = None) -> Any:
-    async with httpx.AsyncClient(timeout=TIMEOUT) as cx:
-        r = await cx.post(_url(path), params=params, json=json_body, headers=_headers())
-        r.raise_for_status()
-        return _safe_json(r)
 
 
 def _safe_json(r: httpx.Response) -> Any:
@@ -90,27 +60,65 @@ def _safe_json(r: httpx.Response) -> Any:
         return {"status_code": r.status_code, "text": r.text[:2000]}
 
 
-# ── Build the server (curated tools) ────────────────────────────────────────────
+async def _request(
+    method: str,
+    path: str,
+    params: Optional[Dict[str, Any]] = None,
+    json_body: Optional[Dict[str, Any]] = None,
+) -> Any:
+    m = method.upper()
+    async with httpx.AsyncClient(timeout=TIMEOUT) as cx:
+        r = await cx.request(
+            m, _url(path), params=params, json=json_body, headers=_headers(),
+        )
+        r.raise_for_status()
+        return _safe_json(r)
+
+
+async def _get(path: str, params: Optional[Dict[str, Any]] = None) -> Any:
+    return await _request("GET", path, params=params)
+
+
+async def _post(
+    path: str,
+    params: Optional[Dict[str, Any]] = None,
+    json_body: Optional[Dict[str, Any]] = None,
+) -> Any:
+    return await _request("POST", path, params=params, json_body=json_body)
+
+
+async def _put(
+    path: str,
+    params: Optional[Dict[str, Any]] = None,
+    json_body: Optional[Dict[str, Any]] = None,
+) -> Any:
+    return await _request("PUT", path, params=params, json_body=json_body)
+
+
 mcp = FastMCP(
     name="QuantumTrade Pro",
     instructions=(
         "Tools for the QuantumTrade Pro AI trading backend. Use them to inspect "
-        "the multi-agent trading opinion for a symbol, query the agent's learned "
-        "trade memory and mined strategy skills, view the portfolio, and control "
-        "the trading/sentiment loops. All actions hit the live backend."
+        "positions and loop health, review multi-agent opinions / trade memory, "
+        "and intervene safely (close a position, adjust SL/TP, stop/start the "
+        "loop, or sentry halt/resume). Prefer curated tools over call_backend. "
+        "Never request exchange API keys — use MCP/API token only."
     ),
 )
 
 
-# ---- Read: market opinion ------------------------------------------------------
+# ---- Opinion / learning ------------------------------------------------------
 @mcp.tool
-async def get_trading_opinion(symbol: str) -> dict:
-    """Get the full multi-agent trading opinion for a symbol (e.g. "BTCUSDT").
+async def get_trading_opinion(symbol: str, bars: Optional[List[Dict[str, Any]]] = None) -> dict:
+    """Analyze a symbol with the multi-agent opinion layer.
 
-    Returns the unified direction (BUY/SELL/HOLD), confidence, reasoning, and
-    each contributing agent's vote (technical, Kronos, sentiment, personas,
-    semantic_trade_memory, learned_skill, ...)."""
-    return await _get(f"/trading/opinion/{symbol}")
+    Prefer providing recent OHLCV bars when available. If bars is omitted, the
+    backend may reject the request — use get_loop_status / call_backend to fetch
+    market context first when needed."""
+    body: Dict[str, Any] = {"symbol": symbol.upper()}
+    if bars:
+        body["bars"] = bars
+    return await _post("/trading/opinion/analyze", json_body=body)
 
 
 @mcp.tool
@@ -121,15 +129,13 @@ async def get_opinion_weights() -> dict:
 
 @mcp.tool
 async def set_opinion_weight(agent: str, weight: float) -> dict:
-    """Set the voting weight for one agent (e.g. agent="learned_skill",
-    weight=0.15). Affects how much that agent influences the final decision."""
+    """Set the voting weight for one agent (e.g. learned_skill=0.15)."""
     return await _post("/trading/opinion/weights", json_body={"weights": {agent: weight}})
 
 
-# ---- Read: learning loop (Track C + skills) ------------------------------------
 @mcp.tool
 async def trade_memory_status() -> dict:
-    """Status of the semantic trade-memory vector store (points count, config)."""
+    """Status of the semantic trade-memory vector store."""
     return await _get("/trading/trade-memory/status")
 
 
@@ -140,111 +146,221 @@ async def recall_similar_trades(
     same_symbol_only: bool = False,
     limit: int = 8,
 ) -> dict:
-    """Recall the most similar past trades for a market context and summarise how
-    they resolved (win-rate, avg PnL, directional bias).
-
-    context keys (all optional): direction, regime ("TRENDING"/"RANGING"),
-    trend_signal, momentum_signal, mean_reversion_signal, volatility (0..1),
-    rsi (0..100), funding_rate, sentiment_score (-1..1), kronos_change_pct."""
-    body = {"context": context, "symbol": symbol,
-            "same_symbol_only": same_symbol_only, "limit": limit}
+    """Recall similar past trades for a market context and summarise outcomes."""
+    body = {
+        "context": context,
+        "symbol": symbol,
+        "same_symbol_only": same_symbol_only,
+        "limit": limit,
+    }
     return await _post("/trading/trade-memory/recall", json_body=body)
 
 
 @mcp.tool
 async def trade_memory_backfill(limit: int = 1000) -> dict:
-    """Vectorise existing closed trades from SQL into the trade-memory store."""
+    """Vectorise existing closed trades from SQL into trade-memory."""
     return await _post("/trading/trade-memory/backfill", params={"limit": limit})
 
 
 @mcp.tool
 async def list_strategy_skills(active_only: bool = True, limit: int = 50) -> dict:
-    """List the agent's learned strategy skills (the leaderboard of mined setups)."""
+    """List learned strategy skills."""
     return await _get("/trading/skills", params={"active_only": active_only, "limit": limit})
 
 
 @mcp.tool
 async def skills_leaderboard(limit: int = 10) -> dict:
-    """Top learned strategy skills ranked by edge score — compact leaderboard."""
+    """Top learned strategy skills by edge score."""
     return await _get("/trading/skills/leaderboard", params={"limit": limit})
 
 
 @mcp.tool
 async def mine_skills(limit: Optional[int] = None) -> dict:
-    """Trigger a skill-mining pass over closed-trade history (idempotent)."""
-    params = {"limit": limit} if limit else None
+    """Trigger a skill-mining pass over closed-trade history."""
+    params = {"limit": limit} if limit is not None else None
     return await _post("/trading/skills/mine", params=params)
 
 
 @mcp.tool
 async def match_skill(context: Dict[str, Any]) -> dict:
-    """Match an arbitrary market context to the best learned strategy skill.
-
-    See recall_similar_trades for the accepted context keys."""
+    """Match a market context to the best learned strategy skill."""
     return await _post("/trading/skills/match", json_body={"context": context})
 
 
-# ---- Read: portfolio / signals -------------------------------------------------
+# ---- Portfolio / positions / trades (oversight) ------------------------------
 @mcp.tool
 async def get_portfolio() -> dict:
-    """Get the current portfolio (positions, equity, PnL)."""
+    """Get portfolio snapshot (positions, equity, PnL)."""
     return await _get("/trading/portfolio")
 
 
 @mcp.tool
+async def list_positions() -> dict:
+    """List open DB/exchange-tracked positions."""
+    return await _get("/trading/positions")
+
+
+@mcp.tool
+async def list_binance_positions() -> dict:
+    """List live Binance Futures positions (exchange truth)."""
+    return await _get("/trading/binance/positions")
+
+
+@mcp.tool
+async def list_trades(limit: int = 50) -> dict:
+    """List recent trades (open + closed)."""
+    return await _get("/trading/trades", params={"limit": limit})
+
+
+@mcp.tool
+async def close_position(position_id: int) -> dict:
+    """Close an open position by DB id (market reduce-only on exchange)."""
+    return await _post(f"/trading/positions/{position_id}/close")
+
+
+@mcp.tool
+async def modify_position(
+    position_id: int,
+    stop_loss: Optional[float] = None,
+    take_profit: Optional[float] = None,
+) -> dict:
+    """Modify stop-loss and/or take-profit for an open position."""
+    body: Dict[str, Any] = {}
+    if stop_loss is not None:
+        body["stop_loss"] = stop_loss
+    if take_profit is not None:
+        body["take_profit"] = take_profit
+    if not body:
+        raise ValueError("Provide stop_loss and/or take_profit")
+    return await _put(f"/trading/positions/{position_id}/modify", json_body=body)
+
+
+# ---- Loop / config control ---------------------------------------------------
+@mcp.tool
 async def get_loop_status() -> dict:
-    """Get the trading loop status (running, interval, symbols, cycle count)."""
+    """Trading loop status (running, interval, symbols, cycle count)."""
     return await _get("/trading/loop/status")
 
 
 @mcp.tool
 async def get_trading_config() -> dict:
-    """Get the active trading configuration (mode, interval, symbols, risk limits)."""
+    """Active trading configuration (mode, symbols, risk limits)."""
     return await _get("/trading/config")
 
 
-# ---- Read: sentiment loop (Track A) --------------------------------------------
+@mcp.tool
+async def update_trading_config(updates: Dict[str, Any]) -> dict:
+    """Update trading config keys (risk/sizing/symbols). Use carefully."""
+    return await _post("/trading/config/update", json_body=updates)
+
+
+@mcp.tool
+async def start_trading_loop(
+    interval_minutes: int = 15,
+    strategy: str = "combined",
+    symbols: Optional[List[str]] = None,
+) -> dict:
+    """Start (or restart) the trading loop."""
+    body: Dict[str, Any] = {
+        "interval_minutes": interval_minutes,
+        "strategy": strategy,
+    }
+    if symbols:
+        body["symbols"] = symbols
+    return await _post("/trading/loop/start", json_body=body)
+
+
+@mcp.tool
+async def stop_trading_loop() -> dict:
+    """Stop the trading loop (positions remain open until closed)."""
+    return await _post("/trading/loop/stop")
+
+
+# ---- Sentry safety -----------------------------------------------------------
+@mcp.tool
+async def sentry_status() -> dict:
+    """Sentry halt state (trading_allowed, reason, timestamps)."""
+    return await _get("/sentry/status")
+
+
+@mcp.tool
+async def sentry_halt(reason: str = "operator MCP halt", source: str = "a0-hermes-mcp") -> dict:
+    """Soft halt: block new entries without cancelling open orders."""
+    return await _post(
+        "/sentry/halt",
+        json_body={"reason": reason, "source": source, "manual": True},
+    )
+
+
+@mcp.tool
+async def emergency_halt(
+    reason: str = "operator MCP emergency halt",
+    source: str = "a0-hermes-mcp",
+) -> dict:
+    """Emergency halt: stop trading and cancel open orders."""
+    return await _post(
+        "/sentry/emergency-halt",
+        json_body={"reason": reason, "source": source, "manual": True},
+    )
+
+
+@mcp.tool
+async def sentry_resume(note: str = "resumed via MCP", reconcile: bool = True) -> dict:
+    """Clear sentry halt and optionally reconcile protections."""
+    return await _post(
+        "/sentry/resume",
+        json_body={"note": note, "reconcile": reconcile},
+    )
+
+
+# ---- Sentiment ---------------------------------------------------------------
 @mcp.tool
 async def sentiment_loop_status() -> dict:
-    """Status of the native in-app sentiment loop (Track A)."""
+    """Native sentiment loop status."""
     return await _get("/news/sentiment-loop/status")
 
 
 @mcp.tool
 async def run_sentiment_loop(dry_run: bool = True) -> dict:
-    """Run one pass of the native sentiment loop. dry_run=True writes nothing."""
+    """Run one sentiment-loop pass. dry_run=True writes nothing."""
     return await _post("/news/sentiment-loop/run", params={"dry_run": dry_run})
 
 
-# ---- Generic escape hatch ------------------------------------------------------
+# ---- Health / escape hatch ---------------------------------------------------
 @mcp.tool
-async def call_backend(method: str, path: str,
-                       params: Optional[Dict[str, Any]] = None,
-                       body: Optional[Dict[str, Any]] = None) -> dict:
-    """Call an arbitrary backend endpoint. method="GET"|"POST", path like
-    "/trading/strategies". Use only when no curated tool fits."""
+async def backend_health() -> dict:
+    """Backend health check."""
+    return await _get("/health")
+
+
+@mcp.tool
+async def call_backend(
+    method: str,
+    path: str,
+    params: Optional[Dict[str, Any]] = None,
+    body: Optional[Dict[str, Any]] = None,
+) -> dict:
+    """Call an arbitrary backend endpoint. method=GET|POST|PUT.
+
+    Prefer curated tools. Path like "/trading/strategies"."""
     m = method.upper()
-    if m == "GET":
-        return {"result": await _get(path, params=params)}
-    if m == "POST":
-        return {"result": await _post(path, params=params, json_body=body)}
-    raise ValueError("method must be GET or POST")
+    if m not in {"GET", "POST", "PUT"}:
+        raise ValueError("method must be GET, POST, or PUT")
+    return {"result": await _request(m, path, params=params, json_body=body)}
 
 
-# ── Optional: auto-generate the FULL API surface from OpenAPI ────────────────────
 def _maybe_full_api() -> "FastMCP":
-    """If FULL_API=true, build a server that mirrors every backend route as a
-    tool, fetched from the live OpenAPI schema. Returns the curated server on
-    any failure."""
     if os.getenv("FULL_API", "false").lower() != "true":
         return mcp
     try:
         openapi_url = f"{BACKEND_BASE_URL.rstrip('/')}/openapi.json"
         spec = httpx.get(openapi_url, timeout=TIMEOUT, headers=_headers()).json()
-        client = httpx.AsyncClient(base_url=BACKEND_BASE_URL.rstrip("/"), headers=_headers())
-        full = FastMCP.from_openapi(openapi_spec=spec, client=client,
-                                    name="QuantumTrade Pro (full API)")
-        return full
+        client = httpx.AsyncClient(
+            base_url=BACKEND_BASE_URL.rstrip("/"), headers=_headers(),
+        )
+        return FastMCP.from_openapi(
+            openapi_spec=spec, client=client, name="QuantumTrade Pro (full API)",
+        )
     except Exception as e:  # pragma: no cover
         print(f"[mcp] FULL_API requested but failed ({e}); using curated tools")
         return mcp
@@ -254,7 +370,7 @@ def main():
     server = _maybe_full_api()
     transport = os.getenv("MCP_TRANSPORT", "http")
     if transport == "stdio":
-        server.run()  # stdio
+        server.run()
     else:
         server.run(
             transport=transport,

@@ -494,6 +494,7 @@ export default function App() {
   const [recentTrades, setRecentTrades] = useState<any[]>([]);
   const [botTrades, setBotTrades] = useState<any[]>([]);
   const [portfolioBalance, setPortfolioBalance] = useState(0.00);
+  const [systemStatus, setSystemStatus] = useState<any>(null);
 
   // Workflow Execution State
   const [isExecutingFlow, setIsExecutingFlow] = useState(false);
@@ -514,6 +515,7 @@ export default function App() {
     const checkBackend = async () => {
       try {
         const st = await apiService.getStatus();
+        setSystemStatus(st);
         setBackendConnected(true);
         setDryRun(st.dry_run);
         const ls = await apiService.getLoopStatus().catch(() => null);
@@ -1099,33 +1101,33 @@ export default function App() {
           <div className="flex items-center gap-4">
             <div className={cn(
               "hidden xl:flex items-center gap-2 px-3 py-1.5 border rounded-lg transition-colors",
-              configService.getSecret('CTRADER_ACCESS_TOKEN')
-                ? "bg-indigo-500/10 border-indigo-500/30"
+              backendConnected
+                ? "bg-amber-500/10 border-amber-500/30"
                 : "bg-zinc-800/50 border-zinc-700/50"
             )}>
-              <Globe size={14} className={cn(configService.getSecret('CTRADER_ACCESS_TOKEN') ? "text-indigo-400" : "text-zinc-600")} />
-              <span className={cn("text-[10px] font-bold uppercase", configService.getSecret('CTRADER_ACCESS_TOKEN') ? "text-indigo-300" : "text-zinc-600")}>
-                cTrader OpenAPI
+              <Zap size={14} className={cn(backendConnected ? "text-amber-400" : "text-zinc-600")} />
+              <span className={cn("text-[10px] font-bold uppercase", backendConnected ? "text-amber-300" : "text-zinc-600")}>
+                {systemStatus?.mode === 'paper' ? 'Binance Futures (Paper)' : 'Binance Futures'}
               </span>
-              <div className={cn("w-1.5 h-1.5 rounded-full", configService.getSecret('CTRADER_ACCESS_TOKEN') ? "bg-emerald-500 animate-pulse" : "bg-zinc-600")} />
-              <span className="text-[10px] text-zinc-500 font-medium">
-                {configService.getSecret('CTRADER_ACCESS_TOKEN') ? 'Connected' : 'Disconnected'}
+              <div className={cn("w-1.5 h-1.5 rounded-full", backendConnected ? "bg-emerald-500 animate-pulse" : "bg-zinc-600")} />
+              <span className="text-[10px] text-zinc-400 font-medium">
+                {backendConnected ? (systemStatus?.mode === 'paper' ? 'Paper Active' : 'Live Connected') : 'Disconnected'}
               </span>
             </div>
 
             <div className={cn(
-              "hidden xl:flex items-center gap-2 px-3 py-1.5 border rounded-lg transition-colors",
-              configService.getSecret('BINANCE_API_KEY')
-                ? "bg-amber-500/10 border-amber-500/30"
+              "hidden lg:flex items-center gap-2 px-3 py-1.5 border rounded-lg transition-colors",
+              backendConnected
+                ? "bg-emerald-500/10 border-emerald-500/30"
                 : "bg-zinc-800/50 border-zinc-700/50"
             )}>
-              <Zap size={14} className={cn(configService.getSecret('BINANCE_API_KEY') ? "text-amber-400" : "text-zinc-600")} />
-              <span className={cn("text-[10px] font-bold uppercase", configService.getSecret('BINANCE_API_KEY') ? "text-amber-300" : "text-zinc-600")}>
-                Binance Spot
+              <Sparkles size={14} className={cn(backendConnected ? "text-emerald-400" : "text-zinc-600")} />
+              <span className={cn("text-[10px] font-bold uppercase", backendConnected ? "text-emerald-300" : "text-zinc-600")}>
+                OmniRoute
               </span>
-              <div className={cn("w-1.5 h-1.5 rounded-full", configService.getSecret('BINANCE_API_KEY') ? "bg-emerald-500 animate-pulse" : "bg-zinc-600")} />
-              <span className="text-[10px] text-zinc-500 font-medium">
-                {configService.getSecret('BINANCE_API_KEY') ? 'Connected' : 'Disconnected'}
+              <div className={cn("w-1.5 h-1.5 rounded-full", backendConnected ? "bg-emerald-500 animate-pulse" : "bg-zinc-600")} />
+              <span className="text-[10px] text-zinc-400 font-medium">
+                {backendConnected ? 'Auto-Select' : 'Offline'}
               </span>
             </div>
             <div className="relative hidden sm:block">

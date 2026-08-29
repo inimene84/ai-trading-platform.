@@ -43,8 +43,8 @@ for line in lines:
 new_lines.append("PERSONA_LLM_PROVIDER=kie\n")
 new_lines.append("DEEP_ANALYSIS_LLM_PROVIDER=kie\n")
 new_lines.append("GENERAL_LLM_PROVIDER=kie\n")
-new_lines.append("KIE_MODEL=claude-sonnet-4-6\n")
-new_lines.append("KIE_BASE_URL=https://api.kie.ai/claude\n")
+new_lines.append("KIE_MODEL=gpt-5-6-terra\n")
+new_lines.append("KIE_BASE_URL=https://api.kie.ai\n")
 
 with open(env_path, "w") as f:
     f.writelines(new_lines)
