@@ -18,7 +18,9 @@ from backend.services.binance_order_poller import start_order_poller
 from backend.services.unified_trading import UnifiedTrading
 from backend.services.ctrader_service import ctrader_broker
 from backend.services.binance_futures_service import binance_futures_broker
+from backend.services.binance_websocket import binance_ws
 from backend.services.trading_loop import trading_loop
+
 from backend.security import admin_auth_enabled, is_sensitive_request, validate_admin_request
 # Load environment variables
 load_dotenv()
@@ -178,8 +180,13 @@ async def lifespan(app: FastAPI):
     # Track spawned background tasks so we can cancel them cleanly on shutdown
     background_tasks = []
 
-    # Start supervised background tasks
+    # 0. Binance WebSocket Streamer & Candle Cache
+    task = asyncio.create_task(run_supervised_task("Binance WebSocket Streamer", binance_ws.start))
+    background_tasks.append(task)
+    logger.info("✓ Binance WebSocket streamer & candle cache auto-started under supervisor")
+
     # 1. Wallet Poller
+
     task = asyncio.create_task(run_supervised_task("Binance Wallet Poller", start_wallet_poller))
     background_tasks.append(task)
     logger.info("✓ Binance wallet poller task scheduled under supervisor")
