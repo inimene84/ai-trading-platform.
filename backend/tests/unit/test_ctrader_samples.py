@@ -105,7 +105,7 @@ def test_symbol_spec_endpoint(client):
     assert data["lot_size"] == 100_000
 
 
-def test_pip_margin_calc_endpoint(client):
+def test_pip_margin_calc_endpoint(client, auth_headers):
     """Test POST /api/trading/ctrader/calc/pip-margin endpoint."""
     payload = {
         "symbol": "EURUSD",
@@ -114,7 +114,7 @@ def test_pip_margin_calc_endpoint(client):
         "leverage": 200.0,
         "deposit_asset": "USD"
     }
-    response = client.post("/api/trading/ctrader/calc/pip-margin", json=payload)
+    response = client.post("/api/trading/ctrader/calc/pip-margin", json=payload, headers=auth_headers)
     assert response.status_code == 200
     data = response.json()
     assert data["volume_units"] == 50_000

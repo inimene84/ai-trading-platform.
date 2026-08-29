@@ -94,20 +94,20 @@ def test_timing_window_ready_queue():
     assert matched[0]["status"] == CandidateStatus.READY
 
 
-def test_scan_markets_endpoint(client):
+def test_scan_markets_endpoint(client, auth_headers):
     """Test POST /api/signals/scan-markets endpoint."""
     payload = {"universe": ["EURUSD", "BTCUSDT"], "timeframe": "M5"}
-    response = client.post("/api/signals/scan-markets", json=payload)
+    response = client.post("/api/signals/scan-markets", json=payload, headers=auth_headers)
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "ok"
     assert "candidates" in data
 
 
-def test_scan_news_endpoint(client):
+def test_scan_news_endpoint(client, auth_headers):
     """Test POST /api/signals/scan-news endpoint."""
     payload = {"lookahead_minutes": 60}
-    response = client.post("/api/signals/scan-news", json=payload)
+    response = client.post("/api/signals/scan-news", json=payload, headers=auth_headers)
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "ok"
@@ -125,7 +125,7 @@ def test_candidates_and_ready_endpoints(client):
     assert "signals" in ready_res.json()
 
 
-def test_timing_config_endpoints(client):
+def test_timing_config_endpoints(client, auth_headers):
     """Test GET and POST /api/signals/timing-config."""
     get_res = client.get("/api/signals/timing-config")
     assert get_res.status_code == 200
@@ -139,7 +139,7 @@ def test_timing_config_endpoints(client):
         "default_risk_pct": 0.75,
         "strategies_enabled": {"momentum": True, "fade": True},
     }
-    post_res = client.post("/api/signals/timing-config", json=update_payload)
+    post_res = client.post("/api/signals/timing-config", json=update_payload, headers=auth_headers)
     assert post_res.status_code == 200
     cfg = post_res.json()["config"]
     assert cfg["pre_event_window_min"] == 20
@@ -148,7 +148,7 @@ def test_timing_config_endpoints(client):
     assert cfg["default_risk_pct"] == 0.75
 
 
-def test_execute_candidate_endpoint_dry_run(client):
+def test_execute_candidate_endpoint_dry_run(client, auth_headers):
     """Test POST /api/signals/execute-candidate."""
     # Seed a ready candidate
     now_ts = int(time.time())
@@ -169,7 +169,7 @@ def test_execute_candidate_endpoint_dry_run(client):
         "sizing": {"lots": 0.1, "quantity": 0.1, "risk_usd": 50.0},
     }
 
-    res = client.post("/api/signals/execute-candidate", json={"candidate_id": sig_id, "force": True})
+    res = client.post("/api/signals/execute-candidate", json={"candidate_id": sig_id, "force": True}, headers=auth_headers)
     assert res.status_code == 200
     data = res.json()
     assert data["success"] is True

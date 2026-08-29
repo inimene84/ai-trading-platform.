@@ -37,7 +37,7 @@ def test_get_markets_endpoint(client):
     assert "XAUUSD" in symbols
 
 
-def test_smart_order_crypto_routing(client):
+def test_smart_order_crypto_routing(client, auth_headers):
     """Verify crypto orders are automatically routed to Binance Futures in paper mode."""
     response = client.post(
         "/api/trading/order/smart",
@@ -48,6 +48,7 @@ def test_smart_order_crypto_routing(client):
             "order_type": "MARKET",
             "price": 60000.0,
         },
+        headers=auth_headers,
     )
     assert response.status_code == 200
     data = response.json()
@@ -55,7 +56,7 @@ def test_smart_order_crypto_routing(client):
     assert data["target_broker"] == "binance_futures"
 
 
-def test_smart_order_forex_routing(client):
+def test_smart_order_forex_routing(client, auth_headers):
     """Verify forex orders are automatically routed to cTrader in paper mode."""
     response = client.post(
         "/api/trading/order/smart",
@@ -66,6 +67,7 @@ def test_smart_order_forex_routing(client):
             "order_type": "MARKET",
             "price": 1.0850,
         },
+        headers=auth_headers,
     )
     assert response.status_code == 200
     data = response.json()
