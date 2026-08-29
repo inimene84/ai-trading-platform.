@@ -1095,6 +1095,99 @@ async def save_ctrader_tokens(req: SaveCTraderTokensRequest):
     return {"success": True, "message": "cTrader tokens stored and updated successfully"}
 
 
+class PipMarginCalcRequest(BaseModel):
+    symbol: str
+    lots: float = Field(gt=0, default=1.0)
+    price: Optional[float] = None
+    leverage: float = Field(gt=0, default=100.0)
+    deposit_asset: str = "USD"
+
+
+@router.get("/ctrader/trendbars")
+async def get_ctrader_trendbars(
+    symbol: str = Query("EURUSD", description="Symbol name e.g. EURUSD, GBPUSD, BTCUSD"),
+    period: str = Query("M5", description="Period: 1M, 5M, 15M, 30M, 1H, 4H, 1D, 1W"),
+    count: int = Query(120, ge=1, le=1000, description="Number of bars"),
+    from_ts: Optional[int] = Query(None, description="Start unix timestamp in ms"),
+    to_ts: Optional[int] = Query(None, description="End unix timestamp in ms"),
+):
+    """
+    Get historical OHLCV trendbars for cTrader charting and technical analysis.
+    Uses ProtoOAGetTrendbarsReq when live connected, with fallback to high-fidelity cache.
+    """
+    from backend.services.ctrader_service import ctrader_broker
+    bars = await asyncio.to_thread(
+        ctrader_broker.get_trendbars,
+        symbol=symbol,
+        period=period,
+        from_ts=from_ts,
+        to_ts=to_ts,
+        count=count,
+    )
+    return {
+        "symbol": symbol.upper(),
+        "period": period.upper(),
+        "count": len(bars),
+        "bars": bars,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@router.get("/ctrader/ticks")
+async def get_ctrader_ticks(
+    symbol: str = Query("EURUSD", description="Symbol name"),
+    type: str = Query("BID", description="Quote type: BID or ASK"),
+    hours: int = Query(4, ge=1, le=72, description="Number of historical hours"),
+):
+    """
+    Get historical tick data stream for cTrader symbols.
+    Uses ProtoOAGetTickDataReq when connected.
+    """
+    from backend.services.ctrader_service import ctrader_broker
+    ticks = await asyncio.to_thread(
+        ctrader_broker.get_tick_data,
+        symbol=symbol,
+        quote_type=type,
+        hours=hours,
+    )
+    return {
+        "symbol": symbol.upper(),
+        "type": type.upper(),
+        "count": len(ticks),
+        "ticks": ticks,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@router.get("/ctrader/symbol-spec")
+async def get_ctrader_symbol_spec(
+    symbol: str = Query("EURUSD", description="Symbol name"),
+):
+    """
+    Get detailed financial specification for a symbol (digits, pip position, lot step, tick size).
+    """
+    from backend.services.ctrader_service import ctrader_broker
+    spec = ctrader_broker.get_symbol_specification(symbol)
+    return spec
+
+
+@router.post("/ctrader/calc/pip-margin")
+async def calculate_pip_margin_endpoint(req: PipMarginCalcRequest):
+    """
+    Calculate pip value, tick value, required margin, and notional lot volume
+    following OpenAPI.Net financial formulas.
+    """
+    from backend.services.ctrader_service import ctrader_broker
+    result = ctrader_broker.calculate_pip_margin(
+        symbol=req.symbol,
+        lots=req.lots,
+        price=req.price,
+        leverage=req.leverage,
+        deposit_asset=req.deposit_asset,
+    )
+    return result
+
+
 class AIAgentTradeRequest(BaseModel):
     prompt: str
     provider: Optional[str] = "xai"

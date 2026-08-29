@@ -38,7 +38,8 @@ import {
   LineChart as LineChartIcon,
   RefreshCw,
   Newspaper,
-  FlaskConical
+  FlaskConical,
+  Timer
 } from 'lucide-react';
 import type { Node as FlowNode, Edge } from '@xyflow/react';
 import type { WorkflowNodeData } from './components/WorkflowBuilder/types';
@@ -77,6 +78,9 @@ const OpinionLayerView = lazy(() =>
 const OperationsPage = lazy(() =>
   import('./components/OperationsPage').then((m) => ({ default: m.OperationsPage })),
 );
+const OpenApiChartView = lazy(() => import('./components/OpenApiChartView'));
+const OpenApiSamplesView = lazy(() => import('./components/OpenApiSamplesView'));
+const StrategyTimingControlView = lazy(() => import('./components/StrategyTimingControlView'));
 const EquityCurveChart = lazy(() => import('./components/EquityCurveChart'));
 // Agent Builder is the only consumer of @xyflow/react (~173 kB); keep it out
 // of the entry chunk.
@@ -1018,13 +1022,15 @@ export default function App() {
 
         <nav className="flex-1 px-4 space-y-1">
           <NavItem icon={<LayoutDashboard size={20} />} label="Dashboard" active={mode === 'manual'} onClick={() => setMode('manual')} />
+          <NavItem icon={<Timer size={20} />} label="Strategy & Timing" active={mode === 'timing-control'} onClick={() => setMode('timing-control')} />
+          <NavItem icon={<LineChartIcon size={20} />} label="OpenAPI Charts" active={mode === 'charts'} onClick={() => setMode('charts')} />
+          <NavItem icon={<FlaskConical size={20} />} label="OpenAPI Lab" active={mode === 'openapi-lab'} onClick={() => setMode('openapi-lab')} />
+          <NavItem icon={<Activity size={20} />} label="Markets" active={mode === 'markets'} onClick={() => setMode('markets')} />
           <NavItem icon={<Cpu size={20} />} label="Agent Builder" active={mode === 'ai'} onClick={() => setMode('ai')} />
           <NavItem icon={<Zap size={20} />} label="Signals" active={mode === 'signals'} badge={loopRunning ? 'LIVE' : undefined} onClick={() => setMode('signals')} />
           <NavItem icon={<BrainCircuit size={20} />} label="Opinion Layer" active={mode === 'opinion'} onClick={() => setMode('opinion')} />
           <NavItem icon={<History size={20} />} label="Backtesting" active={mode === 'backtest'} onClick={() => setMode('backtest')} />
-          <NavItem icon={<Activity size={20} />} label="Markets" active={mode === 'markets'} onClick={() => setMode('markets')} />
           <NavItem icon={<PieChart size={20} />} label="Portfolio" active={mode === 'portfolio'} onClick={() => setMode('portfolio')} />
-          {/* <NavItem icon={<FlaskConical size={20} />} label="Paper Trading" active={mode === 'paper'} onClick={() => setMode('paper')} /> */}
           <NavItem icon={<Wallet size={20} />} label="Wallet" active={mode === 'wallet'} onClick={() => setMode('wallet')} />
           <div className="pt-2 mt-2 border-t border-zinc-800/50" />
           <NavItem icon={<Shield size={20} />} label="Trading Control" active={mode === 'operations'} onClick={() => setMode('operations')} />
@@ -1058,17 +1064,19 @@ export default function App() {
             </button>
             <div className="flex items-center gap-3">
               <h2 className="text-lg font-semibold">
-                {mode === 'manual' ? 'BTC / USDT' :
-                  mode === 'ai' ? 'AI Workflow Builder' :
-                    mode === 'backtest' ? 'Backtesting Engine' :
-                      mode === 'settings' ? 'System Settings' :
-                        mode === 'markets' ? 'Markets Overview' :
-                          mode === 'portfolio' ? 'Portfolio Performance' :
-//                             mode === 'paper' ? 'Paper Trading Lab' :
-                              mode === 'wallet' ? 'Wallet & Transfers' :
-                              mode === 'signals' ? 'AI Trading Signals' :
-                                mode === 'opinion' ? 'Opinion Layer' :
-                                mode === 'status' ? 'System Status' : ''}
+                {mode === 'manual' ? 'Live Trading Desk' :
+                  mode === 'timing-control' ? 'Strategy & Execution Timing Control' :
+                    mode === 'charts' ? 'Spotware OpenAPI Pro Charts' :
+                      mode === 'openapi-lab' ? 'OpenAPI Samples & Financial Lab' :
+                        mode === 'ai' ? 'AI Workflow Builder' :
+                          mode === 'backtest' ? 'Backtesting Engine' :
+                            mode === 'settings' ? 'System Settings' :
+                              mode === 'markets' ? 'Markets Overview' :
+                                mode === 'portfolio' ? 'Portfolio Performance' :
+                                  mode === 'wallet' ? 'Wallet & Transfers' :
+                                    mode === 'signals' ? 'AI Trading Signals' :
+                                      mode === 'opinion' ? 'Opinion Layer' :
+                                        mode === 'status' ? 'System Status' : ''}
               </h2>
               {mode === 'ai' && (
                 <button
@@ -1621,6 +1629,12 @@ export default function App() {
             >
               <SettingsView />
             </motion.div>
+          ) : mode === 'timing-control' ? (
+            <StrategyTimingControlView key="timing-control" />
+          ) : mode === 'charts' ? (
+            <OpenApiChartView key="openapi-charts" onQuickTrade={handleQuickTrade} />
+          ) : mode === 'openapi-lab' ? (
+            <OpenApiSamplesView key="openapi-lab" />
           ) : mode === 'portfolio' ? (
             <PortfolioView key="portfolio" />
           ) : mode === 'paper' ? (

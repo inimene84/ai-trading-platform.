@@ -53,12 +53,18 @@ POSITIVE_WORDS = {
     "jump", "jumps", "record", "high", "recover", "recovery", "boom",
     "growth", "profit", "profits", "strong", "positive", "upward", "up",
     "breakout", "outperform", "beat", "beats", "upgrade", "buy",
+    # Forex & macro
+    "hawkish", "tighten", "rate-hike", "surplus", "expansion", "easing",
+    "stimulus", "dovish-pivot", "resilient", "robust", "hiring",
 }
 NEGATIVE_WORDS = {
     "crash", "drop", "drops", "bearish", "loss", "losses", "fall", "falls",
     "plunge", "plunges", "sink", "sinks", "decline", "declines", "down",
     "fear", "risk", "warn", "warning", "sell", "downgrade", "weak",
     "negative", "low", "slump", "tumble", "tumbles", "panic", "collapse",
+    # Forex & macro
+    "dovish", "recession", "contraction", "default", "tariff", "sanctions",
+    "inflation", "deficit", "stagflation", "layoffs", "unemployment",
 }
 
 def _detect_sentiment(text: str) -> str:
@@ -73,10 +79,20 @@ def _detect_sentiment(text: str) -> str:
 
 # ─── RSS Feed ─────────────────────────────────────────────────────────────────
 RSS_FEEDS = [
+    # Crypto
     ("CoinDesk",       "https://feeds.feedburner.com/CoinDesk"),
     ("CoinTelegraph",  "https://cointelegraph.com/rss"),
     ("Reddit Crypto",  "https://www.reddit.com/r/CryptoCurrency/new/.rss"),
-    ("Yahoo Finance",  "https://feeds.finance.yahoo.com/rss/2.0/headline?s=BTC-USD,ETH-USD,SOL-USD&region=US&lang=en-US"),
+    # Forex & FX Markets
+    ("ForexLive",      "https://www.forexlive.com/feed/"),
+    ("FXStreet",       "https://www.fxstreet.com/rss"),
+    ("DailyFX",        "https://www.dailyfx.com/feeds/all"),
+    ("Reddit Forex",   "https://www.reddit.com/r/Forex/new/.rss"),
+    # Financial Services & Macro
+    ("Yahoo Finance",  "https://feeds.finance.yahoo.com/rss/2.0/headline?s=BTC-USD,ETH-USD,EURUSD=X,GBPUSD=X,USDJPY=X,GC=F&region=US&lang=en-US"),
+    ("Reuters Business","https://feeds.reuters.com/reuters/businessNews"),
+    ("MarketWatch",    "https://feeds.marketwatch.com/marketwatch/topstories/"),
+    ("Investing.com",  "https://www.investing.com/rss/news.rss"),
 ]
 
 async def _fetch_feed(source: str, url: str) -> list:
@@ -288,8 +304,17 @@ async def get_market_sentiment():
     if cached:
         return cached
 
-    SYMBOLS = ["BTC-USD", "ETH-USD", "SOL-USD", "BNB-USD", "XRP-USD",
-               "DOGE-USD", "ADA-USD", "AVAX-USD", "LINK-USD"]
+    # Crypto + Forex majors + Commodities
+    SYMBOLS = [
+        # Crypto
+        "BTC-USD", "ETH-USD", "SOL-USD", "BNB-USD", "XRP-USD",
+        "DOGE-USD", "ADA-USD", "AVAX-USD", "LINK-USD",
+        # Forex (yfinance uses =X suffix)
+        "EURUSD=X", "GBPUSD=X", "USDJPY=X", "AUDUSD=X",
+        "USDCAD=X", "USDCHF=X", "NZDUSD=X",
+        # Commodities
+        "GC=F",  # Gold futures
+    ]
     top_movers = []
     positive_count = 0
     negative_count = 0
@@ -312,10 +337,26 @@ async def get_market_sentiment():
                     if prev_close == 0:
                         continue
                     pct = ((price - prev_close) / prev_close) * 100
+                    # Clean up display name
+                    display_sym = sym
+                    asset_class = "crypto"
+                    if sym.endswith("=X"):
+                        display_sym = sym.replace("=X", "")
+                        # Format as EUR/USD style
+                        if len(display_sym) == 6:
+                            display_sym = display_sym[:3] + "/" + display_sym[3:]
+                        asset_class = "forex"
+                    elif sym.endswith("=F"):
+                        display_sym = {"GC=F": "GOLD"}.get(sym, sym.replace("=F", ""))
+                        asset_class = "commodity"
+                    else:
+                        display_sym = sym.replace("-USD", "")
+                        asset_class = "crypto"
                     results.append({
-                        "symbol": sym.replace("-USD", ""),
+                        "symbol": display_sym,
                         "price":  round(price, 4),
                         "change_pct": round(pct, 2),
+                        "asset_class": asset_class,
                     })
                 except Exception:
                     pass

@@ -15,6 +15,7 @@ from backend.routes.historical import router as historical_router
 from backend.routes.telemetry import router as telemetry_router
 from backend.routes.backtest import router as backtest_router
 from backend.routes.sentry import router as sentry_router
+from backend.routes.signals import router as signals_router
 
 # Main API router
 api_router = APIRouter()
@@ -36,3 +37,4 @@ api_router.include_router(historical_router)
 api_router.include_router(telemetry_router)
 api_router.include_router(backtest_router, prefix="/api/backtest", tags=["backtest"])
 api_router.include_router(sentry_router, tags=["sentry"])
+api_router.include_router(signals_router, tags=["signals"])
