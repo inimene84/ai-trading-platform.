@@ -366,10 +366,10 @@ async def get_status():
     if os.getenv('KIE_API_KEY') and os.getenv('KIE_API_KEY') != 'your_kie_api_key_here':
         llm_providers.append({
             'name': 'Kie.ai',
-            'model': os.getenv('KIE_MODEL', 'claude-sonnet-4-6'),
+            'model': os.getenv('KIE_MODEL', 'gpt-5-6-terra'),
             'status': 'configured',
             'type': 'cloud',
-            'role': 'primary via LiteLLM',
+            'role': 'fallback / direct via Kie.ai',
         })
     if os.getenv('ANTHROPIC_API_KEY') and os.getenv('ANTHROPIC_API_KEY') != 'your_anthropic_api_key_here':
         llm_providers.append({'name': 'Anthropic', 'model': 'claude', 'status': 'configured', 'type': 'cloud'})

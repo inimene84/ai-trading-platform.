@@ -55,9 +55,9 @@ _OMNIROUTE_BASE_URL = os.getenv("OMNIROUTE_BASE_URL", "https://omni.allikas.onli
 _OMNIROUTE_DEFAULT_MODEL = os.getenv("OMNIROUTE_DEFAULT_MODEL", "auto/smart")
 
 # Kie.ai direct model IDs (fallback)
-_KIE_SONNET_DIRECT_MODEL = os.getenv("KIE_MODEL", "claude-sonnet-4-6")
-_KIE_OPUS_DIRECT_MODEL = os.getenv("KIE_OPUS_MODEL", "claude-opus-4-6")
-_KIE_BASE_URL = os.getenv("KIE_BASE_URL", "https://api.kie.ai/claude")
+_KIE_MODEL = os.getenv("KIE_MODEL", "gpt-5-6-terra")
+_KIE_OPUS_DIRECT_MODEL = os.getenv("KIE_OPUS_MODEL", "gpt-5-6-terra")
+_KIE_BASE_URL = os.getenv("KIE_BASE_URL", "https://api.kie.ai")
 _LITELLM_BASE_URL = os.getenv("LITELLM_BASE_URL", os.getenv("PERSONA_LLM_BASE_URL", "http://litellm:4000/v1"))
 
 _DEFAULT_REGISTRY: dict[str, ModelConfig] = {
@@ -107,9 +107,9 @@ _DEFAULT_REGISTRY: dict[str, ModelConfig] = {
     ),
 
     # ── Fallback chain entries (used if OmniRoute unavailable) ────────────────
-    # KieAI fallback (direct Kie.ai Claude Sonnet 4.6)
+    # KieAI fallback (direct Kie.ai GPT-5.6 Terra / Luna)
     "fallback_kie": ModelConfig(
-        name=_KIE_SONNET_DIRECT_MODEL,
+        name=_KIE_MODEL,
         provider="kie",
         tier="balanced",
         base_url=_KIE_BASE_URL,
@@ -357,24 +357,106 @@ async def _invoke_provider(
                 raise httpx.HTTPStatusError(f"HTTP {resp.status_code}: {resp.text[:200]}", request=resp.request, response=resp)
             return resp.json()["choices"][0]["message"]["content"]
             
-    elif prov in ("kie", "anthropic"):
+    elif prov == "kie":
+        # Kie.ai supports Claude (/claude/v1/messages) and GPT/ChatGPT models (/codex/v1/responses)
+        is_claude = "claude" in cfg.name.lower()
+        if is_claude:
+            url = f"{cfg.base_url.rstrip('/')}/v1/messages" if "/claude" in (cfg.base_url or "") else "https://api.kie.ai/claude/v1/messages"
+            headers = {
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}",
+            }
+            messages = [{"role": "user", "content": prompt}]
+            payload = {
+                "model": cfg.name,
+                "messages": messages,
+                "max_tokens": tokens,
+            }
+            if system:
+                payload["system"] = [
+                    {"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}
+                ]
+            async with httpx.AsyncClient(timeout=45.0) as client:
+                for attempt_tokens in (tokens, tokens * 2):
+                    payload["max_tokens"] = attempt_tokens
+                    resp = await client.post(url, headers=headers, json=payload)
+                    if not resp.is_success:
+                        raise httpx.HTTPStatusError(f"HTTP {resp.status_code}: {resp.text[:200]}", request=resp.request, response=resp)
+                    data = resp.json()
+                    text = ""
+                    for block in data.get("content", []):
+                        if block.get("type") == "text":
+                            text += block.get("text", "")
+                    if response_json:
+                        stripped = text.lstrip()
+                        if not stripped.startswith("{") and not stripped.startswith("```"):
+                            text = "{" + text
+                    out_tokens = (data.get("usage") or {}).get("output_tokens", 0)
+                    truncated = data.get("stop_reason") == "max_tokens" or out_tokens >= attempt_tokens
+                    if truncated and response_json:
+                        logger.warning(
+                            f"LLM output truncated at max_tokens={attempt_tokens} for {cfg.name}; retrying with larger budget"
+                        )
+                        continue
+                    return text
+                raise ValueError(f"Output still truncated at max_tokens={tokens * 2} for {cfg.name}")
+        else:
+            # GPT / ChatGPT / Codex models on Kie.ai (e.g. gpt-5-6-terra, gpt-5-6-luna)
+            url = f"{cfg.base_url.rstrip('/')}/codex/v1/responses" if cfg.base_url and "api.kie.ai" in cfg.base_url else "https://api.kie.ai/codex/v1/responses"
+            headers = {
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}",
+            }
+            input_msgs = []
+            if system:
+                input_msgs.append({
+                    "role": "system",
+                    "content": [{"type": "text", "text": system}]
+                })
+            input_msgs.append({
+                "role": "user",
+                "content": [{"type": "text", "text": prompt}]
+            })
+            payload = {
+                "model": cfg.name,
+                "stream": False,
+                "input": input_msgs,
+            }
+            async with httpx.AsyncClient(timeout=45.0) as client:
+                resp = await client.post(url, headers=headers, json=payload)
+                if not resp.is_success:
+                    raise httpx.HTTPStatusError(f"HTTP {resp.status_code}: {resp.text[:200]}", request=resp.request, response=resp)
+                data = resp.json()
+                text = ""
+                if isinstance(data.get("output"), list):
+                    for item in data["output"]:
+                        for part in item.get("content", []):
+                            if isinstance(part, dict) and part.get("type") in ("text", "output_text"):
+                                text += part.get("text", "")
+                elif isinstance(data.get("choices"), list) and data["choices"]:
+                    choice = data["choices"][0]
+                    msg = choice.get("message") or {}
+                    text = msg.get("content", "") if isinstance(msg, dict) else str(choice.get("text", ""))
+                elif "data" in data and isinstance(data["data"], dict):
+                    text = data["data"].get("content", "") or data["data"].get("text", "")
+                elif "text" in data and isinstance(data["text"], str):
+                    text = data["text"]
+                elif "response" in data and isinstance(data["response"], str):
+                    text = data["response"]
+                if not text and isinstance(data, dict):
+                    text = json.dumps(data)
+                return text
+
+    elif prov == "anthropic":
         # Anthropic messages format
-        is_kie = prov == "kie"
-        url = "https://api.kie.ai/claude/v1/messages" if is_kie else "https://api.anthropic.com/v1/messages"
-        
+        url = "https://api.anthropic.com/v1/messages"
         headers = {
             "Content-Type": "application/json",
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
         }
-        if is_kie:
-            headers["Authorization"] = f"Bearer {api_key}"
-        else:
-            headers["x-api-key"] = api_key
-            headers["anthropic-version"] = "2023-06-01"
-            
         messages = [{"role": "user", "content": prompt}]
-        # Anthropic API has no JSON mode; prefilling the assistant turn with "{"
-        # forces raw JSON output (no markdown fences) and saves output tokens.
-        if response_json and not is_kie:
+        if response_json:
             messages.append({"role": "assistant", "content": "{"})
         payload = {
             "model": cfg.name,
@@ -382,17 +464,11 @@ async def _invoke_provider(
             "max_tokens": tokens,
         }
         if system:
-            # Prompt caching: static system prompts (personas, alert templates)
-            # are marked cacheable so repeated calls only pay ~10% for cached
-            # input tokens. Ignored harmlessly when under the model's minimum
-            # cacheable length.
             payload["system"] = [
                 {"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}
             ]
             
         async with httpx.AsyncClient(timeout=45.0) as client:
-            # If the model hits the token cap mid-JSON the output is unusable,
-            # so retry once with double the budget before falling through.
             for attempt_tokens in (tokens, tokens * 2):
                 payload["max_tokens"] = attempt_tokens
                 resp = await client.post(url, headers=headers, json=payload)
@@ -404,14 +480,9 @@ async def _invoke_provider(
                     if block.get("type") == "text":
                         text += block.get("text", "")
                 if response_json:
-                    # Kie's proxy ignores the assistant prefill and returns the
-                    # full response; only re-attach "{" when the model actually
-                    # continued from the prefilled brace.
                     stripped = text.lstrip()
                     if not stripped.startswith("{") and not stripped.startswith("```"):
                         text = "{" + text
-                # Kie's proxy reports end_turn even when the cap is hit, so also
-                # treat an output that consumed the full budget as truncated.
                 out_tokens = (data.get("usage") or {}).get("output_tokens", 0)
                 truncated = data.get("stop_reason") == "max_tokens" or out_tokens >= attempt_tokens
                 if truncated and response_json:
@@ -499,7 +570,7 @@ async def call_llm_resilient(
     chain = [
         # ── PRIMARY: OmniRoute (auto-selects best available model / free tier) ──
         ("Primary (OmniRoute)", primary_cfg),
-        # ── FALLBACK 1: KieAI direct (Kie.ai Claude Sonnet 4.6) ──────────────
+        # ── FALLBACK 1: KieAI direct (Kie.ai GPT-5.6 Terra / Luna) ──────────────
         ("Fallback 1 (KieAI)", _DEFAULT_REGISTRY["fallback_kie"]),
         # ── FALLBACK 2: OpenRouter multi-model gateway ────────────────────────
         ("Fallback 2 (OpenRouter)", _DEFAULT_REGISTRY["fallback_1"]),

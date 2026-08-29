@@ -59,9 +59,9 @@ class AIAnalysisService:
         self.litellm_base_url = deep_cfg.base_url or "http://litellm:4000/v1"
         self.litellm_api_key = get_api_key(deep_cfg)
 
-        # Fallback: direct Kie.ai Claude proxy
+        # Fallback: direct Kie.ai proxy
         self.kieai_api_key = _env("KIE_API_KEY", "")
-        self.kieai_model = _env("KIE_MODEL", "claude-sonnet-4-6")
+        self.kieai_model = _env("KIE_MODEL", "gpt-5-6-terra")
 
         # Fallback: xAI
         self.xai_model = _env("XAI_MODEL", "grok-4-1-fast-reasoning")
@@ -74,9 +74,9 @@ class AIAnalysisService:
         self.gemini_api_key = _env("GOOGLE_API_KEY", "")
         self.gemini_model = _env("GEMINI_MODEL", "gemini-2.5-flash")
 
-        # Legacy aliases — primary decision model is Kie Sonnet via LiteLLM
+        # Legacy aliases — primary decision model
         self.expensive_model = self.litellm_model
-        self.expensive_provider = "Kie.ai (LiteLLM)"
+        self.expensive_provider = "OmniRoute / Kie.ai"
         self.expensive_api_key = self.litellm_api_key
         self.expensive_base_url = self.litellm_base_url
 
@@ -113,9 +113,9 @@ class AIAnalysisService:
             },
             "decision_model": {
                 "model": self.litellm_model,
-                "provider": "Kie.ai (LiteLLM → claude-sonnet-4-6)",
+                "provider": "OmniRoute / Kie.ai",
                 "url": self.litellm_base_url,
-                "role": "AI Trading Decision via Kie.ai Sonnet 4.6",
+                "role": "AI Trading Decision",
                 "cost": "paid",
                 "configured": self._litellm_configured(),
             },
