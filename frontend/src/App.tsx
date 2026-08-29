@@ -102,7 +102,7 @@ import { apiService } from './services/apiService';
 import { workflowEngine } from './services/workflowEngine';
 
 // --- Types ---
-type AppMode = 'manual' | 'ai' | 'backtest' | 'settings' | 'markets' | 'portfolio' | 'wallet' | 'signals' | 'status' | 'opinion' | 'operations' | 'paper';
+type AppMode = 'manual' | 'ai' | 'backtest' | 'settings' | 'markets' | 'portfolio' | 'wallet' | 'signals' | 'status' | 'opinion' | 'operations' | 'paper' | 'timing-control' | 'charts' | 'openapi-lab';
 
 
 // --- Mock Data ---

@@ -174,3 +174,14 @@ def test_execute_candidate_endpoint_dry_run(client):
     data = res.json()
     assert data["success"] is True
     assert data["candidate_id"] == sig_id
+
+
+def test_signals_routes_dual_mounted_for_nginx_rewrite(client):
+    """Dashboard hits /api/backend/signals/* which nginx rewrites to /signals/*."""
+    get_res = client.get("/signals/timing-config")
+    assert get_res.status_code == 200
+    assert "config" in get_res.json()
+
+    api_res = client.get("/api/signals/timing-config")
+    assert api_res.status_code == 200
+    assert api_res.json()["config"]["pre_event_window_min"] == get_res.json()["config"]["pre_event_window_min"]

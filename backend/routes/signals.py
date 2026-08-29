@@ -17,7 +17,9 @@ from backend.services.signal_candidate_engine import (
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/signals", tags=["signals"])
+# Dual-mounted at /signals and /api/signals so nginx /api/backend rewrite
+# (dashboard) and n8n/direct /api/signals callers both resolve.
+router = APIRouter(prefix="/signals", tags=["signals"])
 
 
 # ── Request / Response Models ────────────────────────────────────────────────

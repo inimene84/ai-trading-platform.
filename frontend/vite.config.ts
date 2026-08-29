@@ -65,6 +65,10 @@ export default defineConfig(({mode}) => {
           target: env.BACKEND_URL || 'http://localhost:8000',
           changeOrigin: true,
         },
+        '/api/signals': {
+          target: env.BACKEND_URL || 'http://localhost:8000',
+          changeOrigin: true,
+        },
       },
     },
   };
