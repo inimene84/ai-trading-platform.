@@ -257,8 +257,9 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="AI Hedge Fund API", description="Backend API for AI Hedge Fund", version="0.1.0", lifespan=lifespan)
 
-# Initialize database tables (this is safe to run multiple times)
-Base.metadata.create_all(bind=engine)
+# Initialize database tables and migrations (safe to run multiple times)
+from backend.database.connection import init_db_schema
+init_db_schema()
 
 # Configure CORS
 _cors_env = os.getenv("CORS_ALLOWED_ORIGINS", "").strip()

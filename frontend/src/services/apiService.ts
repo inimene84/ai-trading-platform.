@@ -461,6 +461,131 @@ export const apiService = {
     });
   },
 
+  // ── Multi-Broker & Open API ────────────────────────────────────────────────
+  async getBrokers() {
+    return request('/trading/brokers');
+  },
+
+  async getMarkets() {
+    return request('/trading/markets');
+  },
+
+  async placeSmartOrder(order: {
+    symbol: string;
+    direction: 'BUY' | 'SELL';
+    quantity: number;
+    order_type?: 'MARKET' | 'LIMIT';
+    price?: number;
+    stop_loss?: number;
+    take_profit?: number;
+    broker_override?: 'binance_futures' | 'ctrader';
+  }) {
+    return request('/trading/order/smart', {
+      method: 'POST',
+      body: JSON.stringify(order),
+    });
+  },
+
+  async getCTraderTokens() {
+    return request('/trading/ctrader/tokens');
+  },
+
+  async saveCTraderTokens(tokens: {
+    account_id: number;
+    client_id: string;
+    client_secret?: string;
+    access_token: string;
+    refresh_token: string;
+    expires_in?: number;
+  }) {
+    return request('/trading/ctrader/tokens', {
+      method: 'POST',
+      body: JSON.stringify(tokens),
+    });
+  },
+
+  async enableCTraderLive() {
+    return request('/trading/ctrader/enable', { method: 'POST' });
+  },
+
+  async disableCTraderLive() {
+    return request('/trading/ctrader/disable', { method: 'POST' });
+  },
+
+  async getCTraderTrendbars(symbol = 'EURUSD', period = 'M5', count = 120, from_ts?: number, to_ts?: number) {
+    const params = new URLSearchParams({ symbol, period, count: count.toString() });
+    if (from_ts) params.append('from_ts', from_ts.toString());
+    if (to_ts) params.append('to_ts', to_ts.toString());
+    return request(`/trading/ctrader/trendbars?${params.toString()}`);
+  },
+
+  async getCTraderTicks(symbol = 'EURUSD', type = 'BID', hours = 4) {
+    const params = new URLSearchParams({ symbol, type, hours: hours.toString() });
+    return request(`/trading/ctrader/ticks?${params.toString()}`);
+  },
+
+  async getCTraderSymbolSpec(symbol = 'EURUSD') {
+    const params = new URLSearchParams({ symbol });
+    return request(`/trading/ctrader/symbol-spec?${params.toString()}`);
+  },
+
+  async calculatePipMargin(params: {
+    symbol: string;
+    lots: number;
+    price?: number;
+    leverage?: number;
+    deposit_asset?: string;
+  }) {
+    return request('/trading/ctrader/calc/pip-margin', {
+      method: 'POST',
+      body: JSON.stringify(params),
+    });
+  },
+
+  // ── Signals & Timing Control ───────────────────────────────────────────────
+  async scanMarkets(universe?: string[], timeframe = 'M5') {
+    return request('/signals/scan-markets', {
+      method: 'POST',
+      body: JSON.stringify({ universe, timeframe }),
+    });
+  },
+
+  async scanNewsSignals(lookahead_minutes = 60) {
+    return request('/signals/scan-news', {
+      method: 'POST',
+      body: JSON.stringify({ lookahead_minutes }),
+    });
+  },
+
+  async getSignalsCandidates(status?: string, broker?: string) {
+    const params = new URLSearchParams();
+    if (status) params.append('status', status);
+    if (broker) params.append('broker', broker);
+    return request(`/signals/candidates?${params.toString()}`);
+  },
+
+  async getReadySignals() {
+    return request('/signals/ready-for-execution');
+  },
+
+  async executeSignalCandidate(candidate_id: string, force = false) {
+    return request('/signals/execute-candidate', {
+      method: 'POST',
+      body: JSON.stringify({ candidate_id, force }),
+    });
+  },
+
+  async getTimingConfig() {
+    return request('/signals/timing-config');
+  },
+
+  async updateTimingConfig(config: any) {
+    return request('/signals/timing-config', {
+      method: 'POST',
+      body: JSON.stringify(config),
+    });
+  },
+
   // ── AI Agent ──────────────────────────────────────────────────────────────────────────────
   async aiAgentTrade(prompt: string, provider = 'xai', model = 'grok-beta') {
     return request('/trading/ai/agent-trade', {

@@ -153,6 +153,26 @@ class Trade(Base):
     binance_order_id = Column(String(50), nullable=True, index=True)
     exchange = Column(String(20), nullable=True, default='binance_futures')
     filled_price = Column(Float, nullable=True)
+    broker = Column(String(30), nullable=True, default='binance_futures', index=True)
+    broker_order_id = Column(String(100), nullable=True, index=True)
+    broker_position_id = Column(String(100), nullable=True, index=True)
+    broker_account_id = Column(String(50), nullable=True)
+    broker_metadata = Column(JSON, nullable=True)
+
+
+class CTraderToken(Base):
+    """Persistent storage for rotating cTrader OAuth tokens."""
+    __tablename__ = "ctrader_tokens"
+
+    id = Column(Integer, primary_key=True, index=True)
+    account_id = Column(String(50), unique=True, nullable=False, index=True)
+    client_id = Column(String(100), nullable=False)
+    client_secret = Column(Text, nullable=True)
+    access_token = Column(Text, nullable=False)
+    refresh_token = Column(Text, nullable=False)
+    expires_in = Column(Integer, default=2592000)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
 
 class PortfolioSnapshot(Base):

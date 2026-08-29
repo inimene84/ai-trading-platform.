@@ -1,0 +1,116 @@
+{
+  "name": "02 - QuantumTrade News & Macro Scanner (1m Cron)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 1
+            }
+          ]
+        }
+      },
+      "id": "1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c01",
+      "name": "Schedule Trigger (1m)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        240,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://backend:8000/api/signals/scan-news",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"lookahead_minutes\": 60\n}",
+        "options": {}
+      },
+      "id": "2b3c4d5e-6f7a-8b9c-0d1e-2f3a4b5c6d02",
+      "name": "HTTP: Scan Macro Events & News",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        480,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{ $json.candidates_count }}",
+              "operation": "larger",
+              "value2": 0
+            }
+          ]
+        }
+      },
+      "id": "3c4d5e6f-7a8b-9c0d-1e2f-3a4b5c6d7e03",
+      "name": "News Candidates Armed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        720,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "4d5e6f7a-8b9c-0d1e-2f3a-4b5c6d7e8f04",
+      "name": "Queue Armed Candidates",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        960,
+        220
+      ]
+    }
+  ],
+  "connections": {
+    "Schedule Trigger (1m)": {
+      "main": [
+        [
+          {
+            "node": "HTTP: Scan Macro Events & News",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP: Scan Macro Events & News": {
+      "main": [
+        [
+          {
+            "node": "News Candidates Armed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "News Candidates Armed?": {
+      "main": [
+        [
+          {
+            "node": "Queue Armed Candidates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

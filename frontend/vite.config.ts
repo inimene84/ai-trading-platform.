@@ -8,18 +8,26 @@ export default defineConfig(({mode}) => {
   return {
     plugins: [react(), tailwindcss()],
     build: {
-      rolldownOptions: {
+      rollupOptions: {
         output: {
-          // Split long-lived vendor code out of the entry chunk so a change to
-          // app code doesn't invalidate the whole download for returning users.
-          advancedChunks: {
-            groups: [
-              { name: 'vendor-react', test: /node_modules[\\/](react|react-dom|scheduler)[\\/]/ },
-              { name: 'vendor-flow', test: /node_modules[\\/]@xyflow[\\/]/ },
-              { name: 'vendor-motion', test: /node_modules[\\/]motion/ },
-              { name: 'vendor-icons', test: /node_modules[\\/]lucide-react[\\/]/ },
-              { name: 'vendor-genai', test: /node_modules[\\/]@google[\\/]genai[\\/]/ },
-            ],
+          manualChunks(id) {
+            if (id.includes('node_modules')) {
+              if (id.includes('react') || id.includes('react-dom') || id.includes('scheduler')) {
+                return 'vendor-react';
+              }
+              if (id.includes('@xyflow')) {
+                return 'vendor-flow';
+              }
+              if (id.includes('motion')) {
+                return 'vendor-motion';
+              }
+              if (id.includes('lucide-react')) {
+                return 'vendor-icons';
+              }
+              if (id.includes('@google/genai')) {
+                return 'vendor-genai';
+              }
+            }
           },
         },
       },

@@ -80,7 +80,8 @@ def test_to_futures_symbol(symbol, expected):
     ("ABCXYZ", 1.23456, 1.235),        # default tick 0.001
 ])
 def test_round_price(symbol, price, expected):
-    assert _broker()._round_price(symbol, price) == expected
+    with patch.dict("backend.services.binance_futures_service.PRICE_PRECISION", {}, clear=True):
+        assert _broker()._round_price(symbol, price) == expected
 
 
 # --------------------------------------------------------------------------- #

@@ -101,7 +101,7 @@ export default function WorkflowBuilder({
   );
   const onConnect = useCallback(
     (params: Connection) =>
-      setEdges((eds) => addEdge({ ...params, animated: true, style: { stroke: '#10b981' } }, eds)),
+      setEdges((eds) => addEdge({ ...params, animated: true, style: { stroke: '#10b981' } } as any, eds)),
     [setEdges]
   );
 
