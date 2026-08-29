@@ -1612,6 +1612,43 @@ class BinanceFuturesService:
                 'message': str(new_error),
             }
 
+    @property
+    def is_connected(self) -> bool:
+        """Check if Binance client is initialized and accessible."""
+        return self._client is not None or self.dry_run
+
+    def connect(self) -> bool:
+        """Initialize client connection to Binance Futures."""
+        try:
+            client = self._get_client()
+            return client is not None
+        except Exception as e:
+            logger.error(f"BinanceFutures connect error: {e}")
+            return False
+
+    def disconnect(self) -> None:
+        """Clear client connection."""
+        self._client = None
+
+    def status(self) -> dict:
+        """Return status dictionary for Binance Futures."""
+        balance = self.get_balance()
+        return {
+            "connected": self.is_connected,
+            "dry_run": self.dry_run,
+            "broker": "binance_futures",
+            "balance": balance.get("balance", 0.0),
+            "equity": balance.get("equity", 0.0),
+            "margin": balance.get("margin_used", 0.0),
+            "open_positions": len(self.get_positions()),
+        }
+
+    def close_position(self, position_id: str | int = "", symbol: Optional[str] = None) -> dict:
+        """Close an open position on Binance Futures by placing a market close order."""
+        if not symbol:
+            return {"status": "error", "message": "Symbol required to close Binance position"}
+        return self.place_order(symbol=symbol, direction="SELL", action="close", quantity=None)
+
     def cancel_order(self, order_id: str, symbol: Optional[str] = None) -> dict:
         try:
             client = self._get_client()

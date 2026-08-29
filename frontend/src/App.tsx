@@ -38,7 +38,8 @@ import {
   LineChart as LineChartIcon,
   RefreshCw,
   Newspaper,
-  FlaskConical
+  FlaskConical,
+  Timer
 } from 'lucide-react';
 import type { Node as FlowNode, Edge } from '@xyflow/react';
 import type { WorkflowNodeData } from './components/WorkflowBuilder/types';
@@ -77,6 +78,9 @@ const OpinionLayerView = lazy(() =>
 const OperationsPage = lazy(() =>
   import('./components/OperationsPage').then((m) => ({ default: m.OperationsPage })),
 );
+const OpenApiChartView = lazy(() => import('./components/OpenApiChartView'));
+const OpenApiSamplesView = lazy(() => import('./components/OpenApiSamplesView'));
+const StrategyTimingControlView = lazy(() => import('./components/StrategyTimingControlView'));
 const EquityCurveChart = lazy(() => import('./components/EquityCurveChart'));
 // Agent Builder is the only consumer of @xyflow/react (~173 kB); keep it out
 // of the entry chunk.
@@ -98,7 +102,7 @@ import { apiService } from './services/apiService';
 import { workflowEngine } from './services/workflowEngine';
 
 // --- Types ---
-type AppMode = 'manual' | 'ai' | 'backtest' | 'settings' | 'markets' | 'portfolio' | 'wallet' | 'signals' | 'status' | 'opinion' | 'operations' | 'paper';
+type AppMode = 'manual' | 'ai' | 'backtest' | 'settings' | 'markets' | 'portfolio' | 'wallet' | 'signals' | 'status' | 'opinion' | 'operations' | 'paper' | 'timing-control' | 'charts' | 'openapi-lab';
 
 
 // --- Mock Data ---
@@ -374,14 +378,15 @@ const GeminiChat = ({ isOpen, onClose, messages, onSendMessage, isLoading }: Gem
           initial={{ opacity: 0, y: 20, scale: 0.95 }}
           animate={{ opacity: 1, y: 0, scale: 1 }}
           exit={{ opacity: 0, y: 20, scale: 0.95 }}
-          className="fixed bottom-6 right-6 w-96 h-[500px] bg-[#141416] border border-zinc-800 rounded-2xl shadow-2xl flex flex-col z-50 overflow-hidden"
+          className="fixed inset-x-3 bottom-3 sm:inset-x-auto sm:right-6 sm:left-auto sm:bottom-6 w-auto sm:w-96 h-[min(500px,70vh)] bg-[#141416] border border-zinc-800 rounded-2xl shadow-2xl flex flex-col z-50 overflow-hidden"
         >
           <div className="p-4 border-b border-zinc-800 flex items-center justify-between bg-emerald-500/5">
             <div className="flex items-center gap-2">
               <div className="p-1.5 bg-emerald-500/20 rounded-lg">
                 <Sparkles size={16} className="text-emerald-400" />
               </div>
-              <span className="font-bold text-sm">Gemini Assistant</span>
+              <span className="font-bold text-sm">Trading Assistant</span>
+              <span className="text-[9px] text-emerald-500/80 font-mono uppercase tracking-wider hidden sm:inline">OmniRoute</span>
             </div>
             <button onClick={onClose} className="text-zinc-500 hover:text-white transition-colors">
               <X size={18} />
@@ -494,6 +499,7 @@ export default function App() {
   const [recentTrades, setRecentTrades] = useState<any[]>([]);
   const [botTrades, setBotTrades] = useState<any[]>([]);
   const [portfolioBalance, setPortfolioBalance] = useState(0.00);
+  const [systemStatus, setSystemStatus] = useState<any>(null);
 
   // Workflow Execution State
   const [isExecutingFlow, setIsExecutingFlow] = useState(false);
@@ -514,6 +520,7 @@ export default function App() {
     const checkBackend = async () => {
       try {
         const st = await apiService.getStatus();
+        setSystemStatus(st);
         setBackendConnected(true);
         setDryRun(st.dry_run);
         const ls = await apiService.getLoopStatus().catch(() => null);
@@ -979,7 +986,7 @@ export default function App() {
   };
 
   return (
-    <div className="flex h-screen bg-[#0A0A0B] text-zinc-100 overflow-hidden font-sans">
+    <div className="flex h-screen bg-[#0A0A0B] text-zinc-100 overflow-hidden font-sans app-root">
       {/* Sidebar */}
       <aside className={cn(
         "border-r border-zinc-800 flex flex-col items-center lg:items-stretch bg-[#0D0D0E] transition-all duration-300 ease-in-out relative z-30",
@@ -1018,13 +1025,15 @@ export default function App() {
 
         <nav className="flex-1 px-4 space-y-1">
           <NavItem icon={<LayoutDashboard size={20} />} label="Dashboard" active={mode === 'manual'} onClick={() => setMode('manual')} />
+          <NavItem icon={<Timer size={20} />} label="Strategy & Timing" active={mode === 'timing-control'} onClick={() => setMode('timing-control')} />
+          <NavItem icon={<LineChartIcon size={20} />} label="OpenAPI Charts" active={mode === 'charts'} onClick={() => setMode('charts')} />
+          <NavItem icon={<FlaskConical size={20} />} label="OpenAPI Lab" active={mode === 'openapi-lab'} onClick={() => setMode('openapi-lab')} />
+          <NavItem icon={<Activity size={20} />} label="Markets" active={mode === 'markets'} onClick={() => setMode('markets')} />
           <NavItem icon={<Cpu size={20} />} label="Agent Builder" active={mode === 'ai'} onClick={() => setMode('ai')} />
           <NavItem icon={<Zap size={20} />} label="Signals" active={mode === 'signals'} badge={loopRunning ? 'LIVE' : undefined} onClick={() => setMode('signals')} />
           <NavItem icon={<BrainCircuit size={20} />} label="Opinion Layer" active={mode === 'opinion'} onClick={() => setMode('opinion')} />
           <NavItem icon={<History size={20} />} label="Backtesting" active={mode === 'backtest'} onClick={() => setMode('backtest')} />
-          <NavItem icon={<Activity size={20} />} label="Markets" active={mode === 'markets'} onClick={() => setMode('markets')} />
           <NavItem icon={<PieChart size={20} />} label="Portfolio" active={mode === 'portfolio'} onClick={() => setMode('portfolio')} />
-          {/* <NavItem icon={<FlaskConical size={20} />} label="Paper Trading" active={mode === 'paper'} onClick={() => setMode('paper')} /> */}
           <NavItem icon={<Wallet size={20} />} label="Wallet" active={mode === 'wallet'} onClick={() => setMode('wallet')} />
           <div className="pt-2 mt-2 border-t border-zinc-800/50" />
           <NavItem icon={<Shield size={20} />} label="Trading Control" active={mode === 'operations'} onClick={() => setMode('operations')} />
@@ -1044,7 +1053,10 @@ export default function App() {
       </aside>
 
       {/* Main Content */}
-      <main className="flex-1 flex flex-col overflow-hidden relative" style={{ marginRight: newsPanel ? '384px' : '0', transition: 'margin-right 0.3s ease' }}>
+      <main className={cn(
+        "flex-1 flex flex-col overflow-hidden relative transition-[margin-right] duration-300",
+        newsPanel && "max-lg:mr-0 lg:mr-96"
+      )}>
         {/* Top Header */}
         <header className="h-16 border-b border-zinc-800 flex items-center justify-between px-6 bg-[#0D0D0E]/50 backdrop-blur-xl z-10">
           <div className="flex items-center gap-8">
@@ -1057,18 +1069,20 @@ export default function App() {
               <Layers size={20} className={cn(isSidebarHidden ? "text-emerald-400" : "")} />
             </button>
             <div className="flex items-center gap-3">
-              <h2 className="text-lg font-semibold">
-                {mode === 'manual' ? 'BTC / USDT' :
-                  mode === 'ai' ? 'AI Workflow Builder' :
-                    mode === 'backtest' ? 'Backtesting Engine' :
-                      mode === 'settings' ? 'System Settings' :
-                        mode === 'markets' ? 'Markets Overview' :
-                          mode === 'portfolio' ? 'Portfolio Performance' :
-//                             mode === 'paper' ? 'Paper Trading Lab' :
-                              mode === 'wallet' ? 'Wallet & Transfers' :
-                              mode === 'signals' ? 'AI Trading Signals' :
-                                mode === 'opinion' ? 'Opinion Layer' :
-                                mode === 'status' ? 'System Status' : ''}
+              <h2 className="text-base sm:text-lg font-semibold truncate max-w-[42vw] sm:max-w-none">
+                {mode === 'manual' ? 'Live Trading Desk' :
+                  mode === 'timing-control' ? 'Strategy & Execution Timing Control' :
+                    mode === 'charts' ? 'Spotware OpenAPI Pro Charts' :
+                      mode === 'openapi-lab' ? 'OpenAPI Samples & Financial Lab' :
+                        mode === 'ai' ? 'AI Workflow Builder' :
+                          mode === 'backtest' ? 'Backtesting Engine' :
+                            mode === 'settings' ? 'System Settings' :
+                              mode === 'markets' ? 'Markets Overview' :
+                                mode === 'portfolio' ? 'Portfolio Performance' :
+                                  mode === 'wallet' ? 'Wallet & Transfers' :
+                                    mode === 'signals' ? 'AI Trading Signals' :
+                                      mode === 'opinion' ? 'Opinion Layer' :
+                                        mode === 'status' ? 'System Status' : ''}
               </h2>
               {mode === 'ai' && (
                 <button
@@ -1099,33 +1113,33 @@ export default function App() {
           <div className="flex items-center gap-4">
             <div className={cn(
               "hidden xl:flex items-center gap-2 px-3 py-1.5 border rounded-lg transition-colors",
-              configService.getSecret('CTRADER_ACCESS_TOKEN')
-                ? "bg-indigo-500/10 border-indigo-500/30"
+              backendConnected
+                ? "bg-amber-500/10 border-amber-500/30"
                 : "bg-zinc-800/50 border-zinc-700/50"
             )}>
-              <Globe size={14} className={cn(configService.getSecret('CTRADER_ACCESS_TOKEN') ? "text-indigo-400" : "text-zinc-600")} />
-              <span className={cn("text-[10px] font-bold uppercase", configService.getSecret('CTRADER_ACCESS_TOKEN') ? "text-indigo-300" : "text-zinc-600")}>
-                cTrader OpenAPI
+              <Zap size={14} className={cn(backendConnected ? "text-amber-400" : "text-zinc-600")} />
+              <span className={cn("text-[10px] font-bold uppercase", backendConnected ? "text-amber-300" : "text-zinc-600")}>
+                {systemStatus?.mode === 'paper' ? 'Binance Futures (Paper)' : 'Binance Futures'}
               </span>
-              <div className={cn("w-1.5 h-1.5 rounded-full", configService.getSecret('CTRADER_ACCESS_TOKEN') ? "bg-emerald-500 animate-pulse" : "bg-zinc-600")} />
-              <span className="text-[10px] text-zinc-500 font-medium">
-                {configService.getSecret('CTRADER_ACCESS_TOKEN') ? 'Connected' : 'Disconnected'}
+              <div className={cn("w-1.5 h-1.5 rounded-full", backendConnected ? "bg-emerald-500 animate-pulse" : "bg-zinc-600")} />
+              <span className="text-[10px] text-zinc-400 font-medium">
+                {backendConnected ? (systemStatus?.mode === 'paper' ? 'Paper Active' : 'Live Connected') : 'Disconnected'}
               </span>
             </div>
 
             <div className={cn(
-              "hidden xl:flex items-center gap-2 px-3 py-1.5 border rounded-lg transition-colors",
-              configService.getSecret('BINANCE_API_KEY')
-                ? "bg-amber-500/10 border-amber-500/30"
+              "hidden lg:flex items-center gap-2 px-3 py-1.5 border rounded-lg transition-colors",
+              backendConnected
+                ? "bg-emerald-500/10 border-emerald-500/30"
                 : "bg-zinc-800/50 border-zinc-700/50"
             )}>
-              <Zap size={14} className={cn(configService.getSecret('BINANCE_API_KEY') ? "text-amber-400" : "text-zinc-600")} />
-              <span className={cn("text-[10px] font-bold uppercase", configService.getSecret('BINANCE_API_KEY') ? "text-amber-300" : "text-zinc-600")}>
-                Binance Spot
+              <Sparkles size={14} className={cn(backendConnected ? "text-emerald-400" : "text-zinc-600")} />
+              <span className={cn("text-[10px] font-bold uppercase", backendConnected ? "text-emerald-300" : "text-zinc-600")}>
+                OmniRoute
               </span>
-              <div className={cn("w-1.5 h-1.5 rounded-full", configService.getSecret('BINANCE_API_KEY') ? "bg-emerald-500 animate-pulse" : "bg-zinc-600")} />
-              <span className="text-[10px] text-zinc-500 font-medium">
-                {configService.getSecret('BINANCE_API_KEY') ? 'Connected' : 'Disconnected'}
+              <div className={cn("w-1.5 h-1.5 rounded-full", backendConnected ? "bg-emerald-500 animate-pulse" : "bg-zinc-600")} />
+              <span className="text-[10px] text-zinc-400 font-medium">
+                {backendConnected ? 'Auto-Select' : 'Offline'}
               </span>
             </div>
             <div className="relative hidden sm:block">
@@ -1621,6 +1635,12 @@ export default function App() {
             >
               <SettingsView />
             </motion.div>
+          ) : mode === 'timing-control' ? (
+            <StrategyTimingControlView key="timing-control" />
+          ) : mode === 'charts' ? (
+            <OpenApiChartView key="openapi-charts" onQuickTrade={handleQuickTrade} />
+          ) : mode === 'openapi-lab' ? (
+            <OpenApiSamplesView key="openapi-lab" />
           ) : mode === 'portfolio' ? (
             <PortfolioView key="portfolio" />
           ) : mode === 'paper' ? (

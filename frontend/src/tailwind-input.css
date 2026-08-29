@@ -19,6 +19,25 @@
   .scrollbar-default::-webkit-scrollbar-thumb:hover { @apply bg-zinc-700; }
 }
 
+/* Compact layout for smaller displays (non-TV monitors) */
+@media (max-width: 1280px) {
+  .app-root {
+    zoom: 0.94;
+  }
+}
+
+@media (max-width: 1024px) {
+  .app-root {
+    zoom: 0.9;
+  }
+}
+
+@media (max-width: 768px) {
+  .app-root {
+    zoom: 1;
+  }
+}
+
 @layer components {
   .trading-panel { @apply bg-[#141416] border border-[#232326] rounded-xl overflow-hidden; }
   .data-label { @apply text-[10px] uppercase tracking-wider text-zinc-500 font-medium; }

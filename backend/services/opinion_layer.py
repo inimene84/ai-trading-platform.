@@ -357,6 +357,13 @@ _COIN_NAMES = {
     "DOT": "polkadot", "LINK": "chainlink", "LTC": "litecoin", "UNI": "uniswap",
     "POL": "polygon", "ATOM": "cosmos", "NEAR": "near",
 }
+_FOREX_KEYWORDS = {
+    "EUR": "euro", "USD": "dollar", "GBP": "pound", "JPY": "yen",
+    "AUD": "australian dollar", "CAD": "canadian dollar", "CHF": "franc", "NZD": "kiwi",
+}
+_METAL_KEYWORDS = {"XAU": "gold", "XAG": "silver", "GOLD": "gold", "SILVER": "silver"}
+_OIL_KEYWORDS = {"USOIL": "crude oil", "UKOIL": "brent oil", "WTI": "wti oil", "BRENT": "brent"}
+_STOCK_TICKERS = {"AAPL", "MSFT", "NVDA", "TSLA", "AMZN", "GOOG", "META", "SPY", "QQQ"}
 _BULL_WORDS = (
     "bullish", "rally", "surge", "breakout", "accumulat", "inflow", "upgrade",
     "rebound", "optimism", "approval", "support holds", "uptrend", "buy ",
@@ -370,12 +377,30 @@ _BEAR_WORDS = (
 
 
 async def _run_news_archive_opinion(symbol: str) -> AgentOpinion:
-    """Directional signal from the Qdrant crypto-news archive (n8n analyses)."""
+    """Directional signal from the Qdrant news archive (multi-asset keywords)."""
     try:
+        from backend.services.multi_asset_bars import classify_symbol
+        asset_class = classify_symbol(symbol)
         base = symbol.replace("USDT", "").replace("USDC", "").replace("PERP", "").upper()
-        keywords = [base.lower()]
+        keywords = [base.lower(), symbol.lower()]
         if base in _COIN_NAMES:
             keywords.append(_COIN_NAMES[base])
+        for part in (base[:3], base[3:6]) if len(base) >= 6 else ():
+            if part in _FOREX_KEYWORDS:
+                keywords.append(_FOREX_KEYWORDS[part])
+        for key, label in {**_METAL_KEYWORDS, **_OIL_KEYWORDS}.items():
+            if key in base:
+                keywords.append(label)
+        if base in _STOCK_TICKERS:
+            keywords.append(base.lower())
+        if asset_class == "forex":
+            keywords.extend(["forex", "central bank", "interest rate"])
+        elif asset_class == "metal":
+            keywords.extend(["gold", "silver", "precious metal"])
+        elif asset_class == "oil":
+            keywords.extend(["crude", "oil", "opec", "inventory"])
+        elif asset_class == "stock":
+            keywords.extend(["earnings", "equity", "stock market"])
         docs = await qdrant.search_content(keywords, limit=5)
         if not docs:
             return AgentOpinion(
@@ -609,12 +634,12 @@ async def analyze_symbol(
     if include_kronos:
         try:
             kronos_result = await kronos_service.predict(df, symbol)
-            k_sig = kronos_result.get("signal", "NEUTRAL").lower()
-            if k_sig == "up":
+            k_sig = str(kronos_result.get("signal", "NEUTRAL")).lower()
+            if k_sig in ("up", "buy", "bullish"):
                 k_sig = "bullish"
-            elif k_sig == "down":
+            elif k_sig in ("down", "sell", "bearish"):
                 k_sig = "bearish"
-            elif k_sig not in ("bullish", "bearish", "neutral"):
+            else:
                 k_sig = "neutral"
             opinions.append(AgentOpinion(
                 agent="kronos_foundation",

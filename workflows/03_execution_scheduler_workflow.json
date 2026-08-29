@@ -1,0 +1,143 @@
+{
+  "name": "03 - QuantumTrade Execution Scheduler (30s Cron)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "seconds",
+              "secondsInterval": 30
+            }
+          ]
+        }
+      },
+      "id": "11111111-2222-3333-4444-555555555501",
+      "name": "Schedule Trigger (30s)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        240,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://backend:8000/api/signals/ready-for-execution",
+        "options": {}
+      },
+      "id": "22222222-3333-4444-5555-666666666602",
+      "name": "HTTP: Fetch Ready Signals",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        480,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{ $json.ready_count }}",
+              "operation": "larger",
+              "value2": 0
+            }
+          ]
+        }
+      },
+      "id": "33333333-4444-5555-6666-777777777703",
+      "name": "Signals Ready to Execute?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        720,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "signals",
+        "options": {}
+      },
+      "id": "44444444-5555-6666-7777-888888888804",
+      "name": "Item Lists: Split Signals",
+      "type": "n8n-nodes-base.itemLists",
+      "typeVersion": 3,
+      "position": [
+        960,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://backend:8000/api/signals/execute-candidate",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"candidate_id\": \"{{ $json.id }}\",\n  \"force\": false\n}",
+        "options": {}
+      },
+      "id": "55555555-6666-7777-8888-999999999905",
+      "name": "HTTP: Execute Candidate Order",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1200,
+        220
+      ]
+    }
+  ],
+  "connections": {
+    "Schedule Trigger (30s)": {
+      "main": [
+        [
+          {
+            "node": "HTTP: Fetch Ready Signals",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP: Fetch Ready Signals": {
+      "main": [
+        [
+          {
+            "node": "Signals Ready to Execute?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Signals Ready to Execute?": {
+      "main": [
+        [
+          {
+            "node": "Item Lists: Split Signals",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Item Lists: Split Signals": {
+      "main": [
+        [
+          {
+            "node": "HTTP: Execute Candidate Order",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

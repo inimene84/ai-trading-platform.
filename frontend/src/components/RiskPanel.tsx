@@ -39,16 +39,22 @@ export function RiskPanel() {
     const labels: Record<string, string> = {
       max_positions: 'Max Open Positions',
       max_directional_exposure_usdt: 'Max Directional Exposure',
-      trade_usdt_amount: 'Allocation Per Trade',
+      trade_usdt_amount: 'Base Allocation Per Trade',
       kill_floor_usdt: 'System Kill Floor',
       min_signal_strength: 'Min Signal Strength',
       sl_cooldown_minutes: 'Stop Loss Cooldown',
       emergency_drawdown_pct: 'Emergency Drawdown Limit',
+      use_risk_reviewer_llm: 'AI Risk Reviewer (LLM)',
+      enable_personas: 'Multi-Persona Voting',
     };
     return labels[key] || key.replace(/_/g, ' ');
   };
 
   const getFormattedValue = (key: string, value: any) => {
+    if (typeof value === 'boolean' || value === 'true' || value === 'false') {
+      const boolVal = value === true || value === 'true';
+      return boolVal ? 'Active' : 'Disabled';
+    }
     if (key === 'min_signal_strength') {
       return `${(parseFloat(value) * 100).toFixed(0)}%`;
     }

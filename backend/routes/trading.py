@@ -156,38 +156,91 @@ async def run_backtest(request: dict):
         }
 
 
+async def _get_current_balance() -> dict:
+    """Resolve current balance depending on trading mode (paper vs live)."""
+    from backend.services.trading_mode import TradingMode, get_trading_mode
+    if get_trading_mode() == TradingMode.PAPER:
+        try:
+            from backend.services.unified_trading import trading_router
+            pf = trading_router.get_paper_portfolio()
+            if pf:
+                cash = float(pf.get("cash", 100000.0))
+                equity = float(pf.get("equity", cash))
+                return {
+                    "balance": cash,
+                    "available": cash,
+                    "equity": equity,
+                    "margin_used": float(pf.get("margin_used", 0.0)),
+                    "broker": "paper_trading",
+                }
+        except Exception as e:
+            logger.warning(f"Could not fetch paper portfolio: {e}")
+        return {
+            "balance": 100000.0,
+            "available": 100000.0,
+            "equity": 100000.0,
+            "margin_used": 0.0,
+            "broker": "paper_trading",
+        }
+    from backend.services.binance_futures_service import binance_futures_broker
+    return await asyncio.to_thread(binance_futures_broker.get_balance)
+
+
 @router.get("/portfolio")
 async def get_portfolio():
-    """Get current portfolio state with live Binance balance."""
+    """Get current portfolio state with live Binance balance (or paper portfolio in paper mode)."""
     db = SessionLocal()
     try:
         open_trades = db.query(Trade).filter(Trade.status.in_(["open", "filled"])).all()
+        mark_prices = _fetch_mark_prices_for_symbols({t.symbol for t in open_trades})
+
+        total_notional = 0.0
+        total_unrealized_pnl = 0.0
         positions = []
         for t in open_trades:
+            cur_price = mark_prices.get(t.symbol) or t.entry_price or 0.0
+            notional = (t.quantity or 0.0) * (t.entry_price or 0.0)
+            total_notional += notional
+
+            if t.direction == "BUY":
+                u_pnl = (cur_price - (t.entry_price or cur_price)) * (t.quantity or 0.0)
+            else:
+                u_pnl = ((t.entry_price or cur_price) - cur_price) * (t.quantity or 0.0)
+            total_unrealized_pnl += u_pnl
+
             positions.append({
                 "id": t.id,
                 "symbol": t.symbol,
                 "direction": t.direction,
                 "quantity": t.quantity,
                 "entry_price": t.entry_price,
+                "current_price": cur_price,
                 "stop_loss": t.stop_loss,
                 "take_profit": t.take_profit,
+                "unrealized_pnl": round(u_pnl, 2),
                 "strategy": t.strategy,
                 "opened_at": t.timestamp.isoformat() if t.timestamp else None,
             })
 
-        # Prefer live broker balance over stale DB snapshot
-        balance = 0.0
-        available = 0.0
-        equity = 0.0
-        positions_value = 0.0
+        # Prefer live broker/paper balance over stale DB snapshot
+        balance = 100000.0
+        available = 100000.0
+        equity = 100000.0
+        positions_value = total_notional
         try:
-            from backend.services.binance_futures_service import binance_futures_broker
-            bal = await asyncio.to_thread(binance_futures_broker.get_balance)
-            balance = bal.get("balance", 0.0)
-            available = bal.get("available", balance)
-            equity = bal.get("equity", balance)
-            positions_value = bal.get("margin_used", 0.0)
+            bal = await _get_current_balance()
+            balance = float(bal.get("balance", 100000.0))
+            is_paper = bal.get("broker") == "paper_trading" or os.getenv("TRADING_MODE", "paper") == "paper"
+
+            if is_paper:
+                positions_value = total_notional
+                available = max(0.0, balance - total_notional)
+                equity = balance + total_unrealized_pnl
+            else:
+                margin_used = float(bal.get("margin_used", 0.0))
+                positions_value = margin_used if margin_used > 0 else total_notional
+                available = float(bal.get("available", balance - positions_value))
+                equity = float(bal.get("equity", balance + total_unrealized_pnl))
         except Exception:
             snap = (
                 db.query(PortfolioSnapshot)
@@ -196,9 +249,9 @@ async def get_portfolio():
             )
             if snap:
                 balance = snap.cash or 0.0
-                available = snap.cash or 0.0
-                equity = snap.total_value or balance
-                positions_value = snap.positions_value or 0.0
+                available = max(0.0, balance - total_notional)
+                equity = balance + total_unrealized_pnl
+                positions_value = total_notional
 
         # Compute realized PnL from all closed trades
         closed_pnl = db.query(Trade).filter(Trade.status == "closed").with_entities(
@@ -208,13 +261,14 @@ async def get_portfolio():
         pnl_pct = round((total_pnl / equity * 100) if equity > 0 else 0.0, 2)
 
         return {
-            "balance": round(balance, 6),
-            "available": round(available, 6),
-            "equity": round(equity, 6),
+            "balance": round(balance, 2),
+            "available": round(available, 2),
+            "equity": round(equity, 2),
+            "unrealized_pnl": round(total_unrealized_pnl, 2),
             "positions": positions,
             "total_pnl": total_pnl,
             "total_pnl_pct": pnl_pct,
-            "positions_value": round(positions_value, 6),
+            "positions_value": round(positions_value, 2),
             "open_positions_count": len(positions),
             "last_updated": datetime.now().isoformat(),
         }
@@ -234,8 +288,7 @@ async def get_performance():
         realized = round(sum((t.pnl or 0.0) for t in closed), 4)
         equity = 0.0
         try:
-            from backend.services.binance_futures_service import binance_futures_broker
-            bal = await asyncio.to_thread(binance_futures_broker.get_balance)
+            bal = await _get_current_balance()
             equity = bal.get("equity", bal.get("balance", 0.0))
         except Exception:
             pass
@@ -300,15 +353,23 @@ async def get_status():
     llm_providers = []
 
     # Cloud providers
+    if os.getenv('OMNIROUTE_API_KEY') and os.getenv('OMNIROUTE_API_KEY') != 'omni_live_key_placeholder':
+        llm_providers.append({
+            'name': 'OmniRoute',
+            'model': os.getenv('PERSONA_LLM_MODEL', 'auto/smart'),
+            'status': 'configured',
+            'type': 'cloud',
+            'role': 'Primary (Auto-Select Routing)',
+        })
     if os.getenv('XAI_API_KEY') and os.getenv('XAI_API_KEY') != 'your_xai_api_key_here':
         llm_providers.append({'name': 'xAI (Grok)', 'model': os.getenv('XAI_MODEL', 'grok-beta'), 'status': 'configured', 'type': 'cloud'})
     if os.getenv('KIE_API_KEY') and os.getenv('KIE_API_KEY') != 'your_kie_api_key_here':
         llm_providers.append({
             'name': 'Kie.ai',
-            'model': os.getenv('KIE_MODEL', 'claude-sonnet-4-6'),
+            'model': os.getenv('KIE_MODEL', 'gpt-5-6-terra'),
             'status': 'configured',
             'type': 'cloud',
-            'role': 'primary via LiteLLM',
+            'role': 'fallback / direct via Kie.ai',
         })
     if os.getenv('ANTHROPIC_API_KEY') and os.getenv('ANTHROPIC_API_KEY') != 'your_anthropic_api_key_here':
         llm_providers.append({'name': 'Anthropic', 'model': 'claude', 'status': 'configured', 'type': 'cloud'})
@@ -888,6 +949,355 @@ async def run_analysis_on_demand(request: dict):
         return {"error": f"AI analysis failed: {str(e)}"}
 
 
+@router.get("/brokers")
+async def get_brokers_status():
+    """Get real-time operational status and metrics for all registered brokers."""
+    from backend.services.binance_futures_service import binance_futures_broker
+    from backend.services.ctrader_service import ctrader_broker
+    from backend.services.broker_circuit_breaker import broker_circuit_breaker
+
+    binance_status = binance_futures_broker.status()
+    ctrader_status = ctrader_broker.status()
+
+    binance_avail, binance_breaker = broker_circuit_breaker.is_available("binance_futures")
+    ctrader_avail, ctrader_breaker = broker_circuit_breaker.is_available("ctrader")
+
+    return {
+        "brokers": {
+            "binance_futures": {
+                "name": "Binance Futures (Crypto)",
+                "status": binance_status,
+                "circuit_breaker": {
+                    "available": binance_avail,
+                    "reason": binance_breaker,
+                },
+            },
+            "ctrader": {
+                "name": "cTrader Open API (Forex & Multi-Asset)",
+                "status": ctrader_status,
+                "circuit_breaker": {
+                    "available": ctrader_avail,
+                    "reason": ctrader_breaker,
+                },
+            },
+        },
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@router.get("/markets")
+async def get_markets():
+    """Get multi-asset watchlist and supported instruments across all brokers."""
+    markets = [
+        # Forex & Commodities (cTrader)
+        {"symbol": "EURUSD", "display_name": "EUR/USD", "asset_class": "forex", "broker": "ctrader", "lot_size": 100000, "digits": 5, "base": "EUR", "quote": "USD"},
+        {"symbol": "GBPUSD", "display_name": "GBP/USD", "asset_class": "forex", "broker": "ctrader", "lot_size": 100000, "digits": 5, "base": "GBP", "quote": "USD"},
+        {"symbol": "USDJPY", "display_name": "USD/JPY", "asset_class": "forex", "broker": "ctrader", "lot_size": 100000, "digits": 3, "base": "USD", "quote": "JPY"},
+        {"symbol": "AUDUSD", "display_name": "AUD/USD", "asset_class": "forex", "broker": "ctrader", "lot_size": 100000, "digits": 5, "base": "AUD", "quote": "USD"},
+        {"symbol": "USDCAD", "display_name": "USD/CAD", "asset_class": "forex", "broker": "ctrader", "lot_size": 100000, "digits": 5, "base": "USD", "quote": "CAD"},
+        {"symbol": "USDCHF", "display_name": "USD/CHF", "asset_class": "forex", "broker": "ctrader", "lot_size": 100000, "digits": 5, "base": "USD", "quote": "CHF"},
+        {"symbol": "NZDUSD", "display_name": "NZD/USD", "asset_class": "forex", "broker": "ctrader", "lot_size": 100000, "digits": 5, "base": "NZD", "quote": "USD"},
+        {"symbol": "XAUUSD", "display_name": "Gold / USD", "asset_class": "metals", "broker": "ctrader", "lot_size": 100, "digits": 2, "base": "XAU", "quote": "USD"},
+        {"symbol": "XAGUSD", "display_name": "Silver / USD", "asset_class": "metals", "broker": "ctrader", "lot_size": 5000, "digits": 3, "base": "XAG", "quote": "USD"},
+        # Crypto Perpetuals (Binance Futures)
+        {"symbol": "BTCUSDT", "display_name": "Bitcoin Perpetual", "asset_class": "crypto", "broker": "binance_futures", "lot_size": 1, "digits": 2, "base": "BTC", "quote": "USDT"},
+        {"symbol": "ETHUSDT", "display_name": "Ethereum Perpetual", "asset_class": "crypto", "broker": "binance_futures", "lot_size": 1, "digits": 2, "base": "ETH", "quote": "USDT"},
+        {"symbol": "SOLUSDT", "display_name": "Solana Perpetual", "asset_class": "crypto", "broker": "binance_futures", "lot_size": 1, "digits": 2, "base": "SOL", "quote": "USDT"},
+        {"symbol": "BNBUSDT", "display_name": "BNB Perpetual", "asset_class": "crypto", "broker": "binance_futures", "lot_size": 1, "digits": 2, "base": "BNB", "quote": "USDT"},
+        {"symbol": "AVAXUSDT", "display_name": "Avalanche Perpetual", "asset_class": "crypto", "broker": "binance_futures", "lot_size": 1, "digits": 2, "base": "AVAX", "quote": "USDT"},
+        {"symbol": "ADAUSDT", "display_name": "Cardano Perpetual", "asset_class": "crypto", "broker": "binance_futures", "lot_size": 1, "digits": 4, "base": "ADA", "quote": "USDT"},
+        {"symbol": "DOTUSDT", "display_name": "Polkadot Perpetual", "asset_class": "crypto", "broker": "binance_futures", "lot_size": 1, "digits": 3, "base": "DOT", "quote": "USDT"},
+        {"symbol": "LINKUSDT", "display_name": "Chainlink Perpetual", "asset_class": "crypto", "broker": "binance_futures", "lot_size": 1, "digits": 3, "base": "LINK", "quote": "USDT"},
+    ]
+    return {"markets": markets, "total": len(markets)}
+
+
+class SmartOrderRequest(BaseModel):
+    symbol: str
+    direction: Literal["BUY", "SELL"]
+    quantity: float = Field(gt=0)
+    order_type: Literal["MARKET", "LIMIT"] = "MARKET"
+    price: Optional[float] = None
+    stop_loss: Optional[float] = None
+    take_profit: Optional[float] = None
+    broker_override: Optional[Literal["binance_futures", "ctrader"]] = None
+
+
+@router.post("/order/smart")
+async def place_smart_order(req: SmartOrderRequest):
+    """
+    Intelligent multi-broker order router.
+    Routes crypto to Binance Futures, forex/metals/CFDs to cTrader Open API.
+    Enforces per-broker circuit breakers and logs fills.
+    """
+    from backend.services.binance_futures_service import binance_futures_broker
+    from backend.services.ctrader_service import ctrader_broker
+    from backend.services.broker_circuit_breaker import broker_circuit_breaker
+
+    clean_sym = req.symbol.upper().replace("=X", "").replace("-", "").replace("/", "")
+
+    # 1. Determine Target Broker
+    if req.broker_override:
+        target_broker_name = req.broker_override
+    elif clean_sym.endswith("USDT") or clean_sym in ["BTC", "ETH", "SOL", "BNB", "AVAX", "ADA", "DOT", "LINK", "DOGE"]:
+        target_broker_name = "binance_futures"
+    else:
+        target_broker_name = "ctrader"
+
+    # 2. Check Circuit Breaker
+    avail, reason = broker_circuit_breaker.is_available(target_broker_name)
+    if not avail:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Target broker '{target_broker_name}' is temporarily unavailable: {reason}",
+        )
+
+    # 3. Route to Target Broker
+    db = SessionLocal()
+    try:
+        if target_broker_name == "binance_futures":
+            result = binance_futures_broker.place_order(
+                symbol=clean_sym,
+                direction=req.direction,
+                quantity=req.quantity,
+                price=req.price,
+                stop_loss=req.stop_loss,
+                take_profit=req.take_profit,
+            )
+            broker_circuit_breaker.record_success("binance_futures")
+        else:
+            result = ctrader_broker.place_order(
+                symbol=clean_sym,
+                direction=req.direction,
+                volume=req.quantity,
+                price=req.price,
+                stop_loss=req.stop_loss,
+                take_profit=req.take_profit,
+            )
+            broker_circuit_breaker.record_success("ctrader")
+
+        # 4. Record Trade in DB
+        if result.get("status") in ["sent", "simulated", "filled", "ok"]:
+            db_trade = Trade(
+                symbol=clean_sym,
+                direction=req.direction,
+                quantity=req.quantity,
+                entry_price=float(result.get("price") or req.price or 0.0),
+                stop_loss=req.stop_loss,
+                take_profit=req.take_profit,
+                status="open",
+                broker=target_broker_name,
+                broker_order_id=str(result.get("order_id", "")),
+                broker_metadata=result,
+                notes=f"Smart order routed to {target_broker_name}",
+            )
+            db.add(db_trade)
+            db.commit()
+            result["db_trade_id"] = db_trade.id
+
+        return {"success": True, "target_broker": target_broker_name, "execution": result}
+
+    except Exception as e:
+        broker_circuit_breaker.record_error(target_broker_name, str(e))
+        logger.error(f"[SMART ORDER ERROR] Routing to {target_broker_name} failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Order routing error on {target_broker_name}: {str(e)}")
+    finally:
+        db.close()
+
+
+@router.get("/ctrader/tokens")
+async def get_ctrader_tokens_info():
+    """Retrieve cTrader token storage status and expiration info."""
+    from backend.services.ctrader_tokens import ctrader_token_store
+    tokens = ctrader_token_store.get_tokens()
+    if not tokens:
+        return {"configured": False, "message": "No cTrader OAuth tokens stored"}
+    
+    expires_at = tokens.get("updated_at", 0) + tokens.get("expires_in", 0)
+    now_ts = datetime.now(timezone.utc).timestamp()
+    days_left = max(0.0, round((expires_at - now_ts) / 86400.0, 1))
+
+    return {
+        "configured": True,
+        "account_id": tokens.get("account_id"),
+        "client_id": tokens.get("client_id", "")[:6] + "..." if tokens.get("client_id") else "",
+        "days_until_expiration": days_left,
+        "is_expired": days_left <= 0,
+        "updated_at": tokens.get("updated_at"),
+    }
+
+
+class SaveCTraderTokensRequest(BaseModel):
+    account_id: int
+    client_id: str
+    client_secret: Optional[str] = None
+    access_token: str
+    refresh_token: str
+    expires_in: Optional[int] = 2592000
+
+
+@router.post("/ctrader/tokens")
+async def save_ctrader_tokens(req: SaveCTraderTokensRequest):
+    """Save or update persistent OAuth tokens for cTrader Open API."""
+    from backend.services.ctrader_tokens import ctrader_token_store
+    from backend.services.ctrader_service import ctrader_broker
+
+    data = {
+        "account_id": req.account_id,
+        "client_id": req.client_id,
+        "client_secret": req.client_secret or "",
+        "access_token": req.access_token,
+        "refresh_token": req.refresh_token,
+        "expires_in": req.expires_in or 2592000,
+        "updated_at": int(datetime.now(timezone.utc).timestamp()),
+    }
+    ctrader_token_store.save_tokens(data)
+    ctrader_broker._token_store = ctrader_token_store
+    return {"success": True, "message": "cTrader tokens stored and updated successfully"}
+
+
+class PipMarginCalcRequest(BaseModel):
+    symbol: str
+    lots: float = Field(gt=0, default=1.0)
+    price: Optional[float] = None
+    leverage: float = Field(gt=0, default=100.0)
+    deposit_asset: str = "USD"
+
+
+@router.get("/ctrader/trendbars")
+async def get_ctrader_trendbars(
+    symbol: str = Query("EURUSD", description="Symbol name e.g. EURUSD, GBPUSD, BTCUSD"),
+    period: str = Query("M5", description="Period: 1M, 5M, 15M, 30M, 1H, 4H, 1D, 1W"),
+    count: int = Query(120, ge=1, le=1000, description="Number of bars"),
+    from_ts: Optional[int] = Query(None, description="Start unix timestamp in ms"),
+    to_ts: Optional[int] = Query(None, description="End unix timestamp in ms"),
+):
+    """
+    Get historical OHLCV trendbars for cTrader charting and technical analysis.
+    Uses ProtoOAGetTrendbarsReq when live connected, with fallback to high-fidelity cache.
+    """
+    from backend.services.ctrader_service import ctrader_broker
+    bars = await asyncio.to_thread(
+        ctrader_broker.get_trendbars,
+        symbol=symbol,
+        period=period,
+        from_ts=from_ts,
+        to_ts=to_ts,
+        count=count,
+    )
+    return {
+        "symbol": symbol.upper(),
+        "period": period.upper(),
+        "count": len(bars),
+        "bars": bars,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@router.get("/ctrader/ticks")
+async def get_ctrader_ticks(
+    symbol: str = Query("EURUSD", description="Symbol name"),
+    type: str = Query("BID", description="Quote type: BID or ASK"),
+    hours: int = Query(4, ge=1, le=72, description="Number of historical hours"),
+):
+    """
+    Get historical tick data stream for cTrader symbols.
+    Uses ProtoOAGetTickDataReq when connected.
+    """
+    from backend.services.ctrader_service import ctrader_broker
+    ticks = await asyncio.to_thread(
+        ctrader_broker.get_tick_data,
+        symbol=symbol,
+        quote_type=type,
+        hours=hours,
+    )
+    return {
+        "symbol": symbol.upper(),
+        "type": type.upper(),
+        "count": len(ticks),
+        "ticks": ticks,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@router.get("/ctrader/symbol-spec")
+async def get_ctrader_symbol_spec(
+    symbol: str = Query("EURUSD", description="Symbol name"),
+):
+    """
+    Get detailed financial specification for a symbol (digits, pip position, lot step, tick size).
+    """
+    from backend.services.ctrader_service import ctrader_broker
+    spec = ctrader_broker.get_symbol_specification(symbol)
+    return spec
+
+
+@router.post("/ctrader/calc/pip-margin")
+async def calculate_pip_margin_endpoint(req: PipMarginCalcRequest):
+    """
+    Calculate pip value, tick value, required margin, and notional lot volume
+    following OpenAPI.Net financial formulas.
+    """
+    from backend.services.ctrader_service import ctrader_broker
+    result = ctrader_broker.calculate_pip_margin(
+        symbol=req.symbol,
+        lots=req.lots,
+        price=req.price,
+        leverage=req.leverage,
+        deposit_asset=req.deposit_asset,
+    )
+    return result
+
+
+class AIAgentTradeRequest(BaseModel):
+    prompt: str
+    provider: Optional[str] = "xai"
+    model: Optional[str] = "grok-beta"
+
+
+@router.post("/ai/parse-trade")
+async def ai_parse_trade(req: AIAgentTradeRequest):
+    """
+    Parses an AI trading instruction, extracts trading parameters,
+    and executes via the multi-broker Smart Order router.
+    """
+    import re
+    prompt = req.prompt.lower()
+    direction: Literal["BUY", "SELL"] = "BUY" if any(w in prompt for w in ["buy", "long"]) else "SELL"
+
+    symbol = "BTCUSDT"
+    if "eur" in prompt:
+        symbol = "EURUSD"
+    elif "gbp" in prompt:
+        symbol = "GBPUSD"
+    elif "gold" in prompt or "xau" in prompt:
+        symbol = "XAUUSD"
+    elif "eth" in prompt:
+        symbol = "ETHUSDT"
+    elif "sol" in prompt:
+        symbol = "SOLUSDT"
+
+    qty_match = re.search(r'(\d+(\.\d+)?)', prompt)
+    quantity = float(qty_match.group(1)) if qty_match else (0.1 if symbol == "EURUSD" else 0.01)
+
+    smart_req = SmartOrderRequest(
+        symbol=symbol,
+        direction=direction,
+        quantity=quantity,
+    )
+    res = await place_smart_order(smart_req)
+    return {
+        "success": True,
+        "ai_prompt": req.prompt,
+        "extracted_intent": {
+            "symbol": symbol,
+            "direction": direction,
+            "quantity": quantity,
+        },
+        "execution": res,
+    }
+
+
 @router.get("/ctrader/status")
 async def ctrader_status():
     """Get cTrader broker status."""
@@ -923,59 +1333,71 @@ async def disable_ctrader_live():
 
 @router.post("/positions/{position_id}/close")
 async def close_position(position_id: int):
-    """Close an exchange position layer, then persist the actual fill."""
+    """Close a position on its originating broker, then persist the actual fill."""
+    from backend.services.ctrader_service import ctrader_broker
+    from backend.services.binance_futures_service import binance_futures_broker
+
     db = SessionLocal()
     try:
         trade = db.query(Trade).filter(Trade.id == position_id, Trade.status.in_(["open", "filled"])).first()
         if not trade:
             raise HTTPException(status_code=404, detail=f"Open position {position_id} not found")
 
-        close_side = OrderSide.SELL if trade.direction == "BUY" else OrderSide.BUY
-        response = UnifiedTrading().place_order(UnifiedOrder(
-            symbol=trade.symbol,
-            side=close_side,
-            order_type=OrderType.MARKET,
-            quantity=trade.quantity,
-            reduce_only=True,
-        ))
-        if not response.success:
-            raise HTTPException(
-                status_code=502,
-                detail=f"Exchange close failed; DB left open: {response.message}",
+        target_broker = getattr(trade, "broker", None) or getattr(trade, "exchange", None) or "binance_futures"
+
+        if target_broker == "ctrader":
+            res = ctrader_broker.close_position(
+                position_id=trade.broker_position_id or trade.broker_order_id or str(trade.id),
+                symbol=trade.symbol,
             )
-
-        exit_price = response.filled_price
-        if not exit_price:
-            from backend.services.binance_futures_service import binance_futures_broker
-            exit_price = binance_futures_broker.get_exit_price(trade.symbol)
-
-        from backend.services.trading_loop_helpers import is_plausible_exit_price
-        if is_plausible_exit_price(trade.entry_price, exit_price):
-            if response.realized_pnl is not None:
-                pnl = float(response.realized_pnl) - response.commission
-            else:
-                if trade.direction == "BUY":
-                    pnl = (exit_price - trade.entry_price) * trade.quantity
-                else:
-                    pnl = (trade.entry_price - exit_price) * trade.quantity
-                pnl -= response.commission
-            trade.exit_price = exit_price
-            trade.pnl = round(pnl, 4)
+            exit_price = float(res.get("price") or trade.entry_price)
+            pnl = float(res.get("pnl") or 0.0)
         else:
-            # Exchange is flat but the fill price is unavailable: close the row
-            # honestly with unknown P&L rather than inventing a yfinance price.
-            trade.exit_price = None
-            trade.pnl = None
+            close_side = OrderSide.SELL if trade.direction == "BUY" else OrderSide.BUY
+            response = UnifiedTrading().place_order(UnifiedOrder(
+                symbol=trade.symbol,
+                side=close_side,
+                order_type=OrderType.MARKET,
+                quantity=trade.quantity,
+                reduce_only=True,
+            ))
+            if not response.success:
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"Exchange close failed; DB left open: {response.message}",
+                )
+
+            exit_price = response.filled_price
+            if not exit_price:
+                exit_price = binance_futures_broker.get_exit_price(trade.symbol)
+
+            from backend.services.trading_loop_helpers import is_plausible_exit_price
+            if is_plausible_exit_price(trade.entry_price, exit_price):
+                if response.realized_pnl is not None:
+                    pnl = float(response.realized_pnl) - response.commission
+                else:
+                    if trade.direction == "BUY":
+                        pnl = (exit_price - trade.entry_price) * trade.quantity
+                    else:
+                        pnl = (trade.entry_price - exit_price) * trade.quantity
+                    pnl -= response.commission
+            else:
+                exit_price = None
+                pnl = None
+
+        trade.exit_price = exit_price
+        trade.pnl = round(pnl, 4) if pnl is not None else None
         trade.status = "closed"
         trade.closed_at = datetime.now(timezone.utc)
-        trade.notes = (trade.notes or "") + " | Closed on exchange via manual dashboard"
+        trade.notes = (trade.notes or "") + f" | Closed on {target_broker} via manual dashboard"
         db.commit()
         return {
             "success": True,
             "position_id": position_id,
-            "exit_price": trade.exit_price,
-            "pnl": trade.pnl,
-            "message": f"Position {position_id} closed on exchange",
+            "broker": target_broker,
+            "exit_price": exit_price,
+            "pnl": pnl,
+            "message": f"Position {position_id} closed on {target_broker}",
         }
     except Exception:
         db.rollback()
@@ -1301,18 +1723,54 @@ async def session_status():
 
 @router.post("/paper/order")
 async def paper_place_order(request: dict):
-    """Place a paper/simulated order."""
+    """Place a paper/simulated order and persist to Trade table."""
     ut = UnifiedTrading()
+    sym = request.get("symbol", "").upper()
+    side_str = request.get("side", "buy").lower()
+    px = float(request.get("price", 0) or 0)
+    if px <= 0:
+        # If no explicit price provided for market order, fetch current price
+        try:
+            from backend.services.binance_futures_service import BinanceFuturesService
+            bfs = BinanceFuturesService()
+            ticker = await asyncio.to_thread(bfs._get_client().futures_symbol_ticker, symbol=sym)
+            px = float(ticker.get("price", 0) or 0)
+        except Exception:
+            pass
+
     order = UnifiedOrder(
-        symbol=request.get("symbol", "").upper(),
-        side=OrderSide(request.get("side", "buy").lower()),
+        symbol=sym,
+        side=OrderSide(side_str),
         order_type=OrderType(request.get("order_type", "market").lower()),
         quantity=float(request.get("quantity", 0)),
-        price=float(request.get("price", 0) or 0),
+        price=px,
         stop_loss=float(request.get("stop_loss", 0) or 0),
         take_profit=float(request.get("take_profit", 0) or 0),
     )
     resp = ut.place_order(order)
+    if resp.success:
+        db = SessionLocal()
+        try:
+            direction = "BUY" if side_str == "buy" else "SELL"
+            trade = Trade(
+                symbol=sym,
+                direction=direction,
+                quantity=float(resp.filled_qty or order.quantity),
+                entry_price=float(resp.filled_price or px),
+                status="open",
+                strategy="paper_manual",
+                binance_order_id=resp.order_id,
+                stop_loss=order.stop_loss or None,
+                take_profit=order.take_profit or None,
+                notes="Paper order placed via UI/API",
+            )
+            db.add(trade)
+            db.commit()
+        except Exception as e:
+            logger.warning(f"Could not persist paper trade to DB: {e}")
+        finally:
+            db.close()
+
     return {
         "success": resp.success,
         "order_id": resp.order_id,
@@ -1667,10 +2125,9 @@ async def get_price(symbol: str = "BTCUSDT"):
 async def get_account_summary():
     """Return live account equity and balance for workflow engine."""
     try:
-        from backend.services.binance_futures_service import binance_futures_broker
-        bal = await asyncio.to_thread(binance_futures_broker.get_balance)
-        equity = bal.get("equity", bal.get("balance", 0.0))
-        available = bal.get("available", equity)
+        pf = await get_portfolio()
+        equity = float(pf.get("equity", 100000.0))
+        available = float(pf.get("available", equity))
         db = SessionLocal()
         try:
             from sqlalchemy import func
@@ -1731,6 +2188,7 @@ async def analyze_opinion(request: dict):
     include_kronos = request.get("include_kronos", True)
     include_social = request.get("include_social", True)
     include_alerts = request.get("include_alerts", True)
+    include_personas = request.get("include_personas", True)
 
     if not symbol or not bars:
         return {"error": "symbol and bars required"}
@@ -1741,9 +2199,13 @@ async def analyze_opinion(request: dict):
         include_kronos=include_kronos,
         include_social=include_social,
         include_alerts=include_alerts,
+        include_personas=include_personas,
     )
+    from backend.services.multi_asset_bars import classify_symbol
+    asset_class = classify_symbol(symbol)
     return {
         "symbol": opinion.symbol,
+        "asset_class": asset_class,
         "direction": opinion.direction,
         "confidence": opinion.confidence,
         "reasoning": opinion.reasoning,

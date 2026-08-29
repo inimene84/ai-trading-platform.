@@ -219,7 +219,7 @@ export const SettingsView = () => {
     const persistent: Record<string, string> = {};
     const secrets: Record<string, string> = {};
     Object.entries(settings).forEach(([key, value]) => {
-      (isSecret(key) ? secrets : persistent)[key] = value;
+      (isSecret(key) ? secrets : persistent)[key] = String(value ?? '');
     });
     localStorage.setItem('quantum_trade_settings', JSON.stringify(persistent));
     sessionStorage.setItem('quantum_trade_session_secrets', JSON.stringify(secrets));
@@ -301,6 +301,35 @@ export const SettingsView = () => {
         />
       </SettingsSection>
 
+      <SettingsSection title="Agent API & OAuth" icon={Shield}>
+        <SettingField 
+          label="Agent Client ID" 
+          secretKey="AGENT_CLIENT_ID"
+          value={settings.AGENT_CLIENT_ID || ''} 
+          error={errors.AGENT_CLIENT_ID}
+          onChange={(v) => updateSetting('AGENT_CLIENT_ID', v)}
+          type="text"
+          description="OAuth client_id for external agents (MCP, GrokBOT overseer). Falls back to ADMIN_API_KEY."
+        />
+        <SettingField 
+          label="Agent Client Secret" 
+          secretKey="AGENT_CLIENT_SECRET"
+          value={settings.AGENT_CLIENT_SECRET || ''} 
+          error={errors.AGENT_CLIENT_SECRET}
+          onChange={(v) => updateSetting('AGENT_CLIENT_SECRET', v)}
+          type="password"
+        />
+        <SettingField 
+          label="Agent API Key (Bearer token)" 
+          secretKey="AGENT_API_KEY"
+          value={settings.AGENT_API_KEY || ''} 
+          error={errors.AGENT_API_KEY}
+          onChange={(v) => updateSetting('AGENT_API_KEY', v)}
+          type="password"
+          description="Issued by POST /api/agents/oauth/token. Connect manifest: GET /api/agents/connect"
+        />
+      </SettingsSection>
+
       <SettingsSection title="AI Brains (LLM Engines)" icon={Cpu}>
         <SettingField 
           label="Gemini API Key" 
@@ -308,7 +337,7 @@ export const SettingsView = () => {
           value={settings.GEMINI_API_KEY || ''} 
           error={errors.GEMINI_API_KEY}
           onChange={(v) => updateSetting('GEMINI_API_KEY', v)}
-          description="Primary engine for market analysis and workflow optimization."
+          description="Optional direct key; dashboard assistant routes via OmniRoute when configured."
         />
         <SettingField 
           label="xAI (Grok) API Key" 
@@ -414,6 +443,30 @@ export const SettingsView = () => {
               value={settings.CTRADER_ACCESS_TOKEN || ''} 
               error={errors.CTRADER_ACCESS_TOKEN}
               onChange={(v) => updateSetting('CTRADER_ACCESS_TOKEN', v)}
+            />
+            <SettingField 
+              label="Refresh Token" 
+              secretKey="CTRADER_REFRESH_TOKEN"
+              value={settings.CTRADER_REFRESH_TOKEN || ''} 
+              error={errors.CTRADER_REFRESH_TOKEN}
+              onChange={(v) => updateSetting('CTRADER_REFRESH_TOKEN', v)}
+            />
+            <SettingField 
+              label="Account ID" 
+              secretKey="CTRADER_ACCOUNT_ID"
+              value={settings.CTRADER_ACCOUNT_ID || ''} 
+              error={errors.CTRADER_ACCOUNT_ID}
+              onChange={(v) => updateSetting('CTRADER_ACCOUNT_ID', v)}
+              type="text"
+            />
+            <SettingField 
+              label="Environment (demo/live)" 
+              secretKey="CTRADER_ENV"
+              value={settings.CTRADER_ENV || 'demo'} 
+              error={errors.CTRADER_ENV}
+              onChange={(v) => updateSetting('CTRADER_ENV', v)}
+              type="text"
+              description="Use demo for paper; live requires CTRADER_PAPER_MODE=false in .env"
             />
           </div>
           <div className="space-y-4 p-4 bg-zinc-900/30 rounded-xl border border-zinc-800">

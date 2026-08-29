@@ -1,0 +1,17 @@
+{
+  "name": "QuantumTrade Pro",
+  "short_name": "QuantumTrade",
+  "description": "AI-Powered Multi-Asset Trading Platform (Binance Futures + cTrader Open API)",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0A0A0B",
+  "theme_color": "#10B981",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/favicon.ico",
+      "sizes": "64x64 32x32 24x24 16x16",
+      "type": "image/x-icon"
+    }
+  ]
+}

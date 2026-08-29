@@ -3,7 +3,7 @@ import { motion } from 'motion/react';
 import {
   Cpu, Globe, Shield, Activity, Zap, Play, Pause, RefreshCw,
   CheckCircle2, XCircle, AlertCircle, Server, Wifi, WifiOff,
-  BarChart3, MessageSquare, Database, Cloud
+  BarChart3, MessageSquare, Database, Cloud, Bot, Link2
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { apiService, SystemStatus, LoopStatus } from '../services/apiService';
@@ -82,18 +82,31 @@ export const StatusView = () => {
   const { showToast } = useToast();
   const [status, setStatus] = useState<SystemStatus | null>(null);
   const [loopStatus, setLoopStatus] = useState<LoopStatus | null>(null);
+  const [brokersData, setBrokersData] = useState<any>(null);
+  const [ctraderTokens, setCtraderTokens] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [connected, setConnected] = useState<boolean | null>(null);
   const [loopAction, setLoopAction] = useState(false);
+  const [brokerAction, setBrokerAction] = useState(false);
+  const [grokOverview, setGrokOverview] = useState<any>(null);
+  const [grokSummary, setGrokSummary] = useState<string | null>(null);
+  const [grokLoading, setGrokLoading] = useState(false);
+  const [agentManifest, setAgentManifest] = useState<any>(null);
 
   const fetchAll = useCallback(async () => {
     try {
-      const [st, ls] = await Promise.all([
+      const [st, ls, br, tk, manifest] = await Promise.all([
         apiService.getStatus(),
         apiService.getLoopStatus(),
+        apiService.getBrokers().catch(() => null),
+        apiService.getCTraderTokens().catch(() => null),
+        apiService.getAgentConnectManifest().catch(() => null),
       ]);
       setStatus(st);
       setLoopStatus(ls);
+      if (br) setBrokersData(br.brokers);
+      if (tk) setCtraderTokens(tk);
+      if (manifest) setAgentManifest(manifest);
       setConnected(true);
     } catch (err) {
       console.warn('Backend unreachable:', err);
@@ -108,6 +121,24 @@ export const StatusView = () => {
     const iv = setInterval(fetchAll, 10_000);
     return () => clearInterval(iv);
   }, [fetchAll]);
+
+  const handleToggleCTrader = async (enable: boolean) => {
+    setBrokerAction(true);
+    try {
+      if (enable) {
+        const res = await apiService.enableCTraderLive();
+        showToast(res.message || 'cTrader live connection attempted', res.connected ? 'success' : 'warning');
+      } else {
+        const res = await apiService.disableCTraderLive();
+        showToast(res.message || 'cTrader paper mode active', 'info');
+      }
+      fetchAll();
+    } catch (err: any) {
+      showToast(`cTrader toggle failed: ${err.message}`, 'error');
+    } finally {
+      setBrokerAction(false);
+    }
+  };
 
   const handleStartLoop = async () => {
     setLoopAction(true);
@@ -136,6 +167,33 @@ export const StatusView = () => {
       showToast('Failed to stop loop', 'error');
     } finally {
       setLoopAction(false);
+    }
+  };
+
+  const handleGrokOverview = async () => {
+    setGrokLoading(true);
+    try {
+      const overview = await apiService.getGrokOverseerOverview();
+      setGrokOverview(overview);
+      showToast('Grok overseer snapshot loaded', 'success');
+    } catch (err: any) {
+      showToast(`Grok overview failed: ${err.message}`, 'error');
+    } finally {
+      setGrokLoading(false);
+    }
+  };
+
+  const handleGrokAnalyze = async () => {
+    setGrokLoading(true);
+    try {
+      const res = await apiService.analyzeGrokOverseer('risk and operational health');
+      setGrokSummary(res.summary || null);
+      setGrokOverview(res.overview || grokOverview);
+      showToast('Grok overseer analysis complete', 'success');
+    } catch (err: any) {
+      showToast(`Grok analyze failed: ${err.message}`, 'error');
+    } finally {
+      setGrokLoading(false);
     }
   };
 
@@ -307,22 +365,145 @@ export const StatusView = () => {
         </div>
       </div>
 
-      {/* Brokers */}
+      {/* Multi-Broker Architecture */}
       <div>
-        <h3 className="text-sm font-bold mb-4 flex items-center gap-2">
-          <Zap size={16} className="text-emerald-400" /> Execution Brokers
-        </h3>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-          {status.brokers.map((b, i) => (
-            <div key={i}>
-              <ProviderCard
-                name={b.name}
-                detail={`Environment: ${b.env}`}
-                status={b.status}
-                icon={b.name.includes('Binance') ? Zap : Globe}
-              />
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-sm font-bold flex items-center gap-2">
+            <Zap size={16} className="text-emerald-400" /> Multi-Broker Hub & Adapters
+          </h3>
+          <span className="text-[11px] text-zinc-500 font-mono">
+            {brokersData ? 'Unified Router Active' : 'Connecting to Router...'}
+          </span>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          {/* Binance Futures Card */}
+          <div className="bg-[#141416] border border-zinc-800 rounded-xl p-5 flex flex-col justify-between hover:border-zinc-700 transition-all">
+            <div>
+              <div className="flex items-start justify-between mb-3">
+                <div className="flex items-center gap-3">
+                  <div className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/20">
+                    <Zap size={20} className="text-amber-400" />
+                  </div>
+                  <div>
+                    <h4 className="font-bold text-sm text-white">Binance Futures</h4>
+                    <p className="text-xs text-zinc-400">Crypto Perpetuals (BTC, ETH, SOL, etc.)</p>
+                  </div>
+                </div>
+                <span className={cn(
+                  "px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider border",
+                  brokersData?.binance_futures?.status?.connected
+                    ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-400"
+                    : "bg-zinc-800 border-zinc-700 text-zinc-400"
+                )}>
+                  {brokersData?.binance_futures?.status?.connected ? 'Connected' : 'Offline / Standby'}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-3 gap-2 mt-4 pt-3 border-t border-zinc-800/80 text-xs">
+                <div>
+                  <span className="text-[10px] text-zinc-500 font-bold block uppercase">Balance</span>
+                  <span className="font-mono font-bold text-zinc-200">
+                    ${(brokersData?.binance_futures?.status?.balance ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-[10px] text-zinc-500 font-bold block uppercase">Open Pos</span>
+                  <span className="font-mono font-bold text-zinc-200">
+                    {brokersData?.binance_futures?.status?.open_positions ?? 0}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-[10px] text-zinc-500 font-bold block uppercase">Circuit Breaker</span>
+                  <span className={cn(
+                    "font-bold text-[11px]",
+                    brokersData?.binance_futures?.circuit_breaker?.available ? "text-emerald-400" : "text-rose-400"
+                  )}>
+                    {brokersData?.binance_futures?.circuit_breaker?.available ? 'HEALTHY' : 'TRIPPED'}
+                  </span>
+                </div>
+              </div>
             </div>
-          ))}
+
+            <div className="mt-4 pt-3 border-t border-zinc-800/80 flex items-center justify-between text-xs text-zinc-500">
+              <span>Mode: {brokersData?.binance_futures?.status?.dry_run ? 'Dry-Run / Paper' : 'Live Gateway'}</span>
+              <span className="text-zinc-600 font-mono text-[10px]">Direct REST + WS</span>
+            </div>
+          </div>
+
+          {/* cTrader Open API Card */}
+          <div className="bg-[#141416] border border-zinc-800 rounded-xl p-5 flex flex-col justify-between hover:border-zinc-700 transition-all">
+            <div>
+              <div className="flex items-start justify-between mb-3">
+                <div className="flex items-center gap-3">
+                  <div className="p-2.5 rounded-xl bg-sky-500/10 border border-sky-500/20">
+                    <Globe size={20} className="text-sky-400" />
+                  </div>
+                  <div>
+                    <h4 className="font-bold text-sm text-white">cTrader Open API</h4>
+                    <p className="text-xs text-zinc-400">Forex, Metals & Multi-Asset (IC Trading)</p>
+                  </div>
+                </div>
+                <span className={cn(
+                  "px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider border",
+                  brokersData?.ctrader?.status?.connected
+                    ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-400"
+                    : "bg-sky-500/10 border-sky-500/20 text-sky-400"
+                )}>
+                  {brokersData?.ctrader?.status?.dry_run ? 'Paper Mode' : 'Live Gateway'}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-3 gap-2 mt-4 pt-3 border-t border-zinc-800/80 text-xs">
+                <div>
+                  <span className="text-[10px] text-zinc-500 font-bold block uppercase">Balance</span>
+                  <span className="font-mono font-bold text-zinc-200">
+                    ${(brokersData?.ctrader?.status?.balance ?? 50000).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-[10px] text-zinc-500 font-bold block uppercase">Token Expiry</span>
+                  <span className="font-mono font-bold text-zinc-200">
+                    {ctraderTokens?.days_until_expiration ? `${ctraderTokens.days_until_expiration}d` : '30d (Valid)'}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-[10px] text-zinc-500 font-bold block uppercase">Circuit Breaker</span>
+                  <span className={cn(
+                    "font-bold text-[11px]",
+                    brokersData?.ctrader?.circuit_breaker?.available ? "text-emerald-400" : "text-rose-400"
+                  )}>
+                    {brokersData?.ctrader?.circuit_breaker?.available ? 'HEALTHY' : 'TRIPPED'}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-4 pt-3 border-t border-zinc-800/80 flex items-center justify-between">
+              <span className="text-xs text-zinc-500">
+                Host: {brokersData?.ctrader?.status?.host || 'demo.ctraderapi.com:5035'}
+              </span>
+              <div className="flex items-center gap-2">
+                {brokersData?.ctrader?.status?.dry_run ? (
+                  <button
+                    onClick={() => handleToggleCTrader(true)}
+                    disabled={brokerAction}
+                    className="px-3 py-1 bg-sky-500 hover:bg-sky-400 text-black rounded-lg text-xs font-bold transition-all disabled:opacity-50"
+                  >
+                    Connect Live
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => handleToggleCTrader(false)}
+                    disabled={brokerAction}
+                    className="px-3 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-lg text-xs font-bold transition-all border border-zinc-700 disabled:opacity-50"
+                  >
+                    Switch to Paper
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -418,6 +599,70 @@ export const StatusView = () => {
               </div>
             ))}
           </div>
+        </div>
+      </div>
+
+      {/* GrokBOT Overseer & Agent API */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="bg-[#141416] border border-zinc-800 rounded-2xl p-6">
+          <h3 className="text-sm font-bold mb-4 flex items-center gap-2">
+            <Bot size={16} className="text-violet-400" /> GrokBOT Overseer
+          </h3>
+          <p className="text-xs text-zinc-500 mb-4">
+            Supervisor snapshot for overseer jobs. Endpoints: <code className="text-zinc-400">GET /api/agents/grok-overseer/overview</code>
+          </p>
+          <div className="flex flex-wrap gap-2 mb-4">
+            <button
+              onClick={handleGrokOverview}
+              disabled={grokLoading}
+              className="px-3 py-1.5 bg-violet-500/20 hover:bg-violet-500/30 text-violet-300 rounded-lg text-xs font-bold border border-violet-500/30 disabled:opacity-50"
+            >
+              {grokLoading ? 'Loading…' : 'Load Snapshot'}
+            </button>
+            <button
+              onClick={handleGrokAnalyze}
+              disabled={grokLoading}
+              className="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded-lg text-xs font-bold border border-zinc-700 disabled:opacity-50"
+            >
+              Run Grok Analysis
+            </button>
+          </div>
+          {grokSummary && (
+            <pre className="text-[10px] text-zinc-300 bg-zinc-900/60 p-3 rounded-lg border border-zinc-800 whitespace-pre-wrap max-h-48 overflow-y-auto">
+              {grokSummary}
+            </pre>
+          )}
+          {grokOverview?.sections && (
+            <div className="mt-3 grid grid-cols-2 gap-2 text-[10px]">
+              {Object.keys(grokOverview.sections).slice(0, 6).map((k) => (
+                <div key={k} className="px-2 py-1 bg-zinc-900/50 rounded border border-zinc-800 text-zinc-400 capitalize">
+                  {k.replace(/_/g, ' ')}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="bg-[#141416] border border-zinc-800 rounded-2xl p-6">
+          <h3 className="text-sm font-bold mb-4 flex items-center gap-2">
+            <Link2 size={16} className="text-sky-400" /> Agent Connect API
+          </h3>
+          {agentManifest ? (
+            <div className="space-y-2 text-xs">
+              <p className="text-zinc-400 font-mono truncate">{agentManifest.name} v{agentManifest.version}</p>
+              <p className="text-zinc-500">OAuth: <span className="text-zinc-300 font-mono">{agentManifest.auth_methods?.[2]?.token_url || '/api/agents/oauth/token'}</span></p>
+              <div className="flex flex-wrap gap-1 mt-2">
+                {(agentManifest.scopes || []).map((s: string) => (
+                  <span key={s} className="px-2 py-0.5 bg-sky-500/10 border border-sky-500/20 text-sky-300 rounded text-[9px] font-bold uppercase">
+                    {s}
+                  </span>
+                ))}
+              </div>
+              <p className="text-[10px] text-zinc-600 mt-3">Manifest: GET /api/agents/connect</p>
+            </div>
+          ) : (
+            <p className="text-xs text-zinc-500">Agent manifest unavailable — check backend /api/agents/connect</p>
+          )}
         </div>
       </div>
     </motion.div>

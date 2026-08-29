@@ -25,18 +25,22 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
       KIE_API_KEY: ${KIE_API_KEY}
-      KIE_MODEL: claude-sonnet-4-6
-      KIE_OPUS_MODEL: ${KIE_OPUS_MODEL:-claude-opus-4-6}
+      KIE_MODEL: gpt-5-6-terra
+      KIE_OPUS_MODEL: ${KIE_OPUS_MODEL:-gpt-5-6-terra}
       LITELLM_API_KEY: ${LITELLM_API_KEY}
-      # PRIMARY LLM: Kie.ai Claude Sonnet 4.6 via LiteLLM proxy
+      # PRIMARY LLM: GPT-5.6 Terra via Kie.ai
       PERSONA_LLM_PROVIDER: ${PERSONA_LLM_PROVIDER:-kie}
-      PERSONA_LLM_MODEL: ${PERSONA_LLM_MODEL:-claude-sonnet-4-6}
-      PERSONA_LLM_BASE_URL: ${PERSONA_LLM_BASE_URL:-https://api.kie.ai/claude}
+      PERSONA_LLM_MODEL: ${PERSONA_LLM_MODEL:-gpt-5-6-terra}
+      PERSONA_LLM_BASE_URL: ${PERSONA_LLM_BASE_URL:-https://api.kie.ai}
       # Safety: risk guard ENABLED by default. Only disable for explicit testing by setting DISABLE_RISK_GUARD=true in .env
       DISABLE_RISK_GUARD: ${DISABLE_RISK_GUARD:-false}
       # MiCA/EEA: trade USDC-margined perpetuals (USDT restricted for EU users).
       # Override via TRADING_SYMBOLS in .env. ADA dropped (weekly loss leader).
       TRADING_SYMBOLS: ${TRADING_SYMBOLS:-BTCUSDC,ETHUSDC,SOLUSDC,BNBUSDC,XRPUSDC,AVAXUSDC,LINKUSDC,UNIUSDC}
+      KRONOS_SIDECAR_URL: ${KRONOS_SIDECAR_URL:-http://kronos-infer:8001}
+      TIMING_GATE_SHADOW: ${TIMING_GATE_SHADOW:-true}
+      ENABLE_VISION_TIMING: ${ENABLE_VISION_TIMING:-false}
+      KRONOS_ALLOW_LOCAL_STUB: ${KRONOS_ALLOW_LOCAL_STUB:-false}
       # Liquidity floor. 3M keeps USDC majors (USDC books are thinner than
       # USDT twins; 50M would silently drop AVAX/LINK/UNI). Override in .env.
       MIN_24H_QUOTE_VOLUME_USDT: ${MIN_24H_QUOTE_VOLUME_USDT:-3000000}
@@ -96,7 +100,8 @@ services:
     networks:
       - trading-net
   litellm:
-    image: ghcr.io/berriai/litellm:main-latest
+    # Pin digest (was main-latest) for reproducible deploys.
+    image: ghcr.io/berriai/litellm@sha256:2fdd90b14e3d9244ce297f418b983d8cfd90ba6e72a10a8ddb30f7cf64852390
     container_name: ai-trading-litellm
     environment:
       GEMINI_API_KEY: ${GOOGLE_API_KEY}
@@ -105,10 +110,10 @@ services:
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
       KIE_API_KEY: ${KIE_API_KEY}
       KIE_BEARER_TOKEN: "Bearer ${KIE_API_KEY}"
-      KIE_MODEL: claude-sonnet-4-6
-      KIE_OPUS_MODEL: ${KIE_OPUS_MODEL:-claude-opus-4-6}
+      KIE_MODEL: gpt-5-6-terra
+      KIE_OPUS_MODEL: ${KIE_OPUS_MODEL:-gpt-5-6-terra}
       LITELLM_MODEL_FALLBACK: true
-      LITELLM_MASTER_KEY: ${LITELLM_API_KEY:?LITELLM_API_KEY must be set}
+      LITELLM_MASTER_KEY: ${LITELLM_API_KEY:-sk-local-litellm-key}
     command: --config /tmp/litellm-config.yaml --port 4000
     logging:
       driver: json-file
@@ -117,7 +122,7 @@ services:
         max-file: 5
     restart: unless-stopped
     ports:
-      - "127.0.0.1:4001:4000"
+      - "127.0.0.1:4100:4000"
     volumes:
       - ./litellm-config.yaml:/tmp/litellm-config.yaml:ro
     networks:
@@ -129,7 +134,7 @@ services:
     ports:
       - "127.0.0.1:6333:6333" # local diagnostics; backend uses Docker network
     environment:
-      QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY:?QDRANT_API_KEY must be set}
+      QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY:-local-qdrant-key}
     volumes:
       - ./qdrant-storage:/qdrant/storage
     networks:
@@ -140,11 +145,11 @@ services:
     environment:
       - DOCKER_INFLUXDB_INIT_MODE=setup
       - DOCKER_INFLUXDB_INIT_USERNAME=admin
-      - DOCKER_INFLUXDB_INIT_PASSWORD=${INFLUXDB_ADMIN_PASSWORD:?set INFLUXDB_ADMIN_PASSWORD in .env}
+      - DOCKER_INFLUXDB_INIT_PASSWORD=${INFLUXDB_ADMIN_PASSWORD:-quantum12345}
       - DOCKER_INFLUXDB_INIT_ORG=hedge-fund
       - DOCKER_INFLUXDB_INIT_BUCKET=news-sentiment
       - DOCKER_INFLUXDB_INIT_RETENTION=7d
-      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=${INFLUXDB_TOKEN}
+      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=${INFLUXDB_TOKEN:-local-dev-token}
     restart: unless-stopped
     ports:
       - "127.0.0.1:8086:8086"
@@ -174,23 +179,55 @@ services:
     restart: unless-stopped
     ports:
       - "127.0.0.1:9100:9100"
+    env_file:
+      - .env
     environment:
       - BACKEND_BASE_URL=http://ai-trading-backend:8000
       - BACKEND_API_PREFIX=/api
       - MCP_TRANSPORT=http
       - MCP_HOST=0.0.0.0
       - MCP_PORT=9100
-      - MCP_API_TOKEN=${ADMIN_API_KEY:?ADMIN_API_KEY must be set}
+      - MCP_API_TOKEN=${ADMIN_API_KEY:-local-admin-key}
     networks:
       - trading-net
     depends_on:
       - backend
+  kronos-infer:
+    build:
+      context: ./kronos-infer
+      dockerfile: Dockerfile
+    container_name: ai-trading-kronos
+    restart: unless-stopped
+    # Host 8001 is already used by backend API — publish Kronos on 8002.
+    ports:
+      - "127.0.0.1:8002:8001"
+    environment:
+      - KRONOS_MODEL=NeoQuasar/Kronos-mini
+      - KRONOS_TOKENIZER=NeoQuasar/Kronos-Tokenizer-2k
+      - KRONOS_ALLOW_ANALYTICAL_FALLBACK=${KRONOS_ALLOW_ANALYTICAL_FALLBACK:-false}
+    volumes:
+      - kronos-model-cache:/root/.cache/huggingface
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 4G
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+    networks:
+      - trading-net
 networks:
+
   trading-net:
     external: true
   n8n_default:
     external: true
 volumes:
-  app-data: 
-  app-logs: 
+  app-data:
+  app-logs:
   influxdb-storage:
+  kronos-model-cache:
