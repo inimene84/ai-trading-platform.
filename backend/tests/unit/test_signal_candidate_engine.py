@@ -261,11 +261,17 @@ async def test_execute_candidate_accepts_ctrader_sent_status():
     with patch.object(signal_candidate_engine, "_open_ctrader_position_count", return_value=0), patch(
         "backend.services.signal_candidate_engine.ctrader_service.place_order",
         return_value={"status": "sent", "symbol": "EURUSD", "direction": "BUY", "quantity": 0.01},
-    ):
+    ), patch(
+        "backend.services.signal_candidate_engine.persist_ctrader_execution",
+        return_value=99,
+    ) as mock_persist:
         res = await signal_candidate_engine.execute_candidate(sig_id, force=True)
 
     assert res["success"] is True
     assert signal_candidate_engine.candidates[sig_id]["status"] == CandidateStatus.EXECUTED
+    mock_persist.assert_called_once()
+    assert mock_persist.call_args.kwargs["symbol"] == "EURUSD"
+    assert mock_persist.call_args.kwargs["direction"] == "BUY"
 
 
 @pytest.mark.asyncio

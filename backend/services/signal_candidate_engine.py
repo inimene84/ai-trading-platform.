@@ -14,6 +14,7 @@ from typing import Dict, Any, List, Optional, Set
 from datetime import datetime, timezone
 
 from backend.services.ctrader_service import CTraderService, ctrader_service
+from backend.services.ctrader_trade_sync import persist_ctrader_execution
 from backend.services.unified_trading import UnifiedTrading, UnifiedOrder, OrderSide, OrderType
 from backend.services.binance_market_data import binance_market_data
 from backend.services.multi_asset_bars import classify_symbol, tf_to_binance_interval
@@ -714,6 +715,24 @@ class SignalCandidateEngine:
             if success:
                 cand["status"] = CandidateStatus.EXECUTED
                 cand["executed_at"] = datetime.now(timezone.utc).isoformat()
+                if cand["broker"] == "ctrader":
+                    persist_ctrader_execution(
+                        symbol=cand["symbol"],
+                        direction=side,
+                        quantity=qty,
+                        entry_price=float(
+                            (order_res or {}).get("price")
+                            or (order_res or {}).get("entry_price")
+                            or cand.get("entry_price")
+                            or 0
+                        ),
+                        stop_loss=cand.get("stop_loss"),
+                        take_profit=cand.get("take_profit"),
+                        strategy=cand.get("strategy"),
+                        order_id=order_id,
+                        position_id=(order_res or {}).get("position_id"),
+                        notes=msg,
+                    )
             else:
                 logger.warning(
                     f"Candidate {candidate_id} execution failed ({cand['broker']}): {msg}"

@@ -15,6 +15,8 @@ from backend.database.models import TradingSignal, Trade, PortfolioSnapshot
 from backend.services.trading_loop import trading_loop
 from backend.services.ai_analysis import ai_analysis_service
 from backend.services.risk_config import refresh_risk_config
+from backend.services.ctrader_service import ctrader_broker
+from backend.services.ctrader_trade_sync import overlay_live_mark, upsert_ctrader_live_trades
 from backend.services.unified_trading import (
     UnifiedTrading, UnifiedOrder, OrderSide, OrderType,
 )
@@ -692,8 +694,22 @@ async def get_positions():
     """Get all open positions with current P&L."""
     db = SessionLocal()
     try:
+        live_ctrader: List[Dict[str, Any]] = []
+        try:
+            live_ctrader = list(ctrader_broker.get_positions() or [])
+            if live_ctrader:
+                upsert_ctrader_live_trades(db, live_ctrader)
+        except Exception as exc:
+            logger.warning("cTrader live-book sync for dashboard failed: %s", exc)
+
         open_trades = db.query(Trade).filter(Trade.status.in_(["open", "filled"])).all()
         mark_prices = _fetch_mark_prices_for_symbols({t.symbol for t in open_trades})
+        live_by_pid = {
+            str(p.get("position_id")): p for p in live_ctrader if p.get("position_id")
+        }
+        live_by_symbol = {
+            str(p.get("symbol") or "").upper(): p for p in live_ctrader if p.get("symbol")
+        }
         positions = []
         for t in open_trades:
             current_price = mark_prices.get(t.symbol) or t.entry_price
@@ -707,7 +723,7 @@ async def get_positions():
             if t.entry_price and t.quantity and t.entry_price * t.quantity > 0:
                 pnl_pct = (unrealized_pnl / (t.entry_price * t.quantity)) * 100
 
-            positions.append({
+            payload = {
                 "id": t.id,
                 "symbol": t.symbol,
                 "direction": t.direction,
@@ -719,8 +735,11 @@ async def get_positions():
                 "unrealized_pnl": round(unrealized_pnl, 2),
                 "unrealized_pnl_pct": round(pnl_pct, 2),
                 "strategy": t.strategy,
+                "broker": getattr(t, "broker", None) or getattr(t, "exchange", None),
+                "broker_position_id": getattr(t, "broker_position_id", None),
                 "opened_at": t.timestamp.isoformat() if t.timestamp else None,
-            })
+            }
+            positions.append(overlay_live_mark(payload, live_by_pid, live_by_symbol))
         return {"positions": positions, "count": len(positions)}
     finally:
         db.close()

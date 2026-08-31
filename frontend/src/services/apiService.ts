@@ -87,6 +87,7 @@ export interface Position {
   unrealized_pnl: number;
   unrealized_pnl_pct: number;
   strategy: string;
+  broker?: string | null;
   opened_at: string | null;
 }
 

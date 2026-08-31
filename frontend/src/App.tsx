@@ -897,6 +897,7 @@ export default function App() {
         pnlPct: p.unrealized_pnl_pct,
         openedAt: p.opened_at,
         strategy: p.strategy,
+        broker: p.broker || null,
       }));
       setBackendPositions(converted);
     } catch (err) {

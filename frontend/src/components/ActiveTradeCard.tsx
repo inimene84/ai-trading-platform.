@@ -203,7 +203,12 @@ export function ActiveTradeCard({ trade, onClose, onModify }: ActiveTradeCardPro
             <div>
               <div className="text-sm font-bold text-white font-mono">{trade.symbol.replace('=X', '').replace('USDT', '/USDT').replace('USDC', '/USDC')}</div>
               {trade.strategy && (
-                <div className="text-[9px] text-zinc-500 uppercase tracking-wider">{trade.strategy}</div>
+                <div className="text-[9px] text-zinc-500 uppercase tracking-wider">
+                  {trade.broker ? `${trade.broker} · ${trade.strategy}` : trade.strategy}
+                </div>
+              )}
+              {!trade.strategy && trade.broker && (
+                <div className="text-[9px] text-zinc-500 uppercase tracking-wider">{trade.broker}</div>
               )}
             </div>
           </div>
