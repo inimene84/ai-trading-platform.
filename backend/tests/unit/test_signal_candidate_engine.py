@@ -4,6 +4,7 @@ Unit tests for the Layered Signal Candidate Engine, Timing Windows, and REST Rou
 
 import pytest
 import time
+from unittest.mock import AsyncMock, MagicMock, patch
 from starlette.testclient import TestClient
 from backend.main import app
 from backend.services.signal_candidate_engine import (
@@ -11,6 +12,8 @@ from backend.services.signal_candidate_engine import (
     TimingMode,
     CandidateStatus,
 )
+from backend.services.ctrader_service import CTraderService
+from backend.services.multi_asset_bars import classify_symbol, tf_to_binance_interval
 
 
 @pytest.fixture
@@ -30,6 +33,24 @@ def test_feature_computation():
     assert 0 <= features["rsi"] <= 100
     assert features["trend"] in ["BULLISH", "BEARISH", "NEUTRAL"]
     assert features["volatility_pct"] > 0
+
+
+def test_feature_atr_clamped_when_bars_are_wrong_scale():
+    """JPY-scale mismatch: ATR of ~20 on a 94.5 close must not produce a 142 TP."""
+    synthetic_bars = [
+        {"close": 94.54, "high": 114.54, "low": 74.54, "volume": 100}
+        for _ in range(20)
+    ]
+    features = signal_candidate_engine._compute_features(synthetic_bars)
+    assert features["atr"] <= features["last_close"] * 0.012 + 1e-9
+    sl, tp = CTraderService.clamp_protective_prices(
+        "NZDJPY",
+        features["last_close"],
+        features["last_close"] - 1.2 * features["atr"],
+        features["last_close"] + 2.4 * features["atr"],
+    )
+    assert tp is not None and tp < 97.0
+    assert sl is not None and sl > 92.0
 
 
 def test_calculate_size_forex():
@@ -185,3 +206,176 @@ def test_signals_routes_dual_mounted_for_nginx_rewrite(client):
     api_res = client.get("/api/signals/timing-config")
     assert api_res.status_code == 200
     assert api_res.json()["config"]["pre_event_window_min"] == get_res.json()["config"]["pre_event_window_min"]
+
+
+def test_usdcad_classified_as_forex_not_crypto():
+    """USDCAD must not match USDC substring and route to cTrader."""
+    assert classify_symbol("USDCAD") == "forex"
+    assert classify_symbol("BTCUSDT") == "crypto"
+
+
+def test_tf_to_binance_interval_maps_m5():
+    """Scanner timeframe M5 must map to Binance 5m, not invalid m5."""
+    assert tf_to_binance_interval("M5") == "5m"
+    assert tf_to_binance_interval("5m") == "5m"
+
+
+@pytest.mark.asyncio
+async def test_scan_markets_routes_usdcad_to_ctrader():
+    """USDCAD should use cTrader trendbars, not Binance klines."""
+    with patch.object(
+        signal_candidate_engine, "_compute_features", return_value={"last_close": 1.0, "atr": 0.001, "rsi": 50, "trend": "NEUTRAL", "volatility_pct": 0.1}
+    ), patch(
+        "backend.services.signal_candidate_engine.ctrader_service.get_trendbars",
+        return_value=[{"close": 1.36, "high": 1.361, "low": 1.359, "volume": 1}] * 25,
+    ) as mock_ctrader, patch(
+        "backend.services.signal_candidate_engine.binance_market_data.get_klines",
+        new_callable=AsyncMock,
+    ) as mock_binance:
+        await signal_candidate_engine.scan_markets(universe=["USDCAD"], timeframe="M5")
+        mock_ctrader.assert_called_once()
+        mock_binance.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_execute_candidate_accepts_ctrader_sent_status():
+    """cTrader live dispatch returns status=sent before fill ack; must count as success."""
+    now_ts = int(time.time())
+    sig_id = "test-exec-sent-01"
+    signal_candidate_engine.candidates[sig_id] = {
+        "id": sig_id,
+        "symbol": "EURUSD",
+        "broker": "ctrader",
+        "strategy": "MOMENTUM_TREND_PULSE",
+        "direction": "BUY",
+        "entry_price": 1.0850,
+        "stop_loss": 1.0820,
+        "take_profit": 1.0910,
+        "timing_mode": TimingMode.BAR_CLOSE,
+        "status": CandidateStatus.READY,
+        "earliest_exec_at": now_ts - 5,
+        "latest_exec_at": now_ts + 600,
+        "sizing": {"lots": 0.01, "quantity": 0.01, "risk_usd": 50.0},
+    }
+
+    with patch.object(signal_candidate_engine, "_open_ctrader_position_count", return_value=0), patch(
+        "backend.services.signal_candidate_engine.ctrader_service.place_order",
+        return_value={"status": "sent", "symbol": "EURUSD", "direction": "BUY", "quantity": 0.01},
+    ):
+        res = await signal_candidate_engine.execute_candidate(sig_id, force=True)
+
+    assert res["success"] is True
+    assert signal_candidate_engine.candidates[sig_id]["status"] == CandidateStatus.EXECUTED
+
+
+def test_get_ready_signals_forex_only_excludes_crypto():
+    now_ts = int(time.time())
+    signal_candidate_engine.candidates["fx-ready"] = {
+        "id": "fx-ready",
+        "symbol": "EURUSD",
+        "broker": "ctrader",
+        "status": CandidateStatus.READY,
+        "confidence": 0.9,
+        "earliest_exec_at": now_ts - 5,
+        "latest_exec_at": now_ts + 600,
+    }
+    signal_candidate_engine.candidates["cr-ready"] = {
+        "id": "cr-ready",
+        "symbol": "BTCUSDT",
+        "broker": "binance_futures",
+        "status": CandidateStatus.READY,
+        "confidence": 0.99,
+        "earliest_exec_at": now_ts - 5,
+        "latest_exec_at": now_ts + 600,
+    }
+
+    with patch.object(signal_candidate_engine, "_open_ctrader_position_count", return_value=0):
+        ready = signal_candidate_engine.get_ready_signals(now_ts, forex_only=True, limit=5)
+
+    ids = {c["id"] for c in ready}
+    assert "fx-ready" in ids
+    assert "cr-ready" not in ids
+
+
+def test_get_ready_signals_empty_when_ctrader_position_cap_reached():
+    now_ts = int(time.time())
+    signal_candidate_engine.candidates["fx-cap"] = {
+        "id": "fx-cap",
+        "symbol": "GBPUSD",
+        "broker": "ctrader",
+        "status": CandidateStatus.READY,
+        "confidence": 0.8,
+        "earliest_exec_at": now_ts - 5,
+        "latest_exec_at": now_ts + 600,
+    }
+
+    with patch.dict(signal_candidate_engine.execution_config, {"max_open_ctrader_positions": 1}), patch.object(
+        signal_candidate_engine, "_open_ctrader_position_count", return_value=1
+    ):
+        ready = signal_candidate_engine.get_ready_signals(now_ts, forex_only=True, limit=1)
+
+    assert ready == []
+
+
+def test_get_ready_signals_allows_multiple_when_slots_remain():
+    now_ts = int(time.time())
+    for i, sym in enumerate(["EURUSD", "GBPUSD", "USDJPY"]):
+        signal_candidate_engine.candidates[f"fx-multi-{i}"] = {
+            "id": f"fx-multi-{i}",
+            "symbol": sym,
+            "broker": "ctrader",
+            "status": CandidateStatus.READY,
+            "confidence": 0.9 - (i * 0.01),
+            "earliest_exec_at": now_ts - 5,
+            "latest_exec_at": now_ts + 600,
+        }
+
+    with patch.dict(
+        signal_candidate_engine.execution_config,
+        {"max_open_ctrader_positions": 5, "max_ready_per_poll": 2, "one_position_per_symbol": True},
+    ), patch.object(
+        signal_candidate_engine, "_open_ctrader_position_count", return_value=1
+    ), patch.object(
+        signal_candidate_engine, "_open_ctrader_symbols", return_value={"EURUSD"}
+    ):
+        ready = signal_candidate_engine.get_ready_signals(now_ts, forex_only=True, limit=2)
+
+    symbols = [c["symbol"] for c in ready]
+    assert "EURUSD" not in symbols
+    assert len(ready) == 2
+    assert set(symbols) <= {"GBPUSD", "USDJPY"}
+
+
+@pytest.mark.asyncio
+async def test_execute_candidate_keeps_ready_on_paper_failure():
+    """Failed paper fills must not mark candidate EXECUTED."""
+    now_ts = int(time.time())
+    sig_id = "test-exec-fail-01"
+    signal_candidate_engine.candidates[sig_id] = {
+        "id": sig_id,
+        "symbol": "BTCUSDT",
+        "broker": "binance_futures",
+        "strategy": "MOMENTUM_TREND_PULSE",
+        "direction": "BUY",
+        "entry_price": 0,
+        "stop_loss": 90000,
+        "take_profit": 110000,
+        "timing_mode": TimingMode.BAR_CLOSE,
+        "status": CandidateStatus.READY,
+        "earliest_exec_at": now_ts - 5,
+        "latest_exec_at": now_ts + 600,
+        "sizing": {"lots": 0.1, "quantity": 0.01, "risk_usd": 50.0},
+    }
+
+    mock_resp = MagicMock(success=False, order_id="paper_000001", message="Paper market entry requires an explicit price or prior market fill")
+    with patch.dict(signal_candidate_engine.execution_config, {"forex_only": False}), patch.object(
+        signal_candidate_engine, "_resolve_mark_price", new_callable=AsyncMock, return_value=0.0
+    ), patch(
+        "backend.services.signal_candidate_engine.UnifiedTrading"
+    ) as mock_ut_cls:
+        mock_ut_cls.return_value.place_order.return_value = mock_resp
+        res = await signal_candidate_engine.execute_candidate(sig_id, force=True)
+
+    assert res["success"] is False
+    assert signal_candidate_engine.candidates[sig_id]["status"] == CandidateStatus.READY
+    assert signal_candidate_engine.candidates[sig_id]["execution_result"]["success"] is False

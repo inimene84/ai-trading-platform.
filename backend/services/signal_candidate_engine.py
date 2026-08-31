@@ -8,13 +8,15 @@ sizing, and timing execution windows (Pre-event, At-release, Post-reaction, Bar-
 import asyncio
 import time
 import logging
+import os
 import uuid
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Set
 from datetime import datetime, timezone
 
-from backend.services.ctrader_service import ctrader_service
+from backend.services.ctrader_service import CTraderService, ctrader_service
 from backend.services.unified_trading import UnifiedTrading, UnifiedOrder, OrderSide, OrderType
 from backend.services.binance_market_data import binance_market_data
+from backend.services.multi_asset_bars import classify_symbol, tf_to_binance_interval
 
 logger = logging.getLogger(__name__)
 
@@ -53,8 +55,64 @@ class SignalCandidateEngine:
                 "slingshot": True,
             },
         }
+        self.execution_config: Dict[str, Any] = {
+            "forex_only": os.getenv("CTRADER_FOREX_ONLY", "true").lower() == "true",
+            "max_open_ctrader_positions": int(os.getenv("CTRADER_MAX_OPEN_POSITIONS", "5")),
+            "max_ready_per_poll": int(os.getenv("CTRADER_MAX_READY_PER_POLL", "2")),
+            "max_ctrader_lots": float(os.getenv("CTRADER_MAX_LOTS", "0.10")),
+            "one_position_per_symbol": os.getenv("CTRADER_ONE_POSITION_PER_SYMBOL", "true").lower() == "true",
+        }
 
-    # ── Feature Engineering Helpers ──────────────────────────────────────────
+    @staticmethod
+    def _is_ctrader_forex_candidate(cand: Dict[str, Any]) -> bool:
+        if cand.get("broker") != "ctrader":
+            return False
+        asset = classify_symbol(str(cand.get("symbol", "")))
+        return asset in ("forex", "metal")
+
+    def _open_ctrader_position_count(self) -> int:
+        try:
+            st = ctrader_service.status()
+            if st.get("connected"):
+                return int(st.get("open_positions") or 0)
+            return len(ctrader_service.get_positions())
+        except Exception as err:
+            logger.warning(f"Could not read cTrader open positions: {err}")
+            return 0
+
+    def _open_ctrader_symbols(self) -> Set[str]:
+        try:
+            return {
+                str(p.get("symbol", "")).upper()
+                for p in (ctrader_service.get_positions() or [])
+                if p.get("symbol")
+            }
+        except Exception as err:
+            logger.warning(f"Could not read cTrader open symbols: {err}")
+            return set()
+
+    def _ctrader_execution_slots_remaining(self) -> int:
+        cap = int(self.execution_config.get("max_open_ctrader_positions", 5))
+        return max(0, cap - self._open_ctrader_position_count())
+
+    def _ctrader_execution_slot_available(self) -> bool:
+        return self._ctrader_execution_slots_remaining() > 0
+
+    def clear_candidates(self, statuses: Optional[List[str]] = None) -> int:
+        """Drop in-memory candidates (default: everything except EXECUTED)."""
+        if statuses is None:
+            statuses = [
+                CandidateStatus.PENDING,
+                CandidateStatus.READY,
+                CandidateStatus.EXPIRED,
+                CandidateStatus.CANCELLED,
+            ]
+        removed = 0
+        for cid, cand in list(self.candidates.items()):
+            if cand.get("status") in statuses:
+                del self.candidates[cid]
+                removed += 1
+        return removed
     @staticmethod
     def _compute_features(bars: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Compute standard technical indicators from candlestick bars."""
@@ -86,6 +144,13 @@ class SignalCandidateEngine:
             l_cp = abs(lows[i] - closes[i - 1])
             trs.append(max(h_l, h_cp, l_cp))
         atr = sum(trs) / len(trs) if trs else (highs[-1] - lows[-1])
+        if last_close > 0 and atr > last_close * 0.05:
+            logger.warning(
+                "ATR %s exceeds 5%% of price %s — clamping (possible JPY scale mismatch)",
+                atr,
+                last_close,
+            )
+            atr = last_close * 0.012
 
         # Simple RSI (14 period)
         gains, losses = [], []
@@ -317,14 +382,16 @@ class SignalCandidateEngine:
 
         for sym in universe:
             try:
-                is_crypto = "USDT" in sym or "USDC" in sym or sym.startswith("BTC") or sym.startswith("ETH") or sym.startswith("SOL")
-                broker = "binance_futures" if is_crypto else "ctrader"
+                asset_class = classify_symbol(sym)
+                broker = "binance_futures" if asset_class == "crypto" else "ctrader"
 
                 # Ingest bars
                 if broker == "ctrader":
                     bars = ctrader_service.get_trendbars(sym, timeframe, count=40)
                 else:
-                    bars = await binance_market_data.get_klines(sym, interval=timeframe.lower(), limit=40)
+                    bars = await binance_market_data.get_klines(
+                        sym, interval=tf_to_binance_interval(timeframe), limit=40
+                    )
 
                 features = self._compute_features(bars)
 
@@ -339,6 +406,14 @@ class SignalCandidateEngine:
                 for ev in evaluators:
                     raw_signal = ev(sym, features, broker)
                     if raw_signal:
+                        sl, tp = CTraderService.clamp_protective_prices(
+                            sym,
+                            raw_signal["entry_price"],
+                            raw_signal.get("stop_loss"),
+                            raw_signal.get("take_profit"),
+                        )
+                        raw_signal["stop_loss"] = sl
+                        raw_signal["take_profit"] = tp
                         size_data = self._calculate_size(sym, raw_signal["entry_price"], raw_signal["stop_loss"], broker)
 
                         # Timing window parameters
@@ -390,8 +465,8 @@ class SignalCandidateEngine:
         news_candidates = []
         try:
             cal_res = await get_economic_calendar()
-            feed_res = await get_news_feed()
-            sent_res = await get_market_sentiment()
+            await get_news_feed()
+            await get_market_sentiment()
 
             events = cal_res.get("events", [])
             high_impact = [e for e in events if e.get("impact") == "high"]
@@ -403,7 +478,12 @@ class SignalCandidateEngine:
 
                 bars = ctrader_service.get_trendbars(matched_sym, "M5", count=30)
                 features = self._compute_features(bars)
-                size_data = self._calculate_size(matched_sym, features["last_close"], features["last_close"] * 0.996, "ctrader")
+                sl = round(features["last_close"] - (1.2 * features["atr"]), 5)
+                tp = round(features["last_close"] + (2.4 * features["atr"]), 5)
+                sl, tp = CTraderService.clamp_protective_prices(
+                    matched_sym, features["last_close"], sl, tp
+                )
+                size_data = self._calculate_size(matched_sym, features["last_close"], sl, "ctrader")
 
                 now_ts = int(time.time())
                 candidate = {
@@ -413,8 +493,8 @@ class SignalCandidateEngine:
                     "strategy": "MACRO_EVENT_POST_REACTION",
                     "direction": "BUY" if features["trend"] == "BULLISH" else "SELL",
                     "entry_price": features["last_close"],
-                    "stop_loss": round(features["last_close"] - (1.2 * features["atr"]), 5),
-                    "take_profit": round(features["last_close"] + (2.4 * features["atr"]), 5),
+                    "stop_loss": sl,
+                    "take_profit": tp,
                     "timing_mode": TimingMode.POST_REACTION,
                     "status": CandidateStatus.PENDING,
                     "confidence": 0.85,
@@ -434,7 +514,15 @@ class SignalCandidateEngine:
         return news_candidates
 
     # ── Ready for Execution Queue ───────────────────────────────────────────
-    def get_ready_signals(self, current_ts: Optional[int] = None) -> List[Dict[str, Any]]:
+    def get_ready_signals(
+        self,
+        current_ts: Optional[int] = None,
+        *,
+        broker: Optional[str] = None,
+        forex_only: bool = False,
+        limit: Optional[int] = None,
+        enforce_ctrader_position_cap: bool = True,
+    ) -> List[Dict[str, Any]]:
         """Return signals whose timing window is currently open and valid."""
         if not current_ts:
             current_ts = int(time.time())
@@ -454,7 +542,60 @@ class SignalCandidateEngine:
                 if cand["status"] == CandidateStatus.READY:
                     ready.append(cand)
 
+        if broker:
+            ready = [c for c in ready if c.get("broker") == broker.lower()]
+        if forex_only or self.execution_config.get("forex_only"):
+            ready = [c for c in ready if self._is_ctrader_forex_candidate(c)]
+
+        ready.sort(key=lambda c: float(c.get("confidence") or 0), reverse=True)
+
+        if self.execution_config.get("one_position_per_symbol"):
+            open_syms = self._open_ctrader_symbols()
+            ready = [c for c in ready if str(c.get("symbol", "")).upper() not in open_syms]
+            seen: Set[str] = set()
+            unique: List[Dict[str, Any]] = []
+            for cand in ready:
+                sym = str(cand.get("symbol", "")).upper()
+                if not sym or sym in seen:
+                    continue
+                seen.add(sym)
+                unique.append(cand)
+            ready = unique
+
+        if enforce_ctrader_position_cap:
+            slots = self._ctrader_execution_slots_remaining()
+            if slots <= 0:
+                ready = []
+            else:
+                ready = ready[:slots]
+
+        poll_limit = limit
+        if poll_limit is None:
+            poll_limit = self.execution_config.get("max_ready_per_poll")
+        if poll_limit is not None:
+            ready = ready[: max(0, int(poll_limit))]
+
         return ready
+
+    async def _resolve_mark_price(self, symbol: str, broker: str, fallback: float = 0.0) -> float:
+        """Fetch a live quote for paper market fills when no explicit price is set."""
+        if fallback and fallback > 0:
+            return float(fallback)
+        sym = symbol.upper()
+        try:
+            if broker == "binance_futures":
+                from backend.services.binance_futures_service import BinanceFuturesService
+                bfs = BinanceFuturesService()
+                ticker = await asyncio.to_thread(
+                    bfs._get_client().futures_symbol_ticker, symbol=sym
+                )
+                return float(ticker.get("price", 0) or 0)
+            tick = await binance_market_data.get_ticker_24h(sym)
+            if tick and tick.get("lastPrice"):
+                return float(tick["lastPrice"])
+        except Exception as err:
+            logger.warning(f"Could not resolve mark price for {sym}: {err}")
+        return 0.0
 
     # ── Execution Dispatcher ────────────────────────────────────────────────
     async def execute_candidate(self, candidate_id: str, force: bool = False) -> Dict[str, Any]:
@@ -474,9 +615,40 @@ class SignalCandidateEngine:
                 cand["status"] = CandidateStatus.EXPIRED
                 return {"success": False, "error": "Timing window expired."}
 
+        if self.execution_config.get("forex_only") and cand.get("broker") == "binance_futures":
+            return {
+                "success": False,
+                "error": "Forex-only execution mode: crypto candidates are blocked.",
+            }
+        if cand.get("broker") == "ctrader":
+            if self.execution_config.get("forex_only") and not self._is_ctrader_forex_candidate(cand):
+                return {
+                    "success": False,
+                    "error": "Forex-only execution mode: candidate is not a cTrader forex/metal pair.",
+                }
+            if not self._ctrader_execution_slot_available():
+                return {
+                    "success": False,
+                    "error": (
+                        f"Max open cTrader positions reached "
+                        f"({self.execution_config.get('max_open_ctrader_positions', 5)})."
+                    ),
+                }
+            if self.execution_config.get("one_position_per_symbol"):
+                sym = str(cand.get("symbol", "")).upper()
+                if sym in self._open_ctrader_symbols():
+                    return {
+                        "success": False,
+                        "error": f"Already have an open cTrader position in {sym}.",
+                    }
+
         # Route through appropriate broker engine
         try:
             qty = cand["sizing"]["lots"] if cand["broker"] == "ctrader" else cand["sizing"]["quantity"]
+            if cand["broker"] == "ctrader":
+                max_lots = float(self.execution_config.get("max_ctrader_lots") or 0)
+                if max_lots > 0:
+                    qty = min(float(qty), max_lots)
             side = cand["direction"].upper()
 
             if cand["broker"] == "ctrader":
@@ -488,17 +660,22 @@ class SignalCandidateEngine:
                     stop_loss=cand.get("stop_loss"),
                     take_profit=cand.get("take_profit"),
                 )
-                success = bool(order_res and order_res.get("status") in ["ok", "simulated", "filled"])
+                status = (order_res or {}).get("status", "")
+                success = status in ("ok", "simulated", "filled", "sent")
                 order_id = order_res.get("order_id") if order_res else None
-                msg = f"cTrader order {order_id} placed ({order_res.get('status', 'ok')})"
+                msg = f"cTrader order {order_id or 'pending'} placed ({status or 'unknown'})"
             else:
                 order_side = OrderSide.BUY if side == "BUY" else OrderSide.SELL
+                fill_price = await self._resolve_mark_price(
+                    cand["symbol"], cand["broker"], float(cand.get("entry_price") or 0)
+                )
                 ut = UnifiedTrading()
                 order_req = UnifiedOrder(
                     symbol=cand["symbol"],
                     side=order_side,
                     order_type=OrderType.MARKET,
                     quantity=qty,
+                    price=fill_price,
                     stop_loss=cand.get("stop_loss"),
                     take_profit=cand.get("take_profit"),
                 )
@@ -507,14 +684,19 @@ class SignalCandidateEngine:
                 order_id = res.order_id
                 msg = res.message
 
-            cand["status"] = CandidateStatus.EXECUTED
             cand["execution_result"] = {
                 "success": success,
                 "order_id": order_id,
                 "message": msg,
                 "broker": cand["broker"],
             }
-            cand["executed_at"] = datetime.now(timezone.utc).isoformat()
+            if success:
+                cand["status"] = CandidateStatus.EXECUTED
+                cand["executed_at"] = datetime.now(timezone.utc).isoformat()
+            else:
+                logger.warning(
+                    f"Candidate {candidate_id} execution failed ({cand['broker']}): {msg}"
+                )
 
             return {
                 "success": success,

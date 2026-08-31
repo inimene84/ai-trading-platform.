@@ -5,14 +5,13 @@ Exposes endpoints for market scanning, news correlation, timing queues, and n8n 
 
 from fastapi import APIRouter, HTTPException, Query, Body
 from pydantic import BaseModel, Field
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict
 import time
 import logging
 
 from backend.services.signal_candidate_engine import (
     signal_candidate_engine,
     TimingMode,
-    CandidateStatus,
 )
 
 logger = logging.getLogger(__name__)
@@ -116,14 +115,44 @@ async def get_all_candidates(
 
 
 @router.get("/ready-for-execution")
-async def get_ready_signals():
+async def get_ready_signals(
+    broker: Optional[str] = Query(None, description="Filter by broker: ctrader, binance_futures"),
+    forex_only: bool = Query(False, description="Only cTrader forex/metal candidates"),
+    limit: Optional[int] = Query(None, ge=1, le=50, description="Max signals returned this poll"),
+):
     """Polled by n8n or execution workers to get signals currently inside their active timing window."""
     now_ts = int(time.time())
-    ready = signal_candidate_engine.get_ready_signals(now_ts)
+    ready = signal_candidate_engine.get_ready_signals(
+        now_ts,
+        broker=broker,
+        forex_only=forex_only,
+        limit=limit,
+        enforce_ctrader_position_cap=True,
+    )
     return {
         "ready_count": len(ready),
         "signals": ready,
         "server_time": now_ts,
+        "open_ctrader_positions": signal_candidate_engine._open_ctrader_position_count(),
+        "execution_config": signal_candidate_engine.execution_config,
+    }
+
+
+@router.post("/candidates/clear")
+async def clear_candidates(
+    keep_executed: bool = Query(True, description="Keep EXECUTED candidates when clearing queue"),
+):
+    """Clear stale in-memory candidates (admin). Use before enabling auto-execution."""
+    if keep_executed:
+        removed = signal_candidate_engine.clear_candidates()
+    else:
+        removed = len(signal_candidate_engine.candidates)
+        signal_candidate_engine.candidates.clear()
+    return {
+        "status": "ok",
+        "removed": removed,
+        "remaining": len(signal_candidate_engine.candidates),
+        "timestamp": int(time.time()),
     }
 
 
