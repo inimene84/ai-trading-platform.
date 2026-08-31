@@ -67,6 +67,8 @@ function coalescePrice(...values: Array<number | null | undefined>): number {
   }
   return 0;
 }
+
+function calculateSlProgress(
   side: 'long' | 'short',
   entry: number,
   current: number,
