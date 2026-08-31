@@ -1266,7 +1266,10 @@ async def get_ctrader_trendbars(
 ):
     """
     Get historical OHLCV trendbars for cTrader charting and technical analysis.
-    Uses ProtoOAGetTrendbarsReq when live connected, with fallback to high-fidelity cache.
+
+    Live sessions return broker data only; an empty ``bars`` list means no real
+    history was available (timeout or missing symbol). Paper mode may include
+    synthetic bars flagged with ``synthetic: true``.
     """
     from backend.services.ctrader_service import ctrader_broker
     bars = await asyncio.to_thread(
@@ -1282,6 +1285,7 @@ async def get_ctrader_trendbars(
         "period": period.upper(),
         "count": len(bars),
         "bars": bars,
+        "synthetic": bool(bars) and all(bar.get("synthetic") for bar in bars),
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 

@@ -25,6 +25,7 @@ def test_get_trendbars_service():
     assert "volume" in first
     assert "timestamp" in first
     assert "time" in first
+    assert first.get("synthetic") is True
     assert first["high"] >= first["low"]
     assert first["open"] > 0
     assert first["close"] > 0

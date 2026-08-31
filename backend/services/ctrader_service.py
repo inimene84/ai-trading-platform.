@@ -1160,68 +1160,16 @@ class CTraderService(BrokerService):
             "deposit_asset": deposit_asset,
         }
 
-    def get_trendbars(
+    def _generate_synthetic_trendbars(
         self,
-        symbol: str,
-        period: str = "M5",
-        from_ts: Optional[int] = None,
-        to_ts: Optional[int] = None,
-        count: int = 120
+        ct_symbol: str,
+        period: str,
+        count: int,
     ) -> List[Dict[str, Any]]:
-        """
-        Get OHLCV trendbars for a symbol and timeframe period.
-        If live cTrader connection is established, uses ProtoOAGetTrendbarsReq.
-        Otherwise provides high-fidelity simulated/cached trendbars.
-        """
+        """Paper-mode OHLCV generator. Never used on a live connected session."""
         import math
         import random
 
-        ct_symbol = self._normalize_symbol(symbol)
-        period_enum = self.PERIOD_MAP.get(period.upper(), 5)
-        cache_key = f"{ct_symbol}_{period_enum}"
-
-        # If live connected, send async request if needed (throttled)
-        if not self._dry_run and self.is_connected and self._protocol:
-            last = self._trendbar_last_req.get(cache_key, 0)
-            if time.time() - last < 45:
-                if cache_key in self._trendbar_cache and self._trendbar_cache[cache_key]:
-                    return self._trendbar_cache[cache_key][-count:]
-            try:
-                from ctrader_open_api.messages import OpenApiMessages_pb2 as msgs
-                from twisted.internet import reactor
-                sym_id = self._symbol_ids.get(ct_symbol)
-                if not sym_id:
-                    logger.warning(
-                        "No cTrader symbol id for %s; skipping live trendbar request",
-                        ct_symbol,
-                    )
-                else:
-                    now_ms = int(time.time() * 1000)
-                    f_ts = from_ts or (now_ms - 7 * 86400 * 1000)
-                    t_ts = to_ts or now_ms
-
-                    req = msgs.ProtoOAGetTrendbarsReq()
-                    req.ctidTraderAccountId = self._account_id or 0
-                    req.symbolId = sym_id
-                    req.period = period_enum
-                    req.fromTimestamp = f_ts
-                    req.toTimestamp = t_ts
-
-                    # Register the waiter before sending so a fast response cannot
-                    # arrive (and be missed) before we start waiting.
-                    waiter = threading.Event()
-                    self._trendbar_events[cache_key] = waiter
-                    reactor.callFromThread(lambda: self._protocol._send(req, 2137))
-                    self._trendbar_last_req[cache_key] = time.time()
-                    waiter.wait(timeout=2.0)
-            except Exception as e:
-                logger.warning(f"Live trendbar request failed: {e}")
-
-        # Check cache if populated
-        if cache_key in self._trendbar_cache and len(self._trendbar_cache[cache_key]) > 0:
-            return self._trendbar_cache[cache_key][-count:]
-
-        # High fidelity synthetic fallback generator
         digits = self.digits_for(ct_symbol)
         pip_size = float(self.pip_size_for(ct_symbol))
         base_p = self.BASE_PRICES.get(ct_symbol)
@@ -1274,10 +1222,90 @@ class CTraderService(BrokerService):
                 "high": round(high_price, digits),
                 "low": round(low_price, digits),
                 "close": round(close_price, digits),
-                "volume": volume
+                "volume": volume,
+                "synthetic": True,
             })
 
         return bars
+
+    def get_trendbars(
+        self,
+        symbol: str,
+        period: str = "M5",
+        from_ts: Optional[int] = None,
+        to_ts: Optional[int] = None,
+        count: int = 120
+    ) -> List[Dict[str, Any]]:
+        """
+        Get OHLCV trendbars for a symbol and timeframe period.
+
+        Live sessions use ProtoOAGetTrendbarsReq and return cached broker data only.
+        When live and no real bars are available (timeout, missing symbol id, empty
+        cache), returns an empty list so callers skip the symbol instead of trading
+        on fabricated prices.
+
+        Paper/dry-run mode may synthesize bars; those rows include ``synthetic: true``.
+        """
+        ct_symbol = self._normalize_symbol(symbol)
+        period_enum = self.PERIOD_MAP.get(period.upper(), 5)
+        cache_key = f"{ct_symbol}_{period_enum}"
+        live_mode = not self._dry_run and self.is_connected and self._protocol is not None
+
+        if live_mode:
+            last = self._trendbar_last_req.get(cache_key, 0)
+            if time.time() - last < 45:
+                cached = self._trendbar_cache.get(cache_key) or []
+                if cached:
+                    return cached[-count:]
+            else:
+                try:
+                    from ctrader_open_api.messages import OpenApiMessages_pb2 as msgs
+                    from twisted.internet import reactor
+
+                    sym_id = self._symbol_ids.get(ct_symbol)
+                    if not sym_id:
+                        logger.warning(
+                            "No cTrader symbol id for %s; skipping live trendbar request",
+                            ct_symbol,
+                        )
+                    else:
+                        now_ms = int(time.time() * 1000)
+                        f_ts = from_ts or (now_ms - 7 * 86400 * 1000)
+                        t_ts = to_ts or now_ms
+
+                        req = msgs.ProtoOAGetTrendbarsReq()
+                        req.ctidTraderAccountId = self._account_id or 0
+                        req.symbolId = sym_id
+                        req.period = period_enum
+                        req.fromTimestamp = f_ts
+                        req.toTimestamp = t_ts
+
+                        # Register the waiter before sending so a fast response cannot
+                        # arrive (and be missed) before we start waiting.
+                        waiter = threading.Event()
+                        self._trendbar_events[cache_key] = waiter
+                        reactor.callFromThread(lambda: self._protocol._send(req, 2137))
+                        self._trendbar_last_req[cache_key] = time.time()
+                        waiter.wait(timeout=2.0)
+                except Exception as e:
+                    logger.warning(f"Live trendbar request failed: {e}")
+
+            cached = self._trendbar_cache.get(cache_key) or []
+            if cached:
+                return cached[-count:]
+
+            logger.warning(
+                "Live trendbar fetch returned no data for %s %s; refusing synthetic fallback",
+                ct_symbol,
+                period,
+            )
+            return []
+
+        cached = self._trendbar_cache.get(cache_key) or []
+        if cached:
+            return cached[-count:]
+
+        return self._generate_synthetic_trendbars(ct_symbol, period, count)
 
     def get_tick_data(
         self,

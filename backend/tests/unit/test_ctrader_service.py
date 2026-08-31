@@ -371,3 +371,56 @@ def test_get_trendbars_registers_waiter_before_send():
     assert order == ["send", "acked"]
     assert bars[0]["close"] == 1.11
     assert bars[0]["time"] == 1_700_000_000
+
+
+def test_get_trendbars_live_timeout_returns_empty_not_synthetic():
+    """Live sessions must not fabricate bars when the broker response times out."""
+    svc = CTraderService()
+    svc._dry_run = False
+    svc._connected = True
+    svc._authenticated = True
+    svc._symbol_ids["EURUSD"] = 1
+    svc._trendbar_cache.clear()
+    svc._trendbar_last_req.clear()
+
+    class SlowProtocol:
+        def _send(self, req, ptype):
+            pass  # never signals the waiter → 2s timeout
+
+    svc._protocol = SlowProtocol()
+    reactor = MagicMock()
+    reactor.callFromThread.side_effect = lambda fn: fn()
+    msgs = MagicMock()
+
+    twisted_mod = MagicMock()
+    twisted_internet = MagicMock()
+    twisted_internet.reactor = reactor
+    messages_mod = MagicMock()
+    messages_mod.OpenApiMessages_pb2 = msgs
+
+    with patch.dict(
+        "sys.modules",
+        {
+            "twisted": twisted_mod,
+            "twisted.internet": twisted_internet,
+            "ctrader_open_api": MagicMock(),
+            "ctrader_open_api.messages": messages_mod,
+        },
+    ):
+        bars = svc.get_trendbars("EURUSD", "H1", count=40)
+
+    assert bars == []
+
+
+def test_get_trendbars_live_missing_symbol_id_returns_empty():
+    """Live sessions without a broker symbol id must not synthesize bars."""
+    svc = CTraderService()
+    svc._dry_run = False
+    svc._connected = True
+    svc._authenticated = True
+    svc._protocol = MagicMock()
+    svc._symbol_ids.pop("EURUSD", None)
+    svc._trendbar_cache.clear()
+
+    bars = svc.get_trendbars("EURUSD", "H1", count=40)
+    assert bars == []
