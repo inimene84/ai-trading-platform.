@@ -24,7 +24,7 @@
     {
       "parameters": {
         "method": "GET",
-        "url": "http://backend:8000/api/signals/ready-for-execution",
+        "url": "http://backend:8000/api/signals/ready-for-execution?broker=ctrader&forex_only=true&limit=2",
         "options": {}
       },
       "id": "22222222-3333-4444-5555-666666666602",
@@ -78,6 +78,15 @@
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={\n  \"candidate_id\": \"{{ $json.id }}\",\n  \"force\": false\n}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "={{ $env.BACKEND_API_KEY }}"
+            }
+          ]
+        },
         "options": {}
       },
       "id": "55555555-6666-7777-8888-999999999905",

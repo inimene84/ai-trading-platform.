@@ -18,10 +18,12 @@ COPY pyproject.toml .
 COPY poetry.lock .
 
 # Install with uv (uses wheels where possible, faster than pip)
-RUN uv pip install --system --no-cache -r requirements.txt
+RUN uv pip install --system --no-cache -r requirements.txt \
+    && uv pip install --system --no-cache ctrader-open-api==0.9.2 --no-deps
 
 # Copy application code
 COPY backend/ ./backend/
+COPY scripts/ ./scripts/
 COPY README.md .
 
 # Create data dirs

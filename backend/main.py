@@ -10,8 +10,6 @@ import sentry_sdk
 import structlog
 
 from backend.routes import api_router
-from backend.database.connection import engine
-from backend.database.models import Base
 from backend.services.ollama_service import ollama_service
 from backend.services.binance_wallet_poller import start_wallet_poller
 from backend.services.binance_order_poller import start_order_poller

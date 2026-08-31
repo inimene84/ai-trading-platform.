@@ -1,5 +1,5 @@
 {
-  "name": "01 - QuantumTrade Market Scanner (5m Cron)",
+  "name": "04 - QuantumTrade Forex Scanner (5m Cron)",
   "nodes": [
     {
       "parameters": {
@@ -12,7 +12,7 @@
           ]
         }
       },
-      "id": "1e9f06ab-7476-4be7-a25e-2b5e7d9b9f01",
+      "id": "f1e9f06ab-7476-4be7-a25e-2b5e7d9b9f01",
       "name": "Schedule Trigger (5m)",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
@@ -27,7 +27,7 @@
         "url": "http://backend:8000/api/signals/scan-markets",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={\n  \"universe\": [\"EURUSD\", \"GBPUSD\", \"USDJPY\", \"XAUUSD\", \"AUDUSD\", \"USDCAD\", \"BTCUSDT\", \"ETHUSDT\", \"SOLUSDT\"],\n  \"timeframe\": \"M5\"\n}",
+        "jsonBody": "={\n  \"universe\": [\"EURUSD\", \"GBPUSD\", \"USDJPY\", \"XAUUSD\", \"XAGUSD\", \"USDCAD\", \"AUDUSD\", \"USDCHF\", \"NZDUSD\"],\n  \"timeframe\": \"M5\"\n}",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [
@@ -39,8 +39,8 @@
         },
         "options": {}
       },
-      "id": "2c8d19ba-3521-4f9e-990a-1a8e6e5b4c02",
-      "name": "HTTP: Scan Markets",
+      "id": "f2c8d19ba-3521-4f9e-990a-1a8e6e5b4c02",
+      "name": "HTTP: Scan Forex Markets",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
@@ -60,7 +60,7 @@
           ]
         }
       },
-      "id": "3b7c28aa-4632-4e8f-881b-2b7e5e4d3b03",
+      "id": "f3b7c28aa-4632-4e8f-881b-2b7e5e4d3b03",
       "name": "Candidates Found?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
@@ -73,7 +73,7 @@
       "parameters": {
         "options": {}
       },
-      "id": "4a6b37bb-5743-4f90-772c-3c6f4f3e2a04",
+      "id": "f4a6b37bb-5743-4f90-772c-3c6f4f3e2a04",
       "name": "Log Candidates to Console",
       "type": "n8n-nodes-base.noOp",
       "typeVersion": 1,
@@ -88,14 +88,14 @@
       "main": [
         [
           {
-            "node": "HTTP: Scan Markets",
+            "node": "HTTP: Scan Forex Markets",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "HTTP: Scan Markets": {
+    "HTTP: Scan Forex Markets": {
       "main": [
         [
           {
@@ -118,7 +118,7 @@
       ]
     }
   },
-  "active": true,
+  "active": false,
   "settings": {
     "executionOrder": "v1"
   }

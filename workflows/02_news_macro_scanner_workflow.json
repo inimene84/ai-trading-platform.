@@ -7,13 +7,13 @@
           "interval": [
             {
               "field": "minutes",
-              "minutesInterval": 1
+              "minutesInterval": 5
             }
           ]
         }
       },
       "id": "1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c01",
-      "name": "Schedule Trigger (1m)",
+      "name": "Schedule Trigger (5m)",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
       "position": [
@@ -28,6 +28,15 @@
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={\n  \"lookahead_minutes\": 60\n}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "={{ $env.BACKEND_API_KEY }}"
+            }
+          ]
+        },
         "options": {}
       },
       "id": "2b3c4d5e-6f7a-8b9c-0d1e-2f3a4b5c6d02",
