@@ -9,7 +9,7 @@ Runs in <5ms with zero external network or LLM dependencies.
 import logging
 import os
 from dataclasses import dataclass, field
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 import pandas as pd
 import numpy as np
 

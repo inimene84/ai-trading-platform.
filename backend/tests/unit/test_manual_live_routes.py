@@ -1,6 +1,6 @@
 """Manual live routes must mutate Binance first and keep SQL reconciled."""
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
@@ -14,6 +14,7 @@ from backend.routes.trading import (
     place_live_order,
     update_config,
 )
+from backend.services.trading_mode import TradingMode
 from backend.services.unified_trading import UnifiedOrderResponse
 
 
@@ -38,7 +39,8 @@ async def test_manual_close_sends_reduce_only_exchange_order_before_db_close():
     )
 
     with patch("backend.routes.trading.SessionLocal", return_value=db), \
-         patch("backend.routes.trading.UnifiedTrading", return_value=router):
+         patch("backend.routes.trading.UnifiedTrading", return_value=router), \
+         patch("backend.services.trading_mode.get_trading_mode", return_value=TradingMode.LIVE):
         result = await close_position(1)
 
     order = router.place_order.call_args.args[0]
@@ -65,13 +67,43 @@ async def test_manual_close_leaves_db_open_when_exchange_close_fails():
     )
 
     with patch("backend.routes.trading.SessionLocal", return_value=db), \
-         patch("backend.routes.trading.UnifiedTrading", return_value=router):
+         patch("backend.routes.trading.UnifiedTrading", return_value=router), \
+         patch("backend.services.trading_mode.get_trading_mode", return_value=TradingMode.LIVE):
         with pytest.raises(HTTPException) as exc:
             await close_position(1)
 
     assert exc.value.status_code == 502
     assert trade.status == "open"
     db.commit.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_manual_close_paper_mode_closes_db_without_exchange():
+    trade = SimpleNamespace(
+        id=1, symbol="ETHUSDT", direction="BUY", quantity=0.1,
+        entry_price=100.0, status="open", exit_price=None, pnl=0.0,
+        closed_at=None, notes="", broker="binance_futures", exchange=None,
+        broker_position_id=None, broker_order_id=None,
+    )
+    db = _db_with_trade(trade)
+    router = MagicMock()
+
+    tick = {"lastPrice": "105.0"}
+    market = MagicMock()
+    market.get_ticker_24h = AsyncMock(return_value=tick)
+
+    with patch("backend.routes.trading.SessionLocal", return_value=db), \
+         patch("backend.routes.trading.UnifiedTrading", return_value=router), \
+         patch("backend.services.trading_mode.get_trading_mode", return_value=TradingMode.PAPER), \
+         patch("backend.services.binance_market_data.binance_market_data", market):
+        result = await close_position(1)
+
+    router.place_order.assert_not_called()
+    assert trade.status == "closed"
+    assert trade.exit_price == 105.0
+    assert trade.pnl == pytest.approx(0.5)
+    assert result["paper_mode"] is True
+    db.commit.assert_called_once()
 
 
 @pytest.mark.asyncio

@@ -19,7 +19,10 @@ from backend.services.trading_loop_helpers import (
     EmergencyExitManager,
     PartialTPManager,
 )
-from backend.services.binance_futures_service import BinanceFuturesService
+from backend.services.binance_futures_service import (
+    PRICE_PRECISION,
+    BinanceFuturesService,
+)
 from backend.services.risk_config import RiskConfig
 from backend.services.unified_trading import UnifiedOrderResponse
 
@@ -76,24 +79,47 @@ def test_trailing_stop_ratchet_consecutive_ticks():
 
 
 def test_binance_qty_and_price_precision():
-    """Verify precision rounding adheres strictly to lot and tick size step rules."""
-    service = BinanceFuturesService()
+    """Verify precision rounding adheres strictly to lot and tick size step rules.
 
-    # BTC precision
-    qty_btc = service._round_qty("BTCUSDT", 0.12345678)
-    assert qty_btc == 0.123
+    CI (and some VPS regions) cannot reach Binance futures (`restricted location`),
+    so this test injects LOT_SIZE / precision instead of depending on exchangeInfo.
+    """
+    with patch.object(
+        BinanceFuturesService, "_get_client", side_effect=RuntimeError("offline")
+    ):
+        service = BinanceFuturesService()
+    service._lot_step.update({
+        "BTCUSDT": 0.001,
+        "DOGEUSDT": 1.0,
+        "SOLUSDT": 0.01,
+    })
+    service._lot_min.update({
+        "BTCUSDT": 0.001,
+        "DOGEUSDT": 1.0,
+        "SOLUSDT": 0.01,
+    })
+    service._qty_precision.update({
+        "BTCUSDT": 3,
+        "DOGEUSDT": 0,
+        "SOLUSDT": 2,
+    })
 
-    # DOGE precision (integer quantity)
-    qty_doge = service._round_qty("DOGEUSDT", 55.89)
-    assert qty_doge == 55.0
+    with patch.dict(PRICE_PRECISION, {"BTCUSDT": 2}):
+        # BTC precision
+        qty_btc = service._round_qty("BTCUSDT", 0.12345678)
+        assert qty_btc == 0.123
 
-    # SOL precision (LOT_SIZE step)
-    qty_sol = service._round_qty("SOLUSDT", 2.456)
-    assert qty_sol == 2.45
+        # DOGE precision (integer quantity)
+        qty_doge = service._round_qty("DOGEUSDT", 55.89)
+        assert qty_doge == 55.0
 
-    # Tick size price rounding
-    px_btc = service._round_price("BTCUSDT", 64123.4567)
-    assert px_btc == 64123.46  # 2 decimal places price precision
+        # SOL precision (LOT_SIZE step)
+        qty_sol = service._round_qty("SOLUSDT", 2.456)
+        assert qty_sol == 2.45
+
+        # Tick size price rounding
+        px_btc = service._round_price("BTCUSDT", 64123.4567)
+        assert px_btc == 64123.46  # 2 decimal places price precision
 
 
 @pytest.mark.asyncio

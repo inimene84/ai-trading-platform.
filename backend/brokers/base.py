@@ -3,7 +3,6 @@ BrokerService interface definition and common broker data structures.
 Compatible with BinanceFuturesService, CTraderService, and UnifiedTrading.
 """
 from typing import Protocol, Optional, Any, Dict, List, runtime_checkable
-from decimal import Decimal
 
 
 @runtime_checkable

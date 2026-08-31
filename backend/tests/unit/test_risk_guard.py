@@ -169,8 +169,15 @@ def test_risk_guard_blocks_excessive_daily_loss(db_session):
 
 
 def test_risk_guard_blocks_excessive_directional_exposure(db_session):
-    # Exposure cap of $500; two open trades totalling $600 notional must trip.
-    cfg = RiskConfig(max_directional_exposure_usdt=500.0, max_positions=10, max_open_positions=10)
+    # Hard USDT cap applies when equity sizing is off (no dynamic equity multiplier).
+    # Default equity_sizing_enabled=True would raise the cap to equity * 4 in paper
+    # mode and this $600 book would not trip.
+    cfg = RiskConfig(
+        max_directional_exposure_usdt=500.0,
+        max_positions=10,
+        max_open_positions=10,
+        equity_sizing_enabled=False,
+    )
     trades = [
         Trade(symbol="BTCUSDT", direction="BUY", quantity=0.005, entry_price=60000.0, status="open"),  # $300
         Trade(symbol="ETHUSDT", direction="BUY", quantity=0.1, entry_price=3000.0, status="open"),      # $300
@@ -179,8 +186,57 @@ def test_risk_guard_blocks_excessive_directional_exposure(db_session):
         enforce_risk_limits(db_session, cfg, trades, None)
 
 
+def test_risk_guard_equity_multiplier_raises_hard_usdt_cap(db_session):
+    """With equity sizing, the directional cap is max(hard USDT, equity * mult)."""
+    cfg = RiskConfig(
+        max_directional_exposure_usdt=500.0,
+        max_direction_notional_equity_mult=4.0,
+        max_positions=10,
+        max_open_positions=10,
+        equity_sizing_enabled=True,
+    )
+    snap = PortfolioSnapshot(
+        total_value=10000.0,
+        cash=10000.0,
+        timestamp=datetime.now(timezone.utc),
+    )
+    trades = [
+        Trade(symbol="BTCUSDT", direction="BUY", quantity=0.005, entry_price=60000.0, status="open"),  # $300
+        Trade(symbol="ETHUSDT", direction="BUY", quantity=0.1, entry_price=3000.0, status="open"),      # $300
+    ]
+    # $600 < max($500, $10000 * 4) = $40000 — must not trip.
+    enforce_risk_limits(db_session, cfg, trades, snap)
+
+
+def test_risk_guard_equity_multiplier_still_enforces_when_equity_is_small(db_session):
+    cfg = RiskConfig(
+        max_directional_exposure_usdt=500.0,
+        max_direction_notional_equity_mult=4.0,
+        max_positions=10,
+        max_open_positions=10,
+        equity_sizing_enabled=True,
+    )
+    snap = PortfolioSnapshot(
+        total_value=100.0,
+        cash=100.0,
+        timestamp=datetime.now(timezone.utc),
+    )
+    trades = [
+        Trade(symbol="BTCUSDT", direction="BUY", quantity=0.005, entry_price=60000.0, status="open"),  # $300
+        Trade(symbol="ETHUSDT", direction="BUY", quantity=0.1, entry_price=3000.0, status="open"),      # $300
+    ]
+    # cap = max($500, $100 * 4) = $500; $600 must trip.
+    with pytest.raises(RiskBreach, match="directional exposure exceeded"):
+        enforce_risk_limits(db_session, cfg, trades, snap)
+
+
 def test_risk_guard_allows_exposure_within_cap(db_session):
-    cfg = RiskConfig(max_directional_exposure_usdt=500.0, max_positions=10, max_open_positions=10)
+    cfg = RiskConfig(
+        max_directional_exposure_usdt=500.0,
+        max_positions=10,
+        max_open_positions=10,
+        equity_sizing_enabled=False,
+    )
     trades = [
         Trade(symbol="BTCUSDT", direction="BUY", quantity=0.001, entry_price=60000.0, status="open"),  # $60
     ]
