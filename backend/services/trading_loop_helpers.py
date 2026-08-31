@@ -11,6 +11,8 @@ import os
 import asyncio
 from datetime import datetime, timezone
 
+from sqlalchemy import or_
+
 from backend.database.models import Trade, PortfolioSnapshot
 from backend.services.influxdb_writer import influx
 from backend.services.decision_engine import atr_from_bars
@@ -156,6 +158,7 @@ class BrokerPositionSyncService:
         broker,
         pyramid_layers: dict,
         sl_cooldown: dict,
+        broker_name: str = "binance_futures",
     ) -> int:
         updated = 0
         try:
@@ -167,7 +170,17 @@ class BrokerPositionSyncService:
                 if float(bp.get('quantity') or bp.get('positionAmt') or 0) != 0
             }
 
-            db_trades = db.query(Trade).filter(Trade.status.in_(["open", "filled"])).all()
+            # Only reconcile rows that belong to the broker being synced. A
+            # cTrader forex row is invisible to a Binance snapshot, so syncing
+            # across brokers would close live FX positions as phantom orphans.
+            owner = Trade.broker == broker_name
+            if broker_name == "binance_futures":
+                owner = or_(owner, Trade.broker.is_(None))  # legacy rows predate the column
+            db_trades = (
+                db.query(Trade)
+                .filter(Trade.status.in_(["open", "filled"]), owner)
+                .all()
+            )
             # An entirely empty exchange snapshot while SQL still has open
             # trades is ambiguous: it may mean every position closed, but it
             # also occurs on permissions/testnet/API degradation. Never flatten

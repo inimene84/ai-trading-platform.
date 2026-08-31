@@ -740,8 +740,12 @@ class CTraderService(BrokerService):
             price = bid or ask
         return float(price) if price else None
 
-    def get_positions(self) -> List[Dict[str, Any]]:
-        """Return all open positions across cTrader, marked to the latest spot."""
+    def get_positions(self, raise_on_error: bool = False) -> List[Dict[str, Any]]:
+        """Return all open positions across cTrader, marked to the latest spot.
+
+        `raise_on_error` exists for parity with the Binance broker so callers
+        can treat the two interchangeably.
+        """
         positions = []
         for pos in self._positions:
             enriched = dict(pos)

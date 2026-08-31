@@ -38,10 +38,17 @@ from backend.services.trading_loop_helpers import (
 load_dotenv()
 
 # ── Broker selector ──────────────────────────────────────────────────────────
+DEFAULT_ACTIVE_BROKER = "ctrader"
+
+
+def get_active_broker_name() -> str:
+    """Name of the active broker. Single source of truth for broker resolution."""
+    return os.getenv("ACTIVE_BROKER", DEFAULT_ACTIVE_BROKER).strip() or DEFAULT_ACTIVE_BROKER
+
+
 def get_active_broker():
     """Dynamically resolve the active broker based on environment."""
-    broker_name = os.getenv("ACTIVE_BROKER", "ctrader")
-    if broker_name == "binance_futures":
+    if get_active_broker_name() == "binance_futures":
         return binance_futures_broker
     return ctrader_broker
 
@@ -331,6 +338,7 @@ class TradingLoopService:
             broker=binance_futures_broker,
             pyramid_layers=self._pyramid_layers,
             sl_cooldown=self._sl_cooldown,
+            broker_name="binance_futures",
         )
 
     async def stop(self):
