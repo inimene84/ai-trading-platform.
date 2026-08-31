@@ -118,21 +118,19 @@ class SignalCandidateEngine:
                 del self.candidates[cid]
                 removed += 1
         return removed
+    MIN_FEATURE_BARS = 20
+
     @staticmethod
-    def _compute_features(bars: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Compute standard technical indicators from candlestick bars."""
-        if not bars or len(bars) < 5:
-            return {
-                "last_close": 1.0,
-                "atr": 0.0010,
-                "rsi": 50.0,
-                "ema_fast": 1.0,
-                "ema_slow": 1.0,
-                "trend": "NEUTRAL",
-                "volatility_pct": 0.1,
-                "recent_high": 1.0,
-                "recent_low": 1.0,
-            }
+    def _compute_features(bars: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        """Compute standard technical indicators from candlestick bars.
+
+        Returns None when there is not enough history. The previous placeholder
+        (price 1.0, RSI 50, volatility 0.1%) looked exactly like a compressed
+        range, so an empty API response would fire a straddle candidate on
+        fabricated data. Callers must skip the symbol instead.
+        """
+        if not bars or len(bars) < SignalCandidateEngine.MIN_FEATURE_BARS:
+            return None
 
         closes = [b["close"] for b in bars]
         highs = [b["high"] for b in bars]
@@ -399,6 +397,12 @@ class SignalCandidateEngine:
                     )
 
                 features = self._compute_features(bars)
+                if not features:
+                    logger.warning(
+                        f"Skipping {sym}: only {len(bars or [])} bars returned, "
+                        f"need {self.MIN_FEATURE_BARS}"
+                    )
+                    continue
 
                 # Evaluate strategies in order of priority
                 evaluators = [
@@ -483,12 +487,27 @@ class SignalCandidateEngine:
 
                 bars = ctrader_service.get_trendbars(matched_sym, "M5", count=30)
                 features = self._compute_features(bars)
-                sl = round(features["last_close"] - (1.2 * features["atr"]), 5)
-                tp = round(features["last_close"] + (2.4 * features["atr"]), 5)
+                if not features:
+                    logger.warning(
+                        f"Skipping macro candidate for {matched_sym}: insufficient bars"
+                    )
+                    continue
+                direction = "BUY" if features["trend"] == "BULLISH" else "SELL"
+                entry = features["last_close"]
+                atr = features["atr"]
+                # Protection must sit on the correct side of entry. A short with
+                # a stop below and a target above is an inverted bracket that
+                # never caps the loss.
+                if direction == "BUY":
+                    sl = round(entry - (1.2 * atr), 5)
+                    tp = round(entry + (2.4 * atr), 5)
+                else:
+                    sl = round(entry + (1.2 * atr), 5)
+                    tp = round(entry - (2.4 * atr), 5)
                 sl, tp = CTraderService.clamp_protective_prices(
-                    matched_sym, features["last_close"], sl, tp
+                    matched_sym, entry, sl, tp
                 )
-                size_data = self._calculate_size(matched_sym, features["last_close"], sl, "ctrader")
+                size_data = self._calculate_size(matched_sym, entry, sl, "ctrader")
 
                 now_ts = int(time.time())
                 candidate = {
@@ -496,8 +515,8 @@ class SignalCandidateEngine:
                     "symbol": matched_sym,
                     "broker": "ctrader",
                     "strategy": "MACRO_EVENT_POST_REACTION",
-                    "direction": "BUY" if features["trend"] == "BULLISH" else "SELL",
-                    "entry_price": features["last_close"],
+                    "direction": direction,
+                    "entry_price": entry,
                     "stop_loss": sl,
                     "take_profit": tp,
                     "timing_mode": TimingMode.POST_REACTION,

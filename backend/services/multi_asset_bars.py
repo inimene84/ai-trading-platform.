@@ -78,7 +78,11 @@ async def fetch_bars(symbol: str, timeframe: str = "1h", limit: int = 100) -> Di
 
     if asset_class == "crypto":
         from backend.services.binance_market_data import binance_market_data
-        bars = await binance_market_data.get_klines(symbol=sym, interval=timeframe, limit=limit)
+        # Callers pass cTrader-style timeframes (M5, H1); Binance rejects those
+        # outright and the empty result used to look like a flat market.
+        bars = await binance_market_data.get_klines(
+            symbol=sym, interval=tf_to_binance_interval(timeframe), limit=limit
+        )
         return {"symbol": sym, "asset_class": asset_class, "source": "binance", "data": _normalize_bars(bars)}
 
     if asset_class in ("forex", "metal"):

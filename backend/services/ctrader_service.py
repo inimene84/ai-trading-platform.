@@ -807,6 +807,26 @@ class CTraderService(BrokerService):
         ct_symbol = self._normalize_symbol(raw_sym)
         side = "BUY" if direction.upper() in ("BUY", "LONG") else "SELL"
         lots = volume if volume is not None else (quantity if quantity is not None else 1.0)
+
+        # A close is a different protocol message. This method only ever sent
+        # ProtoOANewOrderReq, so a caller asking to close silently doubled the
+        # position instead of flattening it.
+        if str(action).lower() == "close":
+            held = next(
+                (p for p in self._positions if str(p.get("symbol")) == ct_symbol),
+                None,
+            )
+            if not held:
+                return {
+                    "status": "already_flat",
+                    "broker": "ctrader",
+                    "symbol": ct_symbol,
+                }
+            return self.close_position(
+                position_id=held.get("position_id"),
+                symbol=ct_symbol,
+                volume=lots if quantity is not None or volume is not None else held.get("quantity"),
+            )
         current_price = price or kwargs.get("current_price")
         stop_loss_price = stop_loss or kwargs.get("stop_loss_price")
         take_profit_price = take_profit or kwargs.get("take_profit_price")
