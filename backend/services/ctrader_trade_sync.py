@@ -153,6 +153,10 @@ def overlay_live_mark(
     # back to entry and the card reads a flat 0.00. Use the streamed spot.
     if live.get("current_price"):
         payload["current_price"] = float(live["current_price"])
+    # Show the protection the broker actually holds, not what was requested.
+    for level in ("stop_loss", "take_profit"):
+        if live.get(level) is not None:
+            payload[level] = float(live[level])
     if entry and qty:
         notional = abs(entry * qty)
         payload["unrealized_pnl_pct"] = round((pnl / notional) * 100, 2) if notional else 0.0

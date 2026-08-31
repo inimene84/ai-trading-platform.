@@ -121,6 +121,29 @@ def test_generous_stops_are_left_alone():
     assert out_tp == pytest.approx(tp, abs=1e-9)
 
 
+def test_overlay_reports_broker_held_protection():
+    """The dashboard must show attached protection, not the requested level."""
+    from backend.services.ctrader_trade_sync import overlay_live_mark
+
+    payload = {
+        "broker": "ctrader",
+        "symbol": "EURUSD",
+        "broker_position_id": "1",
+        "entry_price": 1.16172,
+        "quantity": 0.1,
+        "stop_loss": 1.16164,   # what the engine asked for
+        "take_profit": None,
+    }
+    out = overlay_live_mark(
+        payload,
+        {"1": {"entry_price": 1.16172, "quantity": 0.1, "unrealized_pnl": 0.0,
+               "stop_loss": 1.16072, "take_profit": 1.16372}},
+        {},
+    )
+    assert out["stop_loss"] == pytest.approx(1.16072), "broker value must win"
+    assert out["take_profit"] == pytest.approx(1.16372)
+
+
 def test_live_entry_is_refused_when_stop_cannot_be_encoded(fake_ctrader_sdk):
     """Opening without the requested stop is what left positions unprotected."""
     svc = CTraderService()

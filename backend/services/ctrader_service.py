@@ -183,6 +183,9 @@ class CTraderProtocol:
                     side = "BUY" if p.tradeData.tradeSide == 1 else "SELL"
                     sym_name = self._service.symbol_name_for_id(p.tradeData.symbolId)
                     volume_lots = self._service.protocol_volume_to_lots(p.tradeData.volume)
+                    # Surface the protection the broker actually holds. A stop
+                    # inside the broker's stop level is dropped silently, so
+                    # "requested" and "attached" are not the same thing.
                     positions.append({
                         "symbol": sym_name,
                         "symbol_id": p.tradeData.symbolId,
@@ -190,6 +193,8 @@ class CTraderProtocol:
                         "quantity": volume_lots,
                         "entry_price": p.price if hasattr(p, "price") else 0.0,
                         "unrealized_pnl": 0.0,
+                        "stop_loss": float(p.stopLoss) if getattr(p, "stopLoss", 0) else None,
+                        "take_profit": float(p.takeProfit) if getattr(p, "takeProfit", 0) else None,
                         "position_id": str(p.positionId),
                         "broker": "ctrader",
                     })
