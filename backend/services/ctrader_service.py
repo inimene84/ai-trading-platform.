@@ -12,7 +12,6 @@ import struct
 import threading
 import time
 from decimal import Decimal
-from pathlib import Path
 from typing import Optional, Dict, List, Any
 
 from backend.brokers.base import BrokerService
@@ -111,14 +110,29 @@ class CTraderProtocol:
                 req_reconcile.ctidTraderAccountId = self._creds.get("account_id", 0)
                 self._send(req_reconcile, 2124)
 
-            elif ptype == 2116:  # ProtoOASymbolsListRes
+            elif ptype == 2115:  # ProtoOASymbolsListRes (2116 is SymbolByIdReq)
                 res = msgs.ProtoOASymbolsListRes()
                 res.ParseFromString(msg.payload)
                 sym_map = {}
                 for sym in res.symbol:
-                    sym_map[sym.symbolName] = sym.symbolId
-                self._service._symbol_ids.update(sym_map)
-                logger.info(f"cTrader dynamic symbol catalog updated: {len(sym_map)} instruments")
+                    name = CTraderService.normalize_catalog_name(getattr(sym, "symbolName", "") or "")
+                    if name:
+                        sym_map[name] = sym.symbolId
+                self._service._symbol_ids = CTraderService.merge_symbol_catalog(
+                    dict(self._service.DEFAULT_SYMBOL_IDS),
+                    sym_map,
+                )
+                self._service.relabel_cached_symbols()
+                logger.info(
+                    "cTrader dynamic symbol catalog updated: %s instruments (NZDJPY id=%s)",
+                    len(self._service._symbol_ids),
+                    self._service._symbol_ids.get("NZDJPY"),
+                )
+                # Reconcile often arrives before this large catalog. Refresh names
+                # after IDs are unique so NZDJPY is not left labeled XAUUSD.
+                req_rec = msgs.ProtoOAReconcileReq()
+                req_rec.ctidTraderAccountId = self._creds.get("account_id", 0)
+                self._send(req_rec, 2124)
 
             elif ptype == 2122:  # ProtoOATraderRes
                 trader_res = msgs.ProtoOATraderRes()
@@ -143,10 +157,11 @@ class CTraderProtocol:
                 positions = []
                 for p in reconcile_res.position:
                     side = "BUY" if p.tradeData.tradeSide == 1 else "SELL"
-                    sym_name = next((k for k, v in self._service._symbol_ids.items() if v == p.tradeData.symbolId), str(p.tradeData.symbolId))
-                    volume_lots = p.tradeData.volume / 100_000.0
+                    sym_name = self._service.symbol_name_for_id(p.tradeData.symbolId)
+                    volume_lots = self._service.protocol_volume_to_lots(p.tradeData.volume)
                     positions.append({
                         "symbol": sym_name,
+                        "symbol_id": p.tradeData.symbolId,
                         "side": side,
                         "quantity": volume_lots,
                         "entry_price": p.price if hasattr(p, "price") else 0.0,
@@ -161,6 +176,9 @@ class CTraderProtocol:
                 ev = msgs.ProtoOAExecutionEvent()
                 ev.ParseFromString(msg.payload)
                 logger.info(f"cTrader execution event received: type={ev.executionType}")
+                if ev.executionType in (2, 3):  # ORDER_ACCEPTED / ORDER_FILLED
+                    self._service._last_order_error = None
+                    self._service._order_ack_event.set()
                 # Refresh positions on fill/close
                 req_rec = msgs.ProtoOAReconcileReq()
                 req_rec.ctidTraderAccountId = self._creds.get("account_id", 0)
@@ -169,16 +187,18 @@ class CTraderProtocol:
             elif ptype == 2132:  # ProtoOAOrderErrorEvent
                 err_ev = msgs.ProtoOAOrderErrorEvent()
                 err_ev.ParseFromString(msg.payload)
-                logger.error(f"cTrader Order Error: {err_ev.errorCode} — {err_ev.description}")
+                desc = f"{err_ev.errorCode} — {err_ev.description}"
+                logger.error(f"cTrader Order Error: {desc}")
+                self._service._last_order_error = desc
+                self._service._order_ack_event.set()
 
-            elif ptype == 2128:  # ProtoOASpotEvent
+            elif ptype == 2131:  # ProtoOASpotEvent (2128 is SubscribeSpotsRes)
                 spot_ev = msgs.ProtoOASpotEvent()
                 spot_ev.ParseFromString(msg.payload)
                 sym_id = spot_ev.symbolId
-                sym_name = next((k for k, v in self._service._symbol_ids.items() if v == sym_id), str(sym_id))
-                digits = self._service.DIGITS.get(sym_name, 5)
-                bid = (spot_ev.bid / (10 ** digits)) if spot_ev.bid else None
-                ask = (spot_ev.ask / (10 ** digits)) if spot_ev.ask else None
+                sym_name = self._service.symbol_name_for_id(sym_id)
+                bid = self._service.decode_spotware_price(spot_ev.bid, sym_name) if spot_ev.bid else None
+                ask = self._service.decode_spotware_price(spot_ev.ask, sym_name) if spot_ev.ask else None
                 self._service._last_spots[sym_name] = {
                     "symbol": sym_name,
                     "symbol_id": sym_id,
@@ -191,15 +211,15 @@ class CTraderProtocol:
                 tb_res = msgs.ProtoOAGetTrendbarsRes()
                 tb_res.ParseFromString(msg.payload)
                 sym_id = tb_res.symbolId
-                sym_name = next((k for k, v in self._service._symbol_ids.items() if v == sym_id), str(sym_id))
-                digits = self._service.DIGITS.get(sym_name, 5)
-                divisor = 10.0 ** digits
+                sym_name = self._service.symbol_name_for_id(sym_id)
+                digits = self._service.digits_for(sym_name)
+                scale = float(self._service.SPOTWARE_PRICE_SCALE)
                 bars = []
                 for tb in tb_res.trendbar:
-                    low = tb.low / divisor
-                    open_p = (tb.low + (tb.deltaOpen or 0)) / divisor
-                    high = (tb.low + (tb.deltaHigh or 0)) / divisor
-                    close_p = (tb.low + (tb.deltaClose or 0)) / divisor
+                    low = tb.low / scale
+                    open_p = (tb.low + (tb.deltaOpen or 0)) / scale
+                    high = (tb.low + (tb.deltaHigh or 0)) / scale
+                    close_p = (tb.low + (tb.deltaClose or 0)) / scale
                     # Timestamp in milliseconds
                     ts = (tb.utcTimestampInMinutes or 0) * 60 * 1000
                     bars.append({
@@ -213,6 +233,9 @@ class CTraderProtocol:
                     })
                 self._service._trendbar_cache[f"{sym_name}_{tb_res.period}"] = bars
                 logger.info(f"cTrader received {len(bars)} trendbars for {sym_name} (period={tb_res.period})")
+                waiter = self._service._trendbar_events.get(f"{sym_name}_{tb_res.period}")
+                if waiter is not None:
+                    waiter.set()
 
             elif ptype == 2146:  # ProtoOAGetTickDataRes
                 tick_res = msgs.ProtoOAGetTickDataRes()
@@ -259,6 +282,7 @@ class CTraderService(BrokerService):
         "AUDUSD=X": "AUDUSD", "USDCAD=X": "USDCAD", "USDCHF=X": "USDCHF",
         "NZDUSD=X": "NZDUSD", "EURGBP=X": "EURGBP", "EURJPY=X": "EURJPY",
         "GBPJPY=X": "GBPJPY", "EURAUD=X": "EURAUD", "GBPAUD=X": "GBPAUD",
+        "NZDJPY=X": "NZDJPY", "USDNOK=X": "USDNOK", "CHFJPY=X": "CHFJPY",
         "BTC-USD": "BTCUSD", "ETH-USD": "ETHUSD", "SOL-USD": "SOLUSD",
         "BNB-USD": "BNBUSD", "XRP-USD": "XRPUSD",
     }
@@ -280,6 +304,8 @@ class CTraderService(BrokerService):
         "NZDUSD": Decimal("0.0001"), "USDCAD": Decimal("0.0001"), "USDCHF": Decimal("0.0001"),
         "EURGBP": Decimal("0.0001"), "USDJPY": Decimal("0.01"),   "EURJPY": Decimal("0.01"),
         "GBPJPY": Decimal("0.01"),   "AUDJPY": Decimal("0.01"),   "CADJPY": Decimal("0.01"),
+        "CHFJPY": Decimal("0.01"),   "NZDJPY": Decimal("0.01"),
+        "USDNOK": Decimal("0.0001"),
         "XAUUSD": Decimal("0.01"),   "XAGUSD": Decimal("0.001"),
         "BTCUSD": Decimal("1.0"),    "ETHUSD": Decimal("0.1"),    "SOLUSD": Decimal("0.01"),
         "BNBUSD": Decimal("0.01"),   "XRPUSD": Decimal("0.0001"),
@@ -288,19 +314,22 @@ class CTraderService(BrokerService):
     DIGITS = {
         "EURUSD": 5, "GBPUSD": 5, "AUDUSD": 5, "NZDUSD": 5, "USDCAD": 5, "USDCHF": 5,
         "EURGBP": 5, "USDJPY": 3, "EURJPY": 3, "GBPJPY": 3, "AUDJPY": 3, "CADJPY": 3,
+        "CHFJPY": 3, "NZDJPY": 3, "USDNOK": 5,
         "XAUUSD": 2, "XAGUSD": 3, "BTCUSD": 2, "ETHUSD": 2, "SOLUSD": 2, "BNBUSD": 2, "XRPUSD": 4
     }
 
     PIP_POSITION = {
         "EURUSD": 4, "GBPUSD": 4, "AUDUSD": 4, "NZDUSD": 4, "USDCAD": 4, "USDCHF": 4,
         "EURGBP": 4, "USDJPY": 2, "EURJPY": 2, "GBPJPY": 2, "AUDJPY": 2, "CADJPY": 2,
+        "CHFJPY": 2, "NZDJPY": 2, "USDNOK": 4,
         "XAUUSD": 2, "XAGUSD": 2, "BTCUSD": 0, "ETHUSD": 1, "SOLUSD": 2, "BNBUSD": 2, "XRPUSD": 4
     }
 
     BASE_PRICES = {
         "EURUSD": 1.0850, "GBPUSD": 1.2950, "USDJPY": 154.20, "AUDUSD": 0.6550,
         "USDCAD": 1.3650, "USDCHF": 0.8850, "NZDUSD": 0.5950, "EURGBP": 0.8375,
-        "EURJPY": 167.30, "GBPJPY": 199.70, "XAUUSD": 2500.00, "XAGUSD": 29.50,
+        "EURJPY": 167.30, "GBPJPY": 199.70, "NZDJPY": 94.50, "CHFJPY": 180.00,
+        "USDNOK": 9.35, "XAUUSD": 2500.00, "XAGUSD": 29.50,
         "BTCUSD": 64500.00, "ETHUSD": 2750.00, "SOLUSD": 155.00, "BNBUSD": 570.00, "XRPUSD": 0.5850
     }
 
@@ -344,6 +373,183 @@ class CTraderService(BrokerService):
         self._reconnect_pending = False
         self._reconnect_lock = threading.Lock()
         self._intentional_disconnect = False
+        self._last_order_error: Optional[str] = None
+        self._order_ack_event = threading.Event()
+        self._trendbar_last_req: Dict[str, float] = {}
+        self._trendbar_events: Dict[str, threading.Event] = {}
+
+    # Spotware volume is in cents of a unit (0.01 of 1 unit of the base asset).
+    # 1.00 standard FX lot = 100,000 units = 10,000,000 protocol volume.
+    VOLUME_CENTS_PER_LOT = 10_000_000
+    MIN_VOLUME_CENTS = 100_000  # 0.01 lot
+    STEP_VOLUME_CENTS = 1_000
+    # Bid/ask/trendbar integers are always 1/100000 of a price unit (not 10^digits).
+    SPOTWARE_PRICE_SCALE = 100_000
+    MAX_FX_STOP_PIPS = 120
+
+    @classmethod
+    def lots_to_protocol_volume(cls, lots: float) -> int:
+        raw = int(round(float(lots) * cls.VOLUME_CENTS_PER_LOT))
+        raw = max(cls.MIN_VOLUME_CENTS, raw)
+        step = cls.STEP_VOLUME_CENTS
+        return max(cls.MIN_VOLUME_CENTS, int(round(raw / step) * step))
+
+    @classmethod
+    def protocol_volume_to_lots(cls, raw: int) -> float:
+        return float(raw) / cls.VOLUME_CENTS_PER_LOT
+
+    @classmethod
+    def relative_stop_units(cls, current_price: float, target_price: float, digits: int) -> int:
+        """Convert a price distance to Spotware relativeStopLoss/TP (1/100000 of price)."""
+        diff = abs(Decimal(str(current_price)) - Decimal(str(target_price)))
+        units = int((diff * Decimal(cls.SPOTWARE_PRICE_SCALE)).to_integral_value())
+        step = 10 ** max(0, 5 - int(digits))
+        units = (units // step) * step
+        return units
+
+    @classmethod
+    def normalize_symbol_name(cls, sym: str) -> str:
+        if not sym:
+            return ""
+        mapped = cls.SYMBOL_MAP.get(sym)
+        if mapped:
+            return mapped
+        return cls.normalize_catalog_name(sym.replace("-USD", "USD").replace("=X", ""))
+
+    @staticmethod
+    def normalize_catalog_name(name: str) -> str:
+        """IC Markets light-symbol names may be 'NZD/JPY' rather than 'NZDJPY'."""
+        return (name or "").replace("/", "").replace("-", "").replace(" ", "").upper()
+
+    @classmethod
+    def digits_for(cls, symbol: str) -> int:
+        """Tick decimals for rounding. Not used to decode Spotware integers."""
+        sym = cls.normalize_symbol_name(symbol)
+        if sym in cls.DIGITS:
+            return cls.DIGITS[sym]
+        if sym.endswith("JPY"):
+            return 3
+        if sym.startswith("XAU"):
+            return 2
+        if sym.startswith("XAG"):
+            return 3
+        return 5
+
+    @classmethod
+    def pip_size_for(cls, symbol: str) -> Decimal:
+        """Pip size in price units. JPY quotes are 0.01, not the 0.0001 FX default."""
+        sym = cls.normalize_symbol_name(symbol)
+        if sym in cls.PIP_SIZE:
+            return cls.PIP_SIZE[sym]
+        if sym.endswith("JPY"):
+            return Decimal("0.01")
+        if sym.startswith("XAU"):
+            return Decimal("0.01")
+        if sym.startswith("XAG"):
+            return Decimal("0.001")
+        return Decimal("0.0001")
+
+    @classmethod
+    def pip_position_for(cls, symbol: str) -> int:
+        sym = cls.normalize_symbol_name(symbol)
+        if sym in cls.PIP_POSITION:
+            return cls.PIP_POSITION[sym]
+        return max(0, cls.digits_for(sym) - 1)
+
+    @classmethod
+    def decode_spotware_price(cls, raw: Optional[float], symbol: str = "") -> Optional[float]:
+        """Convert a Spotware integer price (always 1/100000) to a float."""
+        if raw is None:
+            return None
+        price = float(raw) / float(cls.SPOTWARE_PRICE_SCALE)
+        if symbol:
+            return round(price, cls.digits_for(symbol))
+        return price
+
+    @classmethod
+    def max_protective_distance(cls, symbol: str, entry: float) -> float:
+        pip = float(cls.pip_size_for(symbol))
+        entry_abs = abs(float(entry) or 0.0)
+        return max(pip * cls.MAX_FX_STOP_PIPS, entry_abs * 0.012)
+
+    @classmethod
+    def clamp_protective_prices(
+        cls,
+        symbol: str,
+        entry: float,
+        stop_loss: Optional[float],
+        take_profit: Optional[float],
+    ) -> tuple[Optional[float], Optional[float]]:
+        """Cap SL/TP so JPY (and other) pairs cannot be sent thousands of pips away."""
+        if not entry:
+            return stop_loss, take_profit
+        max_dist = cls.max_protective_distance(symbol, entry)
+        digits = cls.digits_for(symbol)
+
+        def _clamp(target: Optional[float]) -> Optional[float]:
+            if target is None:
+                return None
+            dist = abs(float(target) - float(entry))
+            if dist <= max_dist:
+                return round(float(target), digits)
+            sign = 1.0 if float(target) > float(entry) else -1.0
+            clamped = round(float(entry) + sign * max_dist, digits)
+            logger.warning(
+                "Clamping %s protective level %s -> %s (entry=%s max_dist=%s)",
+                symbol, target, clamped, entry, max_dist,
+            )
+            return clamped
+
+        return _clamp(stop_loss), _clamp(take_profit)
+
+    @staticmethod
+    def merge_symbol_catalog(
+        defaults: Dict[str, int],
+        catalog: Dict[str, int],
+    ) -> Dict[str, int]:
+        """Broker catalog wins. Drop default names whose IDs now belong to another symbol.
+
+        IC Markets NZDJPY can reuse id 21 (our default XAUUSD). Keeping both names
+        for the same id made reconcile report NZDJPY 94.54 as XAUUSD.
+        """
+        merged = dict(catalog)
+        used_ids = set(merged.values())
+        for name, sid in defaults.items():
+            if name in merged:
+                continue
+            if sid in used_ids:
+                continue
+            merged[name] = sid
+        return merged
+
+    def relabel_cached_symbols(self) -> None:
+        """Re-apply catalog names after merge (reconcile can beat ProtoOASymbolsListRes)."""
+        for pos in self._positions:
+            sid = pos.get("symbol_id")
+            if sid is None:
+                continue
+            pos["symbol"] = self.symbol_name_for_id(sid)
+        relabeled_spots: Dict[str, Dict[str, Any]] = {}
+        for spot in self._last_spots.values():
+            sid = spot.get("symbol_id")
+            if sid is None:
+                continue
+            name = self.symbol_name_for_id(sid)
+            spot["symbol"] = name
+            relabeled_spots[name] = spot
+        if relabeled_spots:
+            self._last_spots = relabeled_spots
+
+    def symbol_name_for_id(self, symbol_id: int) -> str:
+        """Resolve broker symbolId → name. Catalog-first merge keeps IDs unique."""
+        try:
+            sid = int(symbol_id)
+        except (TypeError, ValueError):
+            return str(symbol_id)
+        for name, mapped in self._symbol_ids.items():
+            if mapped == sid:
+                return name
+        return str(sid)
 
     @property
     def is_connected(self) -> bool:
@@ -355,9 +561,7 @@ class CTraderService(BrokerService):
 
     def _normalize_symbol(self, sym: str) -> str:
         """Map generic/yfinance symbols to cTrader symbol string."""
-        if not sym:
-            return ""
-        return self.SYMBOL_MAP.get(sym, sym.replace("-USD", "USD").replace("=X", ""))
+        return self.normalize_symbol_name(sym)
 
     def connect(self) -> bool:
         """Authenticate and connect to cTrader Open API."""
@@ -537,6 +741,10 @@ class CTraderService(BrokerService):
         current_price = price or kwargs.get("current_price")
         stop_loss_price = stop_loss or kwargs.get("stop_loss_price")
         take_profit_price = take_profit or kwargs.get("take_profit_price")
+        if current_price:
+            stop_loss_price, take_profit_price = self.clamp_protective_prices(
+                ct_symbol, float(current_price), stop_loss_price, take_profit_price
+            )
 
         # Simulated fallback in dry-run
         if self._dry_run or not self.is_connected or self._protocol is None:
@@ -560,9 +768,9 @@ class CTraderService(BrokerService):
                 logger.error(f"cTrader symbol ID not found for {ct_symbol}")
                 return {"status": "error", "error": f"Unknown symbol {ct_symbol}"}
 
-            # 1.0 standard lot = 100,000 raw protocol units (min raw 100,000 for standard FX)
-            raw_volume = max(100_000, int(round(lots * 100_000)))
-            pip_size = self.PIP_SIZE.get(ct_symbol, Decimal("0.0001"))
+            # Spotware volume is cents of a unit: 0.01 lot EURUSD = 100_000
+            raw_volume = self.lots_to_protocol_volume(lots)
+            digits = self.digits_for(ct_symbol)
 
             order_req = msgs.ProtoOANewOrderReq()
             order_req.ctidTraderAccountId = self._account_id or 0
@@ -571,21 +779,23 @@ class CTraderService(BrokerService):
             order_req.tradeSide = 1 if side == "BUY" else 2
             order_req.volume = raw_volume
 
-            # Calculate relative SL/TP pips with Decimal precision
+            # relativeStopLoss/TP are 1/100000 of a price unit, aligned to symbol digits
             if current_price and stop_loss_price:
-                diff = abs(Decimal(str(current_price)) - Decimal(str(stop_loss_price)))
-                sl_pips = int(diff / pip_size)
-                if sl_pips > 0:
-                    order_req.relativeStopLoss = sl_pips
+                sl_units = self.relative_stop_units(float(current_price), float(stop_loss_price), digits)
+                if sl_units > 0:
+                    order_req.relativeStopLoss = sl_units
+                else:
+                    logger.warning(f"Omitting SL for {ct_symbol}: distance too small")
 
             if current_price and take_profit_price:
-                diff = abs(Decimal(str(take_profit_price)) - Decimal(str(current_price)))
-                tp_pips = int(diff / pip_size)
-                if tp_pips > 0:
-                    order_req.relativeTakeProfit = tp_pips
+                tp_units = self.relative_stop_units(float(current_price), float(take_profit_price), digits)
+                if tp_units > 0:
+                    order_req.relativeTakeProfit = tp_units
 
             event = threading.Event()
             result = {"status": "pending"}
+            self._last_order_error = None
+            self._order_ack_event.clear()
 
             def _send():
                 try:
@@ -604,6 +814,12 @@ class CTraderService(BrokerService):
 
             reactor.callFromThread(_send)
             event.wait(timeout=10.0)
+            if result.get("status") == "sent":
+                self._order_ack_event.wait(timeout=3.0)
+                if self._last_order_error:
+                    result["status"] = "error"
+                    result["error"] = self._last_order_error
+                    logger.error(f"cTrader order rejected: {self._last_order_error}")
             return result
 
         except Exception as e:
@@ -628,11 +844,40 @@ class CTraderService(BrokerService):
         except Exception as e:
             return {"success": False, "message": str(e), "order_id": order_id}
 
-    def close_position(self, position_id: str | int, symbol: Optional[str] = None) -> Dict[str, Any]:
-        """Close open position by position ID."""
+    def close_position(
+        self,
+        position_id: str | int,
+        symbol: Optional[str] = None,
+        volume: Optional[float] = None,
+        **kwargs: Any,
+    ) -> Dict[str, Any]:
+        """Close open position by cTrader position ID. Volume is required on the live protocol."""
+        lots = volume if volume is not None else kwargs.get("quantity")
+        matched = next(
+            (p for p in self._positions if str(p.get("position_id")) == str(position_id)),
+            None,
+        )
+        if lots is None and matched is not None:
+            lots = matched.get("quantity")
+        if not symbol and matched is not None:
+            symbol = matched.get("symbol")
+
         if self._dry_run or not self.is_connected or self._protocol is None:
             self._positions = [p for p in self._positions if str(p.get("position_id")) != str(position_id)]
-            return {"status": "closed", "position_id": position_id, "broker": "ctrader:paper"}
+            return {
+                "status": "closed",
+                "position_id": position_id,
+                "symbol": symbol,
+                "quantity": lots,
+                "broker": "ctrader:paper",
+            }
+
+        if lots is None:
+            return {
+                "status": "error",
+                "error": "volume is required to close a live cTrader position",
+                "position_id": position_id,
+            }
 
         try:
             from ctrader_open_api.messages import OpenApiMessages_pb2 as msgs
@@ -641,20 +886,29 @@ class CTraderService(BrokerService):
             req = msgs.ProtoOAClosePositionReq()
             req.ctidTraderAccountId = self._account_id or 0
             req.positionId = int(position_id) if str(position_id).isdigit() else 0
+            req.volume = self.lots_to_protocol_volume(float(lots))
 
-            reactor.callFromThread(lambda: self._protocol._send(req, 2107))
-            return {"status": "sent", "position_id": position_id, "broker": "ctrader:live"}
+            reactor.callFromThread(lambda: self._protocol._send(req, 2111))
+            return {
+                "status": "sent",
+                "position_id": position_id,
+                "symbol": symbol,
+                "quantity": lots,
+                "broker": "ctrader:live",
+            }
         except Exception as e:
             return {"status": "error", "error": str(e), "position_id": position_id}
 
     def get_symbol_specification(self, symbol: str) -> Dict[str, Any]:
         """Returns standard specification parameters for a symbol (digits, pip position, lot size, etc.)."""
         ct_symbol = self._normalize_symbol(symbol)
-        digits = self.DIGITS.get(ct_symbol, 5)
-        pip_pos = self.PIP_POSITION.get(ct_symbol, 4)
-        pip_size = float(self.PIP_SIZE.get(ct_symbol, Decimal("0.0001")))
+        digits = self.digits_for(ct_symbol)
+        pip_pos = self.pip_position_for(ct_symbol)
+        pip_size = float(self.pip_size_for(ct_symbol))
         tick_size = 1.0 / (10 ** digits)
-        base_price = self.BASE_PRICES.get(ct_symbol, 1.0)
+        base_price = self.BASE_PRICES.get(ct_symbol)
+        if base_price is None:
+            base_price = 154.20 if ct_symbol.endswith("JPY") else 1.0
 
         # Determine base and quote assets
         if len(ct_symbol) == 6 and not any(ct_symbol.startswith(k) for k in ("BTC", "ETH", "SOL", "BNB", "XRP", "XAU", "XAG")):
@@ -679,8 +933,8 @@ class CTraderService(BrokerService):
             "pip_size": pip_size,
             "tick_size": tick_size,
             "lot_size": 100_000,
-            "min_volume": 1_000,
-            "max_volume": 10_000_000,
+            "min_volume": 100_000,
+            "max_volume": 100_000_000,
             "step_volume": 1_000,
             "base_asset": base_asset,
             "quote_asset": quote_asset,
@@ -756,24 +1010,40 @@ class CTraderService(BrokerService):
         period_enum = self.PERIOD_MAP.get(period.upper(), 5)
         cache_key = f"{ct_symbol}_{period_enum}"
 
-        # If live connected, send async request if needed
+        # If live connected, send async request if needed (throttled)
         if not self._dry_run and self.is_connected and self._protocol:
+            last = self._trendbar_last_req.get(cache_key, 0)
+            if time.time() - last < 45:
+                if cache_key in self._trendbar_cache and self._trendbar_cache[cache_key]:
+                    return self._trendbar_cache[cache_key][-count:]
             try:
                 from ctrader_open_api.messages import OpenApiMessages_pb2 as msgs
                 from twisted.internet import reactor
-                sym_id = self._symbol_ids.get(ct_symbol, 1)
-                now_ms = int(time.time() * 1000)
-                f_ts = from_ts or (now_ms - 7 * 86400 * 1000)
-                t_ts = to_ts or now_ms
+                sym_id = self._symbol_ids.get(ct_symbol)
+                if not sym_id:
+                    logger.warning(
+                        "No cTrader symbol id for %s; skipping live trendbar request",
+                        ct_symbol,
+                    )
+                else:
+                    now_ms = int(time.time() * 1000)
+                    f_ts = from_ts or (now_ms - 7 * 86400 * 1000)
+                    t_ts = to_ts or now_ms
 
-                req = msgs.ProtoOAGetTrendbarsReq()
-                req.ctidTraderAccountId = self._account_id or 0
-                req.symbolId = sym_id
-                req.period = period_enum
-                req.fromTimestamp = f_ts
-                req.toTimestamp = t_ts
+                    req = msgs.ProtoOAGetTrendbarsReq()
+                    req.ctidTraderAccountId = self._account_id or 0
+                    req.symbolId = sym_id
+                    req.period = period_enum
+                    req.fromTimestamp = f_ts
+                    req.toTimestamp = t_ts
 
-                reactor.callFromThread(lambda: self._protocol._send(req, 2137))
+                    # Register the waiter before sending so a fast response cannot
+                    # arrive (and be missed) before we start waiting.
+                    waiter = threading.Event()
+                    self._trendbar_events[cache_key] = waiter
+                    reactor.callFromThread(lambda: self._protocol._send(req, 2137))
+                    self._trendbar_last_req[cache_key] = time.time()
+                    waiter.wait(timeout=2.0)
             except Exception as e:
                 logger.warning(f"Live trendbar request failed: {e}")
 
@@ -782,9 +1052,14 @@ class CTraderService(BrokerService):
             return self._trendbar_cache[cache_key][-count:]
 
         # High fidelity synthetic fallback generator
-        digits = self.DIGITS.get(ct_symbol, 5)
-        base_p = self.BASE_PRICES.get(ct_symbol, 1.0850)
-        pip_size = float(self.PIP_SIZE.get(ct_symbol, Decimal("0.0001")))
+        digits = self.digits_for(ct_symbol)
+        pip_size = float(self.pip_size_for(ct_symbol))
+        base_p = self.BASE_PRICES.get(ct_symbol)
+        if base_p is None:
+            if ct_symbol.endswith("JPY"):
+                base_p = 154.20 if ct_symbol.startswith("USD") else 94.50
+            else:
+                base_p = 1.0850
 
         step_seconds = 300  # default 5m
         p_up = period.upper()
@@ -845,9 +1120,9 @@ class CTraderService(BrokerService):
         """Get historical tick stream for a symbol."""
         import random
         ct_symbol = self._normalize_symbol(symbol)
-        digits = self.DIGITS.get(ct_symbol, 5)
+        digits = self.digits_for(ct_symbol)
         base_p = self.BASE_PRICES.get(ct_symbol, 1.0850)
-        pip_size = float(self.PIP_SIZE.get(ct_symbol, Decimal("0.0001")))
+        pip_size = float(self.pip_size_for(ct_symbol))
 
         now_ms = int(time.time() * 1000)
         start_ms = now_ms - (hours * 3600 * 1000)

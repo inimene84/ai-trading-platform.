@@ -120,3 +120,54 @@ def test_pip_margin_calc_endpoint(client, auth_headers):
     assert data["volume_units"] == 50_000
     assert data["pip_value"] == 5.0
     assert data["required_margin"] == 275.0  # (50,000 * 1.10) / 200 = 275.0
+
+
+def test_ctrader_positions_endpoint(client):
+    """Live book endpoint returns the in-memory cTrader positions."""
+    ctrader_service._positions = [
+        {
+            "symbol": "NZDJPY",
+            "side": "BUY",
+            "quantity": 0.01,
+            "entry_price": 94.54,
+            "unrealized_pnl": -0.12,
+            "position_id": "667094381",
+            "broker": "ctrader",
+        }
+    ]
+    try:
+        response = client.get("/api/trading/ctrader/positions")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["count"] == 1
+        assert data["positions"][0]["symbol"] == "NZDJPY"
+        assert data["positions"][0]["position_id"] == "667094381"
+    finally:
+        ctrader_service._positions = []
+
+
+def test_ctrader_close_position_endpoint(client, auth_headers):
+    """Closing by broker positionId uses the live book, not the SQL Trade table."""
+    ctrader_service._positions = [
+        {
+            "symbol": "NZDJPY",
+            "side": "BUY",
+            "quantity": 0.01,
+            "entry_price": 94.54,
+            "unrealized_pnl": -0.12,
+            "position_id": "667094381",
+            "broker": "ctrader",
+        }
+    ]
+    try:
+        response = client.post(
+            "/api/trading/ctrader/positions/667094381/close",
+            headers=auth_headers,
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is True
+        assert data["result"]["status"] == "closed"
+        assert data["positions"] == []
+    finally:
+        ctrader_service._positions = []

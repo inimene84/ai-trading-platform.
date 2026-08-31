@@ -1156,6 +1156,79 @@ async def save_ctrader_tokens(req: SaveCTraderTokensRequest):
     return {"success": True, "message": "cTrader tokens stored and updated successfully"}
 
 
+class CTraderOAuthExchangeRequest(BaseModel):
+    code: str = Field(..., min_length=4, max_length=512)
+    redirect_uri: Optional[str] = None
+
+
+@router.get("/ctrader/oauth/url")
+async def get_ctrader_oauth_url():
+    """Browser authorization URL for requesting new cTrader OAuth tokens."""
+    from backend.brokers.auth import get_auth_url
+    from backend.services.ctrader_oauth import is_sandbox_app, ctrader_env
+
+    redirect_uri = os.getenv("CTRADER_REDIRECT_URI", "https://localhost/callback")
+    return {
+        "auth_url": get_auth_url(redirect_uri=redirect_uri),
+        "redirect_uri": redirect_uri,
+        "ctrader_env": ctrader_env(),
+        "sandbox_app": is_sandbox_app(),
+        "instructions": (
+            "Open auth_url in a browser, approve access, copy the `code` query param "
+            "from the redirect URL, then POST /trading/ctrader/oauth/exchange with {\"code\": \"...\"}."
+        ),
+    }
+
+
+@router.post("/ctrader/oauth/exchange")
+async def exchange_ctrader_oauth_code(req: CTraderOAuthExchangeRequest, request: Request):
+    """Exchange Spotware authorization code for fresh access + refresh tokens."""
+    from backend.security import validate_admin_request
+    from backend.brokers.auth import exchange_code_for_token
+    from backend.services.ctrader_tokens import ctrader_token_store
+    from backend.services.ctrader_service import ctrader_broker
+
+    validate_admin_request(request)
+    redirect_uri = req.redirect_uri or os.getenv("CTRADER_REDIRECT_URI", "https://localhost/callback")
+
+    try:
+        tokens = exchange_code_for_token(
+            code=req.code.strip(),
+            redirect_uri=redirect_uri,
+            save_to_env=False,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"OAuth exchange failed: {exc}") from exc
+
+    account_raw = os.getenv("CTRADER_ACCOUNT_ID", "0").strip()
+    data = {
+        "account_id": int(account_raw) if account_raw.isdigit() else 0,
+        "client_id": os.getenv("CTRADER_CLIENT_ID", ""),
+        "client_secret": os.getenv("CTRADER_CLIENT_SECRET", ""),
+        "access_token": tokens["access_token"],
+        "refresh_token": tokens.get("refresh_token", ""),
+        "expires_in": tokens.get("expires_in", 2_628_000),
+        "updated_at": int(datetime.now(timezone.utc).timestamp()),
+    }
+    ctrader_token_store.save_tokens(data)
+
+    env_path = Path(".env")
+    if env_path.exists():
+        from dotenv import set_key
+        set_key(str(env_path), "CTRADER_ACCESS_TOKEN", data["access_token"])
+        set_key(str(env_path), "CTRADER_REFRESH_TOKEN", data["refresh_token"])
+    os.environ["CTRADER_ACCESS_TOKEN"] = data["access_token"]
+    os.environ["CTRADER_REFRESH_TOKEN"] = data["refresh_token"]
+    ctrader_broker._token_store = ctrader_token_store
+
+    return {
+        "success": True,
+        "message": "New cTrader tokens saved. Restart backend or call POST /trading/ctrader/enable to connect.",
+        "account_id": data["account_id"],
+        "expires_in": data["expires_in"],
+    }
+
+
 class PipMarginCalcRequest(BaseModel):
     symbol: str
     lots: float = Field(gt=0, default=1.0)
@@ -1329,6 +1402,39 @@ async def disable_ctrader_live():
     return {"message": "cTrader paper mode enabled", "dry_run": True}
 
 
+@router.get("/ctrader/positions")
+async def get_ctrader_live_positions():
+    """Live cTrader book (not the SQL Trade table)."""
+    from backend.services.ctrader_service import ctrader_broker
+    positions = ctrader_broker.get_positions()
+    return {
+        "connected": ctrader_broker.is_connected,
+        "dry_run": ctrader_broker.dry_run,
+        "positions": positions,
+        "count": len(positions),
+    }
+
+
+@router.post("/ctrader/positions/{position_id}/close")
+async def close_ctrader_live_position(
+    position_id: str,
+    volume: Optional[float] = Query(None, gt=0),
+    symbol: Optional[str] = Query(None),
+):
+    """Close a cTrader position by broker positionId (demo/live book, not DB id)."""
+    from backend.services.ctrader_service import ctrader_broker
+    if not ctrader_broker.is_connected and not ctrader_broker.dry_run:
+        raise HTTPException(status_code=400, detail="cTrader is not connected")
+    res = ctrader_broker.close_position(position_id, symbol=symbol, volume=volume)
+    if res.get("status") == "error":
+        raise HTTPException(status_code=502, detail=res.get("error") or "cTrader close failed")
+    return {
+        "success": True,
+        "result": res,
+        "positions": ctrader_broker.get_positions(),
+    }
+
+
 # ── Position Management ────────────────────────────────────────────────────────
 
 @router.post("/positions/{position_id}/close")
@@ -1336,6 +1442,7 @@ async def close_position(position_id: int):
     """Close a position on its originating broker, then persist the actual fill."""
     from backend.services.ctrader_service import ctrader_broker
     from backend.services.binance_futures_service import binance_futures_broker
+    from backend.services.trading_mode import get_trading_mode, TradingMode
 
     db = SessionLocal()
     try:
@@ -1344,14 +1451,41 @@ async def close_position(position_id: int):
             raise HTTPException(status_code=404, detail=f"Open position {position_id} not found")
 
         target_broker = getattr(trade, "broker", None) or getattr(trade, "exchange", None) or "binance_futures"
+        paper_mode = get_trading_mode() != TradingMode.LIVE
 
         if target_broker == "ctrader":
             res = ctrader_broker.close_position(
                 position_id=trade.broker_position_id or trade.broker_order_id or str(trade.id),
                 symbol=trade.symbol,
+                volume=trade.quantity,
             )
-            exit_price = float(res.get("price") or trade.entry_price)
+            if res.get("status") == "error":
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"cTrader close failed; DB left open: {res.get('error')}",
+                )
+            exit_price = float(res.get("price") or trade.entry_price or 0)
             pnl = float(res.get("pnl") or 0.0)
+            if pnl == 0.0 and trade.entry_price and exit_price:
+                if trade.direction == "BUY":
+                    pnl = (exit_price - trade.entry_price) * trade.quantity
+                else:
+                    pnl = (trade.entry_price - exit_price) * trade.quantity
+        elif paper_mode:
+            # Paper/backtest: close DB record without live exchange (loop trades are not
+            # always mirrored in the in-memory paper engine, which caused fill errors).
+            exit_price = float(trade.entry_price or 0)
+            try:
+                from backend.services.binance_market_data import binance_market_data
+                tick = await binance_market_data.get_ticker_24h(trade.symbol)
+                if tick and tick.get("lastPrice"):
+                    exit_price = float(tick["lastPrice"])
+            except Exception:
+                pass
+            if trade.direction == "BUY":
+                pnl = (exit_price - float(trade.entry_price or 0)) * float(trade.quantity or 0)
+            else:
+                pnl = (float(trade.entry_price or 0) - exit_price) * float(trade.quantity or 0)
         else:
             close_side = OrderSide.SELL if trade.direction == "BUY" else OrderSide.BUY
             response = UnifiedTrading().place_order(UnifiedOrder(
@@ -1389,7 +1523,8 @@ async def close_position(position_id: int):
         trade.pnl = round(pnl, 4) if pnl is not None else None
         trade.status = "closed"
         trade.closed_at = datetime.now(timezone.utc)
-        trade.notes = (trade.notes or "") + f" | Closed on {target_broker} via manual dashboard"
+        suffix = "paper-mode DB close" if paper_mode and target_broker != "ctrader" else target_broker
+        trade.notes = (trade.notes or "") + f" | Closed on {suffix} via manual dashboard"
         db.commit()
         return {
             "success": True,
@@ -1397,6 +1532,7 @@ async def close_position(position_id: int):
             "broker": target_broker,
             "exit_price": exit_price,
             "pnl": pnl,
+            "paper_mode": paper_mode,
             "message": f"Position {position_id} closed on {target_broker}",
         }
     except Exception:
