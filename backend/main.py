@@ -155,6 +155,21 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"⚠ Unified Trading init warning: {e}")
 
+    if os.getenv("CTRADER_AUTO_CONNECT", "true").lower() == "true":
+        try:
+            if ctrader_broker.has_credentials():
+                loop = asyncio.get_running_loop()
+                connected = await loop.run_in_executor(None, ctrader_broker.ensure_connected)
+                if connected:
+                    logger.info("✓ cTrader broker auto-connected on startup")
+                else:
+                    logger.warning(
+                        "⚠ cTrader auto-connect failed — "
+                        "execute-candidate will retry before dispatch"
+                    )
+        except Exception as e:
+            logger.warning(f"⚠ cTrader auto-connect error: {e}")
+
     # Restore exchange SL/TP after restart (sentry halt may have cancelled them).
     if os.getenv("ACTIVE_BROKER", "ctrader") == "binance_futures" and resolved_mode == TradingMode.LIVE:
         try:

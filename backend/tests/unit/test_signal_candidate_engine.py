@@ -278,6 +278,44 @@ async def test_execute_candidate_accepts_ctrader_sent_status():
 
 
 @pytest.mark.asyncio
+async def test_execute_candidate_rejects_simulated_when_credentials_exist():
+    """Paper simulated fills must not masquerade as live cTrader execution."""
+    now_ts = int(time.time())
+    sig_id = "test-exec-simulated-01"
+    signal_candidate_engine.candidates[sig_id] = {
+        "id": sig_id,
+        "symbol": "EURUSD",
+        "broker": "ctrader",
+        "strategy": "MOMENTUM_TREND_PULSE",
+        "direction": "BUY",
+        "entry_price": 1.0850,
+        "stop_loss": 1.0820,
+        "take_profit": 1.0910,
+        "timing_mode": TimingMode.BAR_CLOSE,
+        "status": CandidateStatus.READY,
+        "earliest_exec_at": now_ts - 5,
+        "latest_exec_at": now_ts + 600,
+        "sizing": {"lots": 0.01, "quantity": 0.01, "risk_usd": 50.0},
+    }
+
+    with patch.object(signal_candidate_engine, "_open_ctrader_position_count", return_value=0), patch(
+        "backend.services.signal_candidate_engine.ctrader_service.ensure_connected",
+        return_value=False,
+    ), patch(
+        "backend.services.signal_candidate_engine.ctrader_service.has_credentials",
+        return_value=True,
+    ), patch(
+        "backend.services.signal_candidate_engine.persist_ctrader_execution",
+    ) as mock_persist:
+        res = await signal_candidate_engine.execute_candidate(sig_id, force=True)
+
+    assert res["success"] is False
+    assert "not connected" in res["error"].lower()
+    assert signal_candidate_engine.candidates[sig_id]["status"] == CandidateStatus.READY
+    mock_persist.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_execute_candidate_skips_market_closed_without_blocking_queue():
     now_ts = int(time.time())
     sig_id = "test-exec-closed-01"

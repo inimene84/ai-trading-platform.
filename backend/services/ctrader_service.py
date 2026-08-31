@@ -640,6 +640,30 @@ class CTraderService(BrokerService):
     def dry_run(self) -> bool:
         return self._dry_run
 
+    def has_credentials(self) -> bool:
+        """True when OAuth tokens or env vars are present for a live session."""
+        tokens = token_store.get_tokens()
+        client_id = tokens.get("client_id") or os.getenv("CTRADER_CLIENT_ID", "")
+        access_token = (
+            token_store.refresh_if_needed()
+            or tokens.get("access_token")
+            or os.getenv("CTRADER_ACCESS_TOKEN", "")
+        )
+        return bool(client_id and access_token)
+
+    def ensure_connected(self) -> bool:
+        """Connect to cTrader when credentials exist.
+
+        Without this, backend restarts leave the service in paper mode and
+        n8n execute-candidate calls silently return status=simulated.
+        """
+        if self.is_connected and not self._dry_run:
+            return True
+        if not self.has_credentials():
+            return False
+        self._intentional_disconnect = False
+        return self.connect()
+
     def _normalize_symbol(self, sym: str) -> str:
         """Map generic/yfinance symbols to cTrader symbol string."""
         return self.normalize_symbol_name(sym)
