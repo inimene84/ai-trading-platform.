@@ -24,7 +24,7 @@
     {
       "parameters": {
         "method": "GET",
-        "url": "http://backend:8000/api/signals/ready-for-execution?broker=ctrader&forex_only=true&limit=2",
+        "url": "http://backend:8000/api/signals/ready-for-execution?broker=ctrader&forex_only=true&limit=10",
         "options": {}
       },
       "id": "22222222-3333-4444-5555-666666666602",

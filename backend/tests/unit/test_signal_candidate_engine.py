@@ -346,6 +346,44 @@ def test_get_ready_signals_allows_multiple_when_slots_remain():
     assert set(symbols) <= {"GBPUSD", "USDJPY"}
 
 
+def test_get_ready_signals_fills_up_to_ten_open_slots():
+    now_ts = int(time.time())
+    previous = dict(signal_candidate_engine.candidates)
+    signal_candidate_engine.candidates.clear()
+    pairs = [
+        "EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD",
+        "USDCHF", "NZDUSD", "EURGBP", "EURJPY", "GBPJPY", "AUDJPY",
+    ]
+    try:
+        for i, sym in enumerate(pairs):
+            signal_candidate_engine.candidates[f"fx-ten-{i}"] = {
+                "id": f"fx-ten-{i}",
+                "symbol": sym,
+                "broker": "ctrader",
+                "status": CandidateStatus.READY,
+                "confidence": 0.95 - (i * 0.01),
+                "earliest_exec_at": now_ts - 5,
+                "latest_exec_at": now_ts + 600,
+            }
+
+        with patch.dict(
+            signal_candidate_engine.execution_config,
+            {"max_open_ctrader_positions": 10, "max_ready_per_poll": 10, "one_position_per_symbol": True},
+        ), patch.object(
+            signal_candidate_engine, "_open_ctrader_position_count", return_value=0
+        ), patch.object(
+            signal_candidate_engine, "_open_ctrader_symbols", return_value=set()
+        ):
+            ready = signal_candidate_engine.get_ready_signals(now_ts, forex_only=True)
+
+        symbols = [c["symbol"] for c in ready]
+        assert len(ready) == 10
+        assert len(set(symbols)) == 10
+        assert "AUDJPY" not in symbols  # 11th pair is above the cap
+    finally:
+        signal_candidate_engine.candidates = previous
+
+
 @pytest.mark.asyncio
 async def test_execute_candidate_keeps_ready_on_paper_failure():
     """Failed paper fills must not mark candidate EXECUTED."""

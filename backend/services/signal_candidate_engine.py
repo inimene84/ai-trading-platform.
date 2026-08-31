@@ -57,8 +57,8 @@ class SignalCandidateEngine:
         }
         self.execution_config: Dict[str, Any] = {
             "forex_only": os.getenv("CTRADER_FOREX_ONLY", "true").lower() == "true",
-            "max_open_ctrader_positions": int(os.getenv("CTRADER_MAX_OPEN_POSITIONS", "5")),
-            "max_ready_per_poll": int(os.getenv("CTRADER_MAX_READY_PER_POLL", "2")),
+            "max_open_ctrader_positions": int(os.getenv("CTRADER_MAX_OPEN_POSITIONS", "10")),
+            "max_ready_per_poll": int(os.getenv("CTRADER_MAX_READY_PER_POLL", "10")),
             "max_ctrader_lots": float(os.getenv("CTRADER_MAX_LOTS", "0.10")),
             "one_position_per_symbol": os.getenv("CTRADER_ONE_POSITION_PER_SYMBOL", "true").lower() == "true",
         }
@@ -92,7 +92,7 @@ class SignalCandidateEngine:
             return set()
 
     def _ctrader_execution_slots_remaining(self) -> int:
-        cap = int(self.execution_config.get("max_open_ctrader_positions", 5))
+        cap = int(self.execution_config.get("max_open_ctrader_positions", 10))
         return max(0, cap - self._open_ctrader_position_count())
 
     def _ctrader_execution_slot_available(self) -> bool:
@@ -631,7 +631,7 @@ class SignalCandidateEngine:
                     "success": False,
                     "error": (
                         f"Max open cTrader positions reached "
-                        f"({self.execution_config.get('max_open_ctrader_positions', 5)})."
+                        f"({self.execution_config.get('max_open_ctrader_positions', 10)})."
                     ),
                 }
             if self.execution_config.get("one_position_per_symbol"):

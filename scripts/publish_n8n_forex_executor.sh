@@ -25,4 +25,4 @@ docker run --rm -v n8n_data:/data alpine sh -c \
   "apk add --no-cache sqlite >/dev/null && sqlite3 /data/database.sqlite \
   \"SELECT name, active FROM workflow_entity WHERE name LIKE '%QuantumTrade%' ORDER BY name;\""
 
-echo "Done. Scheduler polls: ready-for-execution?broker=ctrader&forex_only=true&limit=2"
+echo "Done. Scheduler polls: ready-for-execution?broker=ctrader&forex_only=true&limit=10"
