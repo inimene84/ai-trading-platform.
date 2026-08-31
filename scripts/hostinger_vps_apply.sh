@@ -102,7 +102,7 @@ if [ -f .env ]; then
   _upsert_env RISK_PEAK_LOOKBACK_HOURS 72
   _upsert_env PYRAMID_MAX_LAYERS 2
   _upsert_env PYRAMID_BLOCK_UNDERWATER true
-  _upsert_env MAX_SAME_DIRECTION_POSITIONS 3
+  _upsert_env MAX_SAME_DIRECTION_POSITIONS 8
   _upsert_env TRAILING_STOP_ENABLED true
   _upsert_env STEP_TRAIL_ENABLED false
   _upsert_env TRAIL_ACTIVATION_ATR 2.0

@@ -33,6 +33,7 @@ from backend.services.trading_loop_helpers import (
     ExchangeProtectionManager,
     PerformanceMetricsWriter,
     remove_closed_pyramid_layer,
+    trades_for_direction_cap,
 )
 
 load_dotenv()
@@ -1052,10 +1053,17 @@ class TradingLoopService:
                 _new_notional = decision.quantity * decision.entry_price
                 if not decision.is_pyramid:
                     all_open = db.query(Trade).filter(Trade.status.in_(["open", "filled"])).all()
-                    _long_notional = sum(t.quantity * (t.entry_price or 0.0) for t in all_open if t.direction == "BUY")
-                    _short_notional = sum(t.quantity * (t.entry_price or 0.0) for t in all_open if t.direction == "SELL")
+                    scoped_open = trades_for_direction_cap(all_open, get_active_broker_name())
+                    _long_notional = sum(
+                        t.quantity * (t.entry_price or 0.0)
+                        for t in scoped_open if t.direction == "BUY"
+                    )
+                    _short_notional = sum(
+                        t.quantity * (t.entry_price or 0.0)
+                        for t in scoped_open if t.direction == "SELL"
+                    )
                     # Correlation cap: distinct symbols already open in this direction
-                    _same_dir_syms = {t.symbol for t in all_open if t.direction == decision.action}
+                    _same_dir_syms = {t.symbol for t in scoped_open if t.direction == decision.action}
                     _dir_cap = self.risk_config.max_same_direction_positions
 
                     if len(_same_dir_syms) >= _dir_cap:

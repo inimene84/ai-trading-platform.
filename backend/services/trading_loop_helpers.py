@@ -36,6 +36,23 @@ def is_plausible_exit_price(entry_price, exit_price) -> bool:
     return abs(exit_price - entry_price) / entry_price <= MAX_EXIT_PRICE_DEVIATION
 
 
+def trades_for_direction_cap(all_open: list, broker_name: str) -> list:
+    """Scope same-direction / exposure caps to one broker.
+
+    cTrader FX rows (EURUSD, GBPUSD, …) must not consume Binance correlation
+    budget — they are a separate book with their own risk limits.
+    """
+    name = (broker_name or "").strip().lower()
+    if name == "binance_futures":
+        return [
+            t for t in all_open
+            if (getattr(t, "broker", None) or "binance_futures") != "ctrader"
+        ]
+    if name == "ctrader":
+        return [t for t in all_open if getattr(t, "broker", None) == "ctrader"]
+    return list(all_open)
+
+
 def remove_closed_pyramid_layer(pyramid_layers: dict, trade) -> None:
     """Remove only the closed pyramid layer; never reset sibling history."""
     layers = pyramid_layers.get(trade.symbol)

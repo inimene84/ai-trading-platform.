@@ -159,7 +159,7 @@ def test_risk_config_field_defaults_for_weekly_edge():
     assert fields["trail_activation_atr"].default == 2.0
     assert fields["trail_atr_mult"].default == 0.8
     assert fields["step_trail_enabled"].default is False
-    assert fields["max_same_direction_positions"].default == 3
+    assert fields["max_same_direction_positions"].default == 8
     assert fields["max_portfolio_drawdown_pct"].default == 20.0
     assert fields["max_daily_loss_pct"].default == 5.0
     bl = fields["symbol_blacklist_raw"].default

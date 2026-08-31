@@ -53,7 +53,7 @@ class RiskConfig(BaseSettings):
     # Correlation cap: max open positions (distinct symbols) in the SAME
     # direction. Alts are ~0.9 correlated — 8 parallel shorts is one bet.
     max_same_direction_positions: int = PydanticField(
-        default=3,
+        default=8,
         validation_alias=AliasChoices("max_same_direction_positions", "MAX_SAME_DIRECTION_POSITIONS"),
     )
     # Portfolio-level direction cap: total same-direction NOTIONAL may reach
