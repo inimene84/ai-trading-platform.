@@ -745,7 +745,7 @@ export default function App() {
     try {
       const history = messages.map(m => ({
         role: m.role,
-        parts: [{ text: m.text }]
+        text: m.text,
       }));
       const response = await (await loadGeminiService()).chat(text, history);
       setMessages(prev => [...prev, { role: 'model', text: response || 'No response' }]);

@@ -166,7 +166,7 @@ export const OpenApiSamplesView: React.FC = () => {
       } else if (selectedProto === 'ProtoOASymbolsListReq') {
         const res = await apiService.getMarkets();
         setProtoResponse({
-          payloadType: 2116,
+          payloadType: 2115,
           payloadName: 'ProtoOASymbolsListRes',
           data: res,
         });
