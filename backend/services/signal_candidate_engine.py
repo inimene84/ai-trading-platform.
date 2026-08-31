@@ -119,6 +119,41 @@ class SignalCandidateEngine:
                 removed += 1
         return removed
     MIN_FEATURE_BARS = 20
+    # Entries trigger on the signal timeframe, but stops are sized from a
+    # slower one. M5 ATR on a quiet pair produced 2 pip stops that the broker
+    # discarded outright, leaving positions with no protection at all.
+    STOP_TIMEFRAME = os.getenv("SIGNAL_STOP_TIMEFRAME", "H1")
+
+    @staticmethod
+    def stop_atr(features: Dict[str, Any]) -> float:
+        """ATR to size protective levels from, falling back to the signal ATR."""
+        return float(features.get("stop_atr") or features.get("atr") or 0.0)
+
+    async def _attach_stop_atr(self, symbol: str, broker: str, features: Dict[str, Any]) -> None:
+        """Add a slower-timeframe ATR for stop sizing.
+
+        Leaves `atr` untouched so entry triggers keep their signal-timeframe
+        sensitivity. On any failure the signal ATR is used and the broker
+        minimum-distance clamp remains the backstop.
+        """
+        tf = self.STOP_TIMEFRAME
+        if not tf or tf == "":
+            return
+        try:
+            if broker == "ctrader":
+                bars = await asyncio.to_thread(
+                    ctrader_service.get_trendbars, symbol, tf, count=40
+                )
+            else:
+                bars = await binance_market_data.get_klines(
+                    symbol, interval=tf_to_binance_interval(tf), limit=40
+                )
+            slow = self._compute_features(bars)
+            if slow and slow.get("atr"):
+                features["stop_atr"] = slow["atr"]
+                features["stop_timeframe"] = tf
+        except Exception as err:
+            logger.warning(f"{symbol}: {tf} stop ATR unavailable ({err}); using signal ATR")
 
     @staticmethod
     def _compute_features(bars: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
@@ -214,7 +249,7 @@ class SignalCandidateEngine:
             return None
 
         price = features["last_close"]
-        atr = features["atr"]
+        atr = self.stop_atr(features)
 
         if direction == "BUY":
             sl = round(price - (1.5 * atr), 5)
@@ -250,7 +285,7 @@ class SignalCandidateEngine:
             return None
 
         price = features["last_close"]
-        atr = features["atr"]
+        atr = self.stop_atr(features)
 
         if direction == "BUY":
             sl = round(features["recent_low"] - (0.5 * atr), 5)
@@ -278,7 +313,7 @@ class SignalCandidateEngine:
         # Low volatility compression before catalyst (volatility_pct < 0.15% or RSI near 50)
         if 46 <= features["rsi"] <= 54 and features["volatility_pct"] < 0.25:
             price = features["last_close"]
-            atr = features["atr"]
+            atr = self.stop_atr(features)
             upper_bracket = round(features["recent_high"] + (0.4 * atr), 5)
             lower_bracket = round(features["recent_low"] - (0.4 * atr), 5)
 
@@ -301,7 +336,7 @@ class SignalCandidateEngine:
 
         # Rejection of extreme wick against prevailing higher timeframe trend
         price = features["last_close"]
-        atr = features["atr"]
+        atr = self.stop_atr(features)
         if features["trend"] == "BULLISH" and features["rsi"] < 42:
             # Bullish trend pulling back deeply, potential spring / slingshot long
             return {
@@ -403,6 +438,7 @@ class SignalCandidateEngine:
                         f"need {self.MIN_FEATURE_BARS}"
                     )
                     continue
+                await self._attach_stop_atr(sym, broker, features)
 
                 # Evaluate strategies in order of priority
                 evaluators = [
@@ -493,9 +529,10 @@ class SignalCandidateEngine:
                         f"Skipping macro candidate for {matched_sym}: insufficient bars"
                     )
                     continue
+                await self._attach_stop_atr(matched_sym, "ctrader", features)
                 direction = "BUY" if features["trend"] == "BULLISH" else "SELL"
                 entry = features["last_close"]
-                atr = features["atr"]
+                atr = self.stop_atr(features)
                 # Protection must sit on the correct side of entry. A short with
                 # a stop below and a target above is an inverted bracket that
                 # never caps the loss.

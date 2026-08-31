@@ -233,7 +233,10 @@ async def test_scan_markets_routes_usdcad_to_ctrader():
         new_callable=AsyncMock,
     ) as mock_binance:
         await signal_candidate_engine.scan_markets(universe=["USDCAD"], timeframe="M5")
-        mock_ctrader.assert_called_once()
+        # Signal timeframe plus the slower stop-sizing timeframe, both on cTrader.
+        assert mock_ctrader.call_count == 2
+        requested = [c.args[1] for c in mock_ctrader.call_args_list]
+        assert requested == ["M5", signal_candidate_engine.STOP_TIMEFRAME]
         mock_binance.assert_not_called()
 
 
