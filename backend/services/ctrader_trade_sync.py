@@ -137,22 +137,35 @@ def overlay_live_mark(
     live_by_symbol: Dict[str, Dict[str, Any]],
 ) -> Dict[str, Any]:
     """Prefer live-book PnL/qty when the dashboard row is a cTrader trade."""
-    if payload.get("broker") != "ctrader":
+    broker = (payload.get("broker") or "").lower()
+    sym = str(payload.get("symbol") or "").upper()
+    is_ctrader = (
+        broker == "ctrader"
+        or payload.get("broker_position_id")
+        or (len(sym) == 6 and sym.isalpha() and not sym.endswith("USDT"))
+        or sym in ("XAUUSD", "XAGUSD")
+    )
+    if not is_ctrader:
         return payload
+    if broker != "ctrader":
+        payload["broker"] = "ctrader"
+
     pid = str(payload.get("broker_position_id") or "")
-    live = live_by_pid.get(pid) or live_by_symbol.get(str(payload.get("symbol") or "").upper())
+    live = live_by_pid.get(pid) or live_by_symbol.get(sym)
     if not live:
+        entry = float(payload.get("entry_price") or 0)
+        if not payload.get("current_price") and entry > 0:
+            payload["current_price"] = entry
         return payload
+
     entry = float(live.get("entry_price") or payload.get("entry_price") or 0)
     qty = float(live.get("quantity") or payload.get("quantity") or 0)
     pnl = float(live.get("unrealized_pnl") or payload.get("unrealized_pnl") or 0)
     payload["entry_price"] = entry
     payload["quantity"] = qty
     payload["unrealized_pnl"] = round(pnl, 2)
-    # yfinance cannot resolve a bare FX pair, so the generic mark lookup falls
-    # back to entry and the card reads a flat 0.00. Use the streamed spot.
-    if live.get("current_price"):
-        payload["current_price"] = float(live["current_price"])
+    live_mark = live.get("current_price")
+    payload["current_price"] = _positive_price(live_mark, payload.get("current_price"), entry)
     # Show the protection the broker actually holds, not what was requested.
     for level in ("stop_loss", "take_profit"):
         if live.get(level) is not None:
@@ -161,3 +174,13 @@ def overlay_live_mark(
         notional = abs(entry * qty)
         payload["unrealized_pnl_pct"] = round((pnl / notional) * 100, 2) if notional else 0.0
     return payload
+
+
+def _positive_price(*candidates: Any) -> float:
+    for raw in candidates:
+        if raw is None:
+            continue
+        val = float(raw)
+        if val > 0:
+            return val
+    return 0.0

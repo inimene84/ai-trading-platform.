@@ -231,7 +231,7 @@ def test_spot_subscription_is_requested_once_per_symbol(fake_ctrader_messages):
     assert sorted(sent[1][0].symbolId) == [4]
 
 
-def test_positions_without_spot_keep_zero_and_do_not_crash():
+def test_positions_without_spot_use_entry_as_mark():
     svc = CTraderService()
     svc._positions = [
         {
@@ -246,4 +246,4 @@ def test_positions_without_spot_keep_zero_and_do_not_crash():
     svc._last_spots = {}
     pos = svc.get_positions()[0]
     assert pos["unrealized_pnl"] == 0.0
-    assert "current_price" not in pos
+    assert pos["current_price"] == pytest.approx(0.59126)

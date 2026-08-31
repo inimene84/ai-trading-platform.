@@ -89,6 +89,34 @@ def _to_yfinance_symbol(symbol: str) -> str:
     return s  # already yfinance format or unknown
 
 
+def _is_ctrader_symbol(symbol: str) -> bool:
+    """True for bare FX/metal pairs routed through cTrader, not Binance."""
+    sym = str(symbol or "").upper().strip()
+    if sym in ("XAUUSD", "XAGUSD", "GOLD", "SILVER"):
+        return True
+    return len(sym) == 6 and sym.isalpha() and not sym.endswith("USDT")
+
+
+def _is_ctrader_trade(trade: Any) -> bool:
+    """Detect cTrader dashboard rows even when broker was not persisted."""
+    broker = (getattr(trade, "broker", None) or getattr(trade, "exchange", None) or "").lower()
+    if broker == "ctrader":
+        return True
+    if getattr(trade, "broker_position_id", None):
+        return True
+    return _is_ctrader_symbol(getattr(trade, "symbol", ""))
+
+
+def _coalesce_mark_price(mark: Optional[float], entry: Optional[float]) -> float:
+    """Never surface a zero mark — fall back to entry when quotes are missing."""
+    for candidate in (mark, entry):
+        if candidate is not None:
+            val = float(candidate)
+            if val > 0:
+                return val
+    return 0.0
+
+
 @router.get("/strategies")
 async def list_strategies():
     """List available trading strategies with their current parameters."""
@@ -703,7 +731,17 @@ async def get_positions():
             logger.warning("cTrader live-book sync for dashboard failed: %s", exc)
 
         open_trades = db.query(Trade).filter(Trade.status.in_(["open", "filled"])).all()
-        mark_prices = _fetch_mark_prices_for_symbols({t.symbol for t in open_trades})
+        non_ctrader_symbols = {
+            t.symbol for t in open_trades if not _is_ctrader_trade(t)
+        }
+        mark_prices = _fetch_mark_prices_for_symbols(non_ctrader_symbols)
+        if live_ctrader:
+            try:
+                ctrader_broker.ensure_spot_quotes(
+                    [str(p.get("symbol") or "") for p in live_ctrader if p.get("symbol")]
+                )
+            except Exception as exc:
+                logger.warning("cTrader spot quote refresh failed: %s", exc)
         live_by_pid = {
             str(p.get("position_id")): p for p in live_ctrader if p.get("position_id")
         }
@@ -712,12 +750,31 @@ async def get_positions():
         }
         positions = []
         for t in open_trades:
-            current_price = mark_prices.get(t.symbol) or t.entry_price
+            is_ctrader = _is_ctrader_trade(t)
+            direction = str(t.direction or "BUY").upper()
+            sym = str(t.symbol or "").upper()
 
-            if t.direction == "BUY":
-                unrealized_pnl = (current_price - t.entry_price) * t.quantity
+            if is_ctrader:
+                mark = ctrader_broker.get_mark_price(sym, direction)
+                current_price = _coalesce_mark_price(mark, t.entry_price)
+                lots = float(t.quantity or 0)
+                if mark and t.entry_price and lots:
+                    units = lots * ctrader_broker.CONTRACT_UNITS_PER_LOT
+                    direction_mult = 1 if direction == "BUY" else -1
+                    quote_pnl = (mark - float(t.entry_price)) * units * direction_mult
+                    rate = ctrader_broker.quote_to_usd_rate(sym, mark)
+                    unrealized_pnl = round(quote_pnl * rate, 2) if rate else round(quote_pnl, 2)
+                else:
+                    unrealized_pnl = 0.0
             else:
-                unrealized_pnl = (t.entry_price - current_price) * t.quantity
+                current_price = _coalesce_mark_price(
+                    mark_prices.get(t.symbol),
+                    t.entry_price,
+                )
+                if direction == "BUY":
+                    unrealized_pnl = (current_price - t.entry_price) * t.quantity
+                else:
+                    unrealized_pnl = (t.entry_price - current_price) * t.quantity
 
             pnl_pct = 0.0
             if t.entry_price and t.quantity and t.entry_price * t.quantity > 0:
@@ -735,7 +792,9 @@ async def get_positions():
                 "unrealized_pnl": round(unrealized_pnl, 2),
                 "unrealized_pnl_pct": round(pnl_pct, 2),
                 "strategy": t.strategy,
-                "broker": getattr(t, "broker", None) or getattr(t, "exchange", None),
+                "broker": "ctrader" if is_ctrader else (
+                    getattr(t, "broker", None) or getattr(t, "exchange", None)
+                ),
                 "broker_position_id": getattr(t, "broker_position_id", None),
                 "opened_at": t.timestamp.isoformat() if t.timestamp else None,
             }
@@ -2278,9 +2337,23 @@ async def event_stream(topics: str = ""):
 
 @router.get("/price")
 async def get_price(symbol: str = "BTCUSDT"):
-    """Return current mark/last price for a Binance Futures symbol."""
+    """Return current mark/last price for a symbol."""
+    sym = symbol.upper().strip()
+    if _is_ctrader_symbol(sym):
+        mark = ctrader_broker.get_mark_price(sym)
+        if not mark or mark <= 0:
+            ctrader_broker.ensure_spot_quotes([sym])
+            mark = ctrader_broker.get_mark_price(sym)
+        if mark and mark > 0:
+            return {
+                "symbol": sym,
+                "price": mark,
+                "change24h": 0.0,
+                "source": "ctrader",
+            }
+        return {"symbol": sym, "price": 0.0, "change24h": 0.0, "source": "ctrader"}
+
     from backend.services.binance_market_data import binance_market_data
-    sym = symbol.upper()
     try:
         ticker = await binance_market_data.get_ticker_24h(sym)
         if ticker:
@@ -2288,10 +2361,11 @@ async def get_price(symbol: str = "BTCUSDT"):
                 "symbol": sym,
                 "price": ticker.get("lastPrice", 0.0),
                 "change24h": ticker.get("priceChangePercent", 0.0),
+                "source": "binance",
             }
     except Exception:
         pass
-    return {"symbol": sym, "price": 0.0, "change24h": 0.0}
+    return {"symbol": sym, "price": 0.0, "change24h": 0.0, "source": "binance"}
 
 
 @router.get("/account/summary")

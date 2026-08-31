@@ -54,7 +54,19 @@ function formatTime(iso: string | null | undefined): string {
   }
 }
 
-function calculateSlProgress(
+function isForexSymbol(symbol: string): boolean {
+  const sym = symbol.replace('=X', '').replace('/', '').toUpperCase();
+  return /^[A-Z]{6}$/.test(sym) && !sym.endsWith('USDT');
+}
+
+function coalescePrice(...values: Array<number | null | undefined>): number {
+  for (const raw of values) {
+    if (raw == null) continue;
+    const val = Number(raw);
+    if (Number.isFinite(val) && val > 0) return val;
+  }
+  return 0;
+}
   side: 'long' | 'short',
   entry: number,
   current: number,
@@ -73,7 +85,8 @@ function calculateSlProgress(
 }
 
 export function ActiveTradeCard({ trade, onClose, onModify }: ActiveTradeCardProps) {
-  const [livePrice, setLivePrice] = useState<number>(trade.currentPrice);
+  const initialMark = coalescePrice(trade.currentPrice, trade.entryPrice);
+  const [livePrice, setLivePrice] = useState<number>(initialMark);
   const [livePnl, setLivePnl] = useState<number>(trade.pnl);
   const [livePnlPct, setLivePnlPct] = useState<number>(trade.pnlPct);
   const [isEditing, setIsEditing] = useState(false);
@@ -81,54 +94,55 @@ export function ActiveTradeCard({ trade, onClose, onModify }: ActiveTradeCardPro
   const [editTp, setEditTp] = useState<string>(trade.takeProfit ? String(trade.takeProfit) : '');
   const [closing, setClosing] = useState(false);
   const [saving, setSaving] = useState(false);
-  const priceRef = useRef<number>(trade.currentPrice);
+  const priceRef = useRef<number>(initialMark);
 
   const isLong = trade.side === 'long';
   const isPositive = livePnl >= 0;
-  // cTrader forex arrives as a bare pair (EURUSD), which /trading/price cannot
-  // quote — it answers 0.0 and the card would render a -100% loss. Those rows
-  // already carry a broker mark and P&L from the positions endpoint.
-  const isCtrader = trade.broker === 'ctrader';
   const binanceSym = trade.symbol.replace('=X', '').replace('/', '');
+  const isForex = isForexSymbol(trade.symbol);
+  // Bare FX pairs must never hit the Binance ticker — it returns 0 and the card
+  // showed a fake -100% loss. Treat them as cTrader even when broker was not
+  // persisted on older Trade rows.
+  const isCtrader = trade.broker === 'ctrader' || isForex;
+  const displayMark = coalescePrice(livePrice, trade.entryPrice);
 
   useEffect(() => {
-    if (!isCtrader) return;
-    setLivePrice(trade.currentPrice);
+    const mark = coalescePrice(trade.currentPrice, trade.entryPrice);
+    setLivePrice(mark);
     setLivePnl(trade.pnl);
     setLivePnlPct(trade.pnlPct);
-    priceRef.current = trade.currentPrice;
-  }, [isCtrader, trade.currentPrice, trade.pnl, trade.pnlPct]);
+    priceRef.current = mark;
+  }, [isCtrader, trade.currentPrice, trade.entryPrice, trade.pnl, trade.pnlPct]);
 
-  // Live price polling — backend caches tickers (TICKER_CACHE_TTL_SEC); 15s is enough for P&L cards
   const fetchLivePrice = useCallback(async () => {
     try {
-      // Position P&L must use the same futures mark source as the backend,
-      // not Binance spot (basis/funding can make them diverge).
       const res = await fetch(
         `/api/backend/trading/price?symbol=${encodeURIComponent(binanceSym)}`
       );
       if (!res.ok) return;
       const data = await res.json();
       const p = Number(data.price ?? data.current_price ?? data.last);
-      // A zero/absent quote means the symbol is not on this venue. Keep the
-      // last known price rather than marking the position to 0.
-      if (!isFinite(p) || p <= 0) return;
+      if (!Number.isFinite(p) || p <= 0) return;
       priceRef.current = p;
       setLivePrice(p);
+      if (isCtrader) {
+        // P&L for FX is sized in contract units on the backend; keep the
+        // positions payload as the source of truth for dollar P&L.
+        return;
+      }
       const diff = isLong ? p - trade.entryPrice : trade.entryPrice - p;
       setLivePnl(diff * trade.quantity);
       setLivePnlPct(trade.entryPrice ? (diff / trade.entryPrice) * 100 : 0);
     } catch {
       // silent fail
     }
-  }, [trade.entryPrice, trade.quantity, isLong, binanceSym]);
+  }, [trade.entryPrice, trade.quantity, isLong, binanceSym, isCtrader]);
 
   useEffect(() => {
-    if (isCtrader) return;
     fetchLivePrice();
     const iv = setInterval(fetchLivePrice, 15000);
     return () => clearInterval(iv);
-  }, [fetchLivePrice, isCtrader]);
+  }, [fetchLivePrice]);
 
   const handleClose = async () => {
     if (closing) return;
@@ -156,7 +170,7 @@ export function ActiveTradeCard({ trade, onClose, onModify }: ActiveTradeCardPro
   const slProgress = calculateSlProgress(
     trade.side,
     trade.entryPrice,
-    livePrice,
+    displayMark,
     trade.stopLoss,
     trade.takeProfit
   );
@@ -240,7 +254,7 @@ export function ActiveTradeCard({ trade, onClose, onModify }: ActiveTradeCardPro
           </div>
           <div>
             <div className="text-[9px] uppercase text-zinc-600 font-bold tracking-wider mb-0.5">Mark</div>
-            <div className="text-xs font-mono text-white font-bold">{formatPrice(livePrice)}</div>
+            <div className="text-xs font-mono text-white font-bold">{formatPrice(displayMark)}</div>
           </div>
           <div>
             <div className="text-[9px] uppercase text-zinc-600 font-bold tracking-wider mb-0.5">Qty</div>

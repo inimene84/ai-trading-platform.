@@ -126,6 +126,38 @@ def test_overlay_live_mark_prefers_broker_pnl():
     assert out["current_price"] == pytest.approx(159.83)
 
 
+def test_overlay_infers_ctrader_for_bare_fx_without_broker():
+    payload = {
+        "symbol": "EURUSD",
+        "entry_price": 1.1615,
+        "quantity": 0.01,
+        "current_price": 0.0,
+        "unrealized_pnl": -0.12,
+    }
+    out = overlay_live_mark(payload, {}, {})
+    assert out["broker"] == "ctrader"
+    assert out["current_price"] == pytest.approx(1.1615)
+
+
+def test_overlay_never_keeps_zero_mark_when_live_has_entry():
+    payload = {
+        "broker": "ctrader",
+        "symbol": "GBPUSD",
+        "broker_position_id": "9",
+        "entry_price": 1.3547,
+        "current_price": 0.0,
+        "quantity": 0.01,
+        "unrealized_pnl": 0.0,
+    }
+    out = overlay_live_mark(
+        payload,
+        {"9": {"entry_price": 1.3547, "quantity": 0.01, "unrealized_pnl": -0.05}},
+        {},
+    )
+    assert out["current_price"] == pytest.approx(1.3547)
+    assert out["unrealized_pnl"] == pytest.approx(-0.05)
+
+
 def test_persist_ctrader_execution_writes_open_row():
     db = _session()
     fake_session = MagicMock()

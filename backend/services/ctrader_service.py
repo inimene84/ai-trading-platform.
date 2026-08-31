@@ -191,7 +191,10 @@ class CTraderProtocol:
                         "symbol_id": p.tradeData.symbolId,
                         "side": side,
                         "quantity": volume_lots,
-                        "entry_price": p.price if hasattr(p, "price") else 0.0,
+                        "entry_price": self._service.normalize_position_price(
+                            getattr(p, "price", None),
+                            sym_name,
+                        ),
                         "unrealized_pnl": 0.0,
                         "stop_loss": float(p.stopLoss) if getattr(p, "stopLoss", 0) else None,
                         "take_profit": float(p.takeProfit) if getattr(p, "takeProfit", 0) else None,
@@ -490,6 +493,21 @@ class CTraderService(BrokerService):
         return max(0, cls.digits_for(sym) - 1)
 
     @classmethod
+    def normalize_position_price(cls, raw: Optional[float], symbol: str = "") -> float:
+        """Decode reconcile position prices whether Spotware sent ints or floats."""
+        if raw is None:
+            return 0.0
+        val = float(raw)
+        if val <= 0:
+            return 0.0
+        # Spotware sends prices as integers scaled by 1/100000. Already-decoded
+        # floats for FX/metals sit in a narrow band (≈0.5–250).
+        if val > 1000:
+            decoded = cls.decode_spotware_price(val, symbol)
+            return float(decoded or 0.0)
+        return val
+
+    @classmethod
     def decode_spotware_price(cls, raw: Optional[float], symbol: str = "") -> Optional[float]:
         """Convert a Spotware integer price (always 1/100000) to a float."""
         if raw is None:
@@ -776,6 +794,19 @@ class CTraderService(BrokerService):
             "broker": "ctrader",
         }
 
+    def ensure_spot_quotes(self, symbols: List[str]) -> None:
+        """Subscribe to spot streams for symbols that need a live mark."""
+        if self._dry_run or not self.is_connected or self._protocol is None:
+            return
+        wanted: set[int] = set()
+        for raw_sym in symbols:
+            sym = self._normalize_symbol(raw_sym)
+            sid = self._symbol_ids.get(sym)
+            if sid:
+                wanted.add(int(sid))
+        if wanted:
+            self._protocol._subscribe_spots(wanted)
+
     def get_mark_price(self, symbol: str, side: Optional[str] = None) -> Optional[float]:
         """Last streamed price for a symbol.
 
@@ -850,9 +881,11 @@ class CTraderService(BrokerService):
                     enriched["unrealized_pnl"] = round(quote_pnl * rate, 2)
                     enriched["pnl_currency"] = "USD"
                 else:
-                    # Cannot convert yet; label it so the UI cannot imply USD.
                     enriched["unrealized_pnl"] = round(quote_pnl, 2)
                     enriched["pnl_currency"] = symbol[3:] if len(symbol) == 6 else ""
+            else:
+                # Always expose a mark for the dashboard — entry until spot arrives.
+                enriched["current_price"] = mark if mark and mark > 0 else entry
             positions.append(enriched)
         return positions
 
