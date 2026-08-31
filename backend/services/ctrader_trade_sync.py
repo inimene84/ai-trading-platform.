@@ -127,11 +127,7 @@ def upsert_ctrader_live_trades(db, live_positions: List[Dict[str, Any]]) -> int:
         )
         created += 1
 
-    if created:
-        db.commit()
-    else:
-        db.flush()
-        db.commit()
+    db.commit()
     return created
 
 
@@ -153,6 +149,10 @@ def overlay_live_mark(
     payload["entry_price"] = entry
     payload["quantity"] = qty
     payload["unrealized_pnl"] = round(pnl, 2)
+    # yfinance cannot resolve a bare FX pair, so the generic mark lookup falls
+    # back to entry and the card reads a flat 0.00. Use the streamed spot.
+    if live.get("current_price"):
+        payload["current_price"] = float(live["current_price"])
     if entry and qty:
         notional = abs(entry * qty)
         payload["unrealized_pnl_pct"] = round((pnl / notional) * 100, 2) if notional else 0.0

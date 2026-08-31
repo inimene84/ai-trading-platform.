@@ -109,12 +109,21 @@ def test_overlay_live_mark_prefers_broker_pnl():
     }
     out = overlay_live_mark(
         payload,
-        {"1": {"entry_price": 159.719, "quantity": 0.1, "unrealized_pnl": -1.25}},
+        {
+            "1": {
+                "entry_price": 159.719,
+                "quantity": 0.1,
+                "unrealized_pnl": -1.25,
+                "current_price": 159.83,
+            }
+        },
         {},
     )
     assert out["entry_price"] == pytest.approx(159.719)
     assert out["unrealized_pnl"] == pytest.approx(-1.25)
     assert out["unrealized_pnl_pct"] != 0
+    # yfinance cannot price a bare FX pair; the streamed spot must win.
+    assert out["current_price"] == pytest.approx(159.83)
 
 
 def test_persist_ctrader_execution_writes_open_row():
