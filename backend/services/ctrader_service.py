@@ -412,6 +412,8 @@ class CTraderService(BrokerService):
     # Bid/ask/trendbar integers are always 1/100000 of a price unit (not 10^digits).
     SPOTWARE_PRICE_SCALE = 100_000
     MAX_FX_STOP_PIPS = 120
+    # Broker stop level. Protection closer than this is silently discarded.
+    MIN_FX_STOP_PIPS = float(os.getenv("CTRADER_MIN_STOP_PIPS", "10"))
 
     @classmethod
     def lots_to_protocol_volume(cls, lots: float) -> int:
@@ -499,34 +501,64 @@ class CTraderService(BrokerService):
         return max(pip * cls.MAX_FX_STOP_PIPS, entry_abs * 0.012)
 
     @classmethod
+    def min_protective_distance(cls, symbol: str, entry: float) -> float:
+        """Closest a stop may sit and still be accepted by the broker.
+
+        IC Markets rejects protection inside its stop level, and does so
+        silently: the order fills and the stop is simply absent. M5 ATR on a
+        quiet pair produced 2 pip stops, so live positions ran with no stop
+        at all while the wider take-profit survived.
+        """
+        return float(cls.pip_size_for(symbol)) * cls.MIN_FX_STOP_PIPS
+
+    @classmethod
     def clamp_protective_prices(
         cls,
         symbol: str,
         entry: float,
         stop_loss: Optional[float],
         take_profit: Optional[float],
+        direction: Optional[str] = None,
     ) -> tuple[Optional[float], Optional[float]]:
-        """Cap SL/TP so JPY (and other) pairs cannot be sent thousands of pips away."""
+        """Force SL/TP onto the correct side of entry and into a workable band.
+
+        Levels too far out (thousands of pips on JPY) are capped; levels too
+        close are pushed out to the broker minimum so they are not dropped.
+        """
         if not entry:
             return stop_loss, take_profit
         max_dist = cls.max_protective_distance(symbol, entry)
+        min_dist = min(cls.min_protective_distance(symbol, entry), max_dist)
         digits = cls.digits_for(symbol)
+        side = (direction or "").upper()
+        entry_f = float(entry)
 
-        def _clamp(target: Optional[float]) -> Optional[float]:
+        def _clamp(target: Optional[float], want_above: Optional[bool]) -> Optional[float]:
             if target is None:
                 return None
             dist = abs(float(target) - float(entry))
-            if dist <= max_dist:
-                return round(float(target), digits)
-            sign = 1.0 if float(target) > float(entry) else -1.0
-            clamped = round(float(entry) + sign * max_dist, digits)
-            logger.warning(
-                "Clamping %s protective level %s -> %s (entry=%s max_dist=%s)",
-                symbol, target, clamped, entry, max_dist,
-            )
-            return clamped
+            if want_above is None:
+                sign = 1.0 if float(target) > entry_f else -1.0
+            else:
+                sign = 1.0 if want_above else -1.0
+                if (float(target) > entry_f) is not want_above:
+                    logger.warning(
+                        "%s protective level %s is on the wrong side of entry %s; mirroring",
+                        symbol, target, entry,
+                    )
+            bounded = min(max(dist, min_dist), max_dist)
+            if bounded != dist:
+                logger.warning(
+                    "Adjusting %s protective distance %s -> %s (entry=%s min=%s max=%s)",
+                    symbol, dist, bounded, entry, min_dist, max_dist,
+                )
+            return round(entry_f + sign * bounded, digits)
 
-        return _clamp(stop_loss), _clamp(take_profit)
+        if side in ("BUY", "LONG"):
+            return _clamp(stop_loss, False), _clamp(take_profit, True)
+        if side in ("SELL", "SHORT"):
+            return _clamp(stop_loss, True), _clamp(take_profit, False)
+        return _clamp(stop_loss, None), _clamp(take_profit, None)
 
     @staticmethod
     def merge_symbol_catalog(
@@ -865,7 +897,8 @@ class CTraderService(BrokerService):
         take_profit_price = take_profit or kwargs.get("take_profit_price")
         if current_price:
             stop_loss_price, take_profit_price = self.clamp_protective_prices(
-                ct_symbol, float(current_price), stop_loss_price, take_profit_price
+                ct_symbol, float(current_price), stop_loss_price, take_profit_price,
+                direction=side,
             )
 
         # Simulated fallback in dry-run
@@ -907,7 +940,17 @@ class CTraderService(BrokerService):
                 if sl_units > 0:
                     order_req.relativeStopLoss = sl_units
                 else:
-                    logger.warning(f"Omitting SL for {ct_symbol}: distance too small")
+                    # Sending the entry anyway would open an unprotected
+                    # position, which is how live forex ended up running naked.
+                    logger.critical(
+                        f"Refusing {ct_symbol} entry: stop loss {stop_loss_price} "
+                        f"rounds to zero distance from {current_price}"
+                    )
+                    return {
+                        "status": "error",
+                        "error": "stop loss too close to entry to encode",
+                        "symbol": ct_symbol,
+                    }
 
             if current_price and take_profit_price:
                 tp_units = self.relative_stop_units(float(current_price), float(take_profit_price), digits)

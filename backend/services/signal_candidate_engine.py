@@ -420,6 +420,7 @@ class SignalCandidateEngine:
                             raw_signal["entry_price"],
                             raw_signal.get("stop_loss"),
                             raw_signal.get("take_profit"),
+                            direction=raw_signal.get("direction"),
                         )
                         raw_signal["stop_loss"] = sl
                         raw_signal["take_profit"] = tp
@@ -505,7 +506,7 @@ class SignalCandidateEngine:
                     sl = round(entry + (1.2 * atr), 5)
                     tp = round(entry - (2.4 * atr), 5)
                 sl, tp = CTraderService.clamp_protective_prices(
-                    matched_sym, entry, sl, tp
+                    matched_sym, entry, sl, tp, direction=direction
                 )
                 size_data = self._calculate_size(matched_sym, entry, sl, "ctrader")
 
