@@ -85,54 +85,50 @@ export function ActiveTradeCard({ trade, onClose, onModify }: ActiveTradeCardPro
 
   const isLong = trade.side === 'long';
   const isPositive = livePnl >= 0;
-  const isForex = trade.symbol.endsWith('=X');
+  // cTrader forex arrives as a bare pair (EURUSD), which /trading/price cannot
+  // quote — it answers 0.0 and the card would render a -100% loss. Those rows
+  // already carry a broker mark and P&L from the positions endpoint.
+  const isCtrader = trade.broker === 'ctrader';
   const binanceSym = trade.symbol.replace('=X', '').replace('/', '');
+
+  useEffect(() => {
+    if (!isCtrader) return;
+    setLivePrice(trade.currentPrice);
+    setLivePnl(trade.pnl);
+    setLivePnlPct(trade.pnlPct);
+    priceRef.current = trade.currentPrice;
+  }, [isCtrader, trade.currentPrice, trade.pnl, trade.pnlPct]);
 
   // Live price polling — backend caches tickers (TICKER_CACHE_TTL_SEC); 15s is enough for P&L cards
   const fetchLivePrice = useCallback(async () => {
     try {
-      let p: number | null = null;
-      if (isForex) {
-        const res = await fetch(
-          `/api/backend/trading/price?symbol=${encodeURIComponent(trade.symbol)}`
-        );
-        if (res.ok) {
-          const data = await res.json();
-          p = data.price ?? data.current_price ?? data.last ?? null;
-        }
-      } else {
-        // Position P&L must use the same futures mark source as the backend,
-        // not Binance spot (basis/funding can make them diverge).
-        const res = await fetch(
-          `/api/backend/trading/price?symbol=${encodeURIComponent(binanceSym)}`
-        );
-        if (res.ok) {
-          const data = await res.json();
-          p = Number(data.price ?? data.current_price ?? data.last);
-        }
-      }
-      if (p !== null && !isNaN(p)) {
-        priceRef.current = p;
-        setLivePrice(p);
-        // Recalculate P&L
-        const diff = isLong
-          ? p - trade.entryPrice
-          : trade.entryPrice - p;
-        const pnl = diff * trade.quantity;
-        const pnlPct = (diff / trade.entryPrice) * 100;
-        setLivePnl(pnl);
-        setLivePnlPct(pnlPct);
-      }
-    } catch (e) {
+      // Position P&L must use the same futures mark source as the backend,
+      // not Binance spot (basis/funding can make them diverge).
+      const res = await fetch(
+        `/api/backend/trading/price?symbol=${encodeURIComponent(binanceSym)}`
+      );
+      if (!res.ok) return;
+      const data = await res.json();
+      const p = Number(data.price ?? data.current_price ?? data.last);
+      // A zero/absent quote means the symbol is not on this venue. Keep the
+      // last known price rather than marking the position to 0.
+      if (!isFinite(p) || p <= 0) return;
+      priceRef.current = p;
+      setLivePrice(p);
+      const diff = isLong ? p - trade.entryPrice : trade.entryPrice - p;
+      setLivePnl(diff * trade.quantity);
+      setLivePnlPct(trade.entryPrice ? (diff / trade.entryPrice) * 100 : 0);
+    } catch {
       // silent fail
     }
-  }, [trade.symbol, trade.entryPrice, trade.quantity, isLong, isForex, binanceSym]);
+  }, [trade.entryPrice, trade.quantity, isLong, binanceSym]);
 
   useEffect(() => {
+    if (isCtrader) return;
     fetchLivePrice();
     const iv = setInterval(fetchLivePrice, 15000);
     return () => clearInterval(iv);
-  }, [fetchLivePrice]);
+  }, [fetchLivePrice, isCtrader]);
 
   const handleClose = async () => {
     if (closing) return;
