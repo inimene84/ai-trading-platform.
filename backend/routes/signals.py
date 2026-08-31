@@ -164,6 +164,8 @@ async def execute_candidate(payload: ExecuteCandidateRequest = Body(...)):
         force=payload.force,
     )
     if not res.get("success"):
+        if res.get("skipped"):
+            return res
         raise HTTPException(status_code=400, detail=res.get("error", "Execution failed"))
     return res
 

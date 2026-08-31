@@ -61,14 +61,18 @@ class SignalCandidateEngine:
             "max_ready_per_poll": int(os.getenv("CTRADER_MAX_READY_PER_POLL", "10")),
             "max_ctrader_lots": float(os.getenv("CTRADER_MAX_LOTS", "0.10")),
             "one_position_per_symbol": os.getenv("CTRADER_ONE_POSITION_PER_SYMBOL", "true").lower() == "true",
+            "include_metals": os.getenv("CTRADER_INCLUDE_METALS", "false").lower() == "true",
         }
 
-    @staticmethod
-    def _is_ctrader_forex_candidate(cand: Dict[str, Any]) -> bool:
+    def _is_ctrader_forex_candidate(self, cand: Dict[str, Any]) -> bool:
         if cand.get("broker") != "ctrader":
             return False
         asset = classify_symbol(str(cand.get("symbol", "")))
-        return asset in ("forex", "metal")
+        if asset == "forex":
+            return True
+        if asset == "metal" and self.execution_config.get("include_metals"):
+            return True
+        return False
 
     def _open_ctrader_position_count(self) -> int:
         try:
@@ -624,7 +628,8 @@ class SignalCandidateEngine:
             if self.execution_config.get("forex_only") and not self._is_ctrader_forex_candidate(cand):
                 return {
                     "success": False,
-                    "error": "Forex-only execution mode: candidate is not a cTrader forex/metal pair.",
+                    "skipped": True,
+                    "error": "Forex-only execution mode: candidate is not a cTrader FX pair.",
                 }
             if not self._ctrader_execution_slot_available():
                 return {
@@ -661,9 +666,25 @@ class SignalCandidateEngine:
                     take_profit=cand.get("take_profit"),
                 )
                 status = (order_res or {}).get("status", "")
+                err_text = str((order_res or {}).get("error") or "")
                 success = status in ("ok", "simulated", "filled", "sent")
                 order_id = order_res.get("order_id") if order_res else None
                 msg = f"cTrader order {order_id or 'pending'} placed ({status or 'unknown'})"
+                if not success and "MARKET_CLOSED" in err_text.upper():
+                    cand["status"] = CandidateStatus.CANCELLED
+                    cand["execution_result"] = {
+                        "success": False,
+                        "order_id": None,
+                        "message": err_text,
+                        "broker": "ctrader",
+                    }
+                    return {
+                        "success": False,
+                        "skipped": True,
+                        "candidate_id": candidate_id,
+                        "symbol": cand["symbol"],
+                        "error": err_text,
+                    }
             else:
                 order_side = OrderSide.BUY if side == "BUY" else OrderSide.SELL
                 fill_price = await self._resolve_mark_price(

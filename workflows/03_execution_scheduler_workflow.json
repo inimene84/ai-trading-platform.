@@ -93,6 +93,8 @@
       "name": "HTTP: Execute Candidate Order",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
+      "continueOnFail": true,
+      "onError": "continueRegularOutput",
       "position": [
         1200,
         220
