@@ -65,7 +65,7 @@ async def test_dashboard_positions_use_ctrader_mark_not_binance():
     pos = result["positions"][0]
     assert pos["broker"] == "ctrader"
     assert pos["current_price"] == pytest.approx(1.1618)
-    assert pos["unrealized_pnl_pct"] != pytest.approx(-100.0)
+    assert pos["unrealized_pnl_pct"] == pytest.approx(0.03, abs=0.01)
 
 
 @pytest.mark.asyncio

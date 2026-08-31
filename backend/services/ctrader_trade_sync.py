@@ -170,9 +170,12 @@ def overlay_live_mark(
     for level in ("stop_loss", "take_profit"):
         if live.get(level) is not None:
             payload[level] = float(live[level])
-    if entry and qty:
-        notional = abs(entry * qty)
-        payload["unrealized_pnl_pct"] = round((pnl / notional) * 100, 2) if notional else 0.0
+    payload["unrealized_pnl_pct"] = position_pnl_pct(
+        entry=entry,
+        mark=float(payload.get("current_price") or entry),
+        direction=str(payload.get("direction") or "BUY"),
+        is_ctrader=True,
+    )
     return payload
 
 
@@ -184,3 +187,34 @@ def _positive_price(*candidates: Any) -> float:
         if val > 0:
             return val
     return 0.0
+
+
+def position_pnl_pct(
+    *,
+    entry: float,
+    mark: float,
+    direction: str,
+    unrealized_pnl: float = 0.0,
+    quantity: float = 0.0,
+    is_ctrader: bool = False,
+) -> float:
+    """Return position return % for the dashboard.
+
+    cTrader FX quantity is lots (0.1 = 10k units). Dividing dollar P&L by
+    ``entry * lots`` (~0.12 on EURUSD) produced -1980% on a -$2 move. FX rows
+    use mark vs entry price change instead, matching crypto semantics.
+    """
+    entry_f = float(entry or 0)
+    mark_f = float(mark or 0)
+    if entry_f <= 0:
+        return 0.0
+    if is_ctrader:
+        if mark_f <= 0:
+            return 0.0
+        if str(direction or "BUY").upper() in ("BUY", "LONG"):
+            return round((mark_f - entry_f) / entry_f * 100, 2)
+        return round((entry_f - mark_f) / entry_f * 100, 2)
+    qty = float(quantity or 0)
+    if qty <= 0:
+        return 0.0
+    return round(float(unrealized_pnl or 0) / (entry_f * qty) * 100, 2)

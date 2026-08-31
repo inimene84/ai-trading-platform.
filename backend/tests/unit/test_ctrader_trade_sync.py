@@ -10,6 +10,7 @@ from backend.database.models import Base, Trade
 from backend.services.ctrader_trade_sync import (
     overlay_live_mark,
     persist_ctrader_execution,
+    position_pnl_pct,
     upsert_ctrader_live_trades,
 )
 
@@ -156,6 +157,55 @@ def test_overlay_never_keeps_zero_mark_when_live_has_entry():
     )
     assert out["current_price"] == pytest.approx(1.3547)
     assert out["unrealized_pnl"] == pytest.approx(-0.05)
+
+
+def test_position_pnl_pct_uses_price_change_for_fx_not_lots():
+    # Old formula: -2.30 / (1.1615 * 0.1) * 100 ≈ -1980%
+    pct = position_pnl_pct(
+        entry=1.1615,
+        mark=1.1613,
+        direction="BUY",
+        unrealized_pnl=-2.30,
+        quantity=0.1,
+        is_ctrader=True,
+    )
+    assert pct == pytest.approx(-0.02, abs=0.01)
+
+
+def test_position_pnl_pct_short_fx():
+    pct = position_pnl_pct(
+        entry=1.3547,
+        mark=1.3544,
+        direction="SELL",
+        is_ctrader=True,
+    )
+    assert pct == pytest.approx(0.02, abs=0.01)
+
+
+def test_overlay_pnl_pct_not_inflated_by_lot_size():
+    payload = {
+        "broker": "ctrader",
+        "symbol": "EURUSD",
+        "direction": "BUY",
+        "broker_position_id": "1",
+        "entry_price": 1.1615,
+        "current_price": 1.1613,
+        "quantity": 0.1,
+        "unrealized_pnl": -2.30,
+    }
+    out = overlay_live_mark(
+        payload,
+        {
+            "1": {
+                "entry_price": 1.1615,
+                "quantity": 0.1,
+                "unrealized_pnl": -2.30,
+                "current_price": 1.1613,
+            }
+        },
+        {},
+    )
+    assert out["unrealized_pnl_pct"] == pytest.approx(-0.02, abs=0.01)
 
 
 def test_persist_ctrader_execution_writes_open_row():

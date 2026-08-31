@@ -16,7 +16,7 @@ from backend.services.trading_loop import trading_loop
 from backend.services.ai_analysis import ai_analysis_service
 from backend.services.risk_config import refresh_risk_config
 from backend.services.ctrader_service import ctrader_broker
-from backend.services.ctrader_trade_sync import overlay_live_mark, upsert_ctrader_live_trades
+from backend.services.ctrader_trade_sync import overlay_live_mark, position_pnl_pct, upsert_ctrader_live_trades
 from backend.services.unified_trading import (
     UnifiedTrading, UnifiedOrder, OrderSide, OrderType,
 )
@@ -776,9 +776,14 @@ async def get_positions():
                 else:
                     unrealized_pnl = (t.entry_price - current_price) * t.quantity
 
-            pnl_pct = 0.0
-            if t.entry_price and t.quantity and t.entry_price * t.quantity > 0:
-                pnl_pct = (unrealized_pnl / (t.entry_price * t.quantity)) * 100
+            pnl_pct = position_pnl_pct(
+                entry=float(t.entry_price or 0),
+                mark=current_price,
+                direction=direction,
+                unrealized_pnl=unrealized_pnl,
+                quantity=float(t.quantity or 0),
+                is_ctrader=is_ctrader,
+            )
 
             payload = {
                 "id": t.id,
