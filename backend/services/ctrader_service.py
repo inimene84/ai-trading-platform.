@@ -29,6 +29,7 @@ class CTraderProtocol:
         self._buf = b""
         self.transport = None
         self.last_heartbeat = time.time()
+        self._subscribed_spot_ids: set[int] = set()
 
     def connectionMade(self, transport):
         self.transport = transport
@@ -55,6 +56,29 @@ class CTraderProtocol:
             self.transport.write(struct.pack(">I", len(data)) + data)
         except Exception as e:
             logger.error(f"cTrader protocol send error (payloadType={payload_type}): {e}")
+
+    def _subscribe_spots(self, symbol_ids):
+        """Ask for streaming quotes on symbols we hold.
+
+        Spot events (2131) are the only price source for marking a forex
+        position. Without this request the broker never sends them, so every
+        position reported a 0.00 P&L.
+        """
+        wanted = {int(sid) for sid in symbol_ids if sid}
+        new_ids = wanted - self._subscribed_spot_ids
+        if not new_ids:
+            return
+        try:
+            from ctrader_open_api.messages import OpenApiMessages_pb2 as msgs
+
+            req = msgs.ProtoOASubscribeSpotsReq()
+            req.ctidTraderAccountId = self._creds.get("account_id", 0)
+            req.symbolId.extend(sorted(new_ids))
+            self._send(req, 2127)
+            self._subscribed_spot_ids |= new_ids
+            logger.info(f"cTrader subscribed to spot quotes for {sorted(new_ids)}")
+        except Exception as e:
+            logger.error(f"cTrader spot subscription failed: {e}")
 
     def dataReceived(self, data: bytes):
         self.last_heartbeat = time.time()
@@ -171,6 +195,7 @@ class CTraderProtocol:
                     })
                 self._service._positions = positions
                 logger.info(f"cTrader positions reconciled: {len(positions)} open")
+                self._subscribe_spots({p["symbol_id"] for p in positions})
 
             elif ptype == 2126:  # ProtoOAExecutionEvent
                 ev = msgs.ProtoOAExecutionEvent()

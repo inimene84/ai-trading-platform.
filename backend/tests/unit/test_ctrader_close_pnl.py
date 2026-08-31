@@ -5,13 +5,15 @@ back to entry_price made every forex trade look like a flat 0.00 outcome, which
 hid real losses from the daily-loss guard and from per-symbol expectancy.
 """
 
+import sys
+import types
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from backend.routes.trading import close_position
-from backend.services.ctrader_service import CTraderService
+from backend.services.ctrader_service import CTraderProtocol, CTraderService
 from backend.services.trading_mode import TradingMode
 
 
@@ -139,6 +141,54 @@ def test_open_positions_are_marked_to_market():
     assert pos["current_price"] == pytest.approx(159.62)
     assert pos["unrealized_pnl"] > 0
     assert pos["unrealized_pnl"] == pytest.approx(990.0)
+
+
+class _FakeSubscribeSpotsReq:
+    """Stand-in for the protobuf message; the SDK is only installed in the image."""
+
+    def __init__(self):
+        self.ctidTraderAccountId = 0
+        self.symbolId = []
+
+
+@pytest.fixture
+def fake_ctrader_messages(monkeypatch):
+    messages = types.ModuleType("ctrader_open_api.messages.OpenApiMessages_pb2")
+    messages.ProtoOASubscribeSpotsReq = _FakeSubscribeSpotsReq
+    package = types.ModuleType("ctrader_open_api.messages")
+    package.OpenApiMessages_pb2 = messages
+    root = types.ModuleType("ctrader_open_api")
+    root.messages = package
+    monkeypatch.setitem(sys.modules, "ctrader_open_api", root)
+    monkeypatch.setitem(sys.modules, "ctrader_open_api.messages", package)
+    monkeypatch.setitem(
+        sys.modules, "ctrader_open_api.messages.OpenApiMessages_pb2", messages
+    )
+    return messages
+
+
+def test_spot_subscription_is_requested_once_per_symbol(fake_ctrader_messages):
+    """Without ProtoOASubscribeSpotsReq the broker streams no quotes at all."""
+    proto = CTraderProtocol.__new__(CTraderProtocol)
+    proto._creds = {"account_id": 46756268}
+    proto._subscribed_spot_ids = set()
+    sent = []
+    proto._send = lambda msg, ptype: sent.append((msg, ptype))
+
+    proto._subscribe_spots({1, 2})
+    assert len(sent) == 1
+    msg, ptype = sent[0]
+    assert ptype == 2127, "spot subscription must use ProtoOASubscribeSpotsReq"
+    assert msg.ctidTraderAccountId == 46756268
+    assert sorted(msg.symbolId) == [1, 2]
+
+    # Already-subscribed symbols must not re-request on every reconcile.
+    proto._subscribe_spots({1, 2})
+    assert len(sent) == 1
+
+    proto._subscribe_spots({2, 4})
+    assert len(sent) == 2
+    assert sorted(sent[1][0].symbolId) == [4]
 
 
 def test_positions_without_spot_keep_zero_and_do_not_crash():
