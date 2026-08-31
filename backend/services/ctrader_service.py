@@ -765,6 +765,31 @@ class CTraderService(BrokerService):
             price = bid or ask
         return float(price) if price else None
 
+    def quote_to_usd_rate(self, symbol: str, mark: float) -> Optional[float]:
+        """Rate that converts this pair's quote currency into USD.
+
+        Raw P&L lands in the quote currency, so a USDJPY move reads in yen
+        while EURUSD reads in dollars. Showing both in one column made a
+        -490 JPY position look ~150x worse than a -3 USD one.
+        """
+        sym = self.normalize_symbol_name(symbol)
+        if len(sym) != 6:
+            return None
+        base, quote = sym[:3], sym[3:]
+        if quote == "USD":
+            return 1.0
+        if base == "USD":
+            # Quote per USD is the pair itself (USDJPY -> 159.7 JPY per USD).
+            return 1.0 / mark if mark else None
+        # Cross pair: price the quote currency against USD directly.
+        direct = self.get_mark_price(f"{quote}USD")
+        if direct:
+            return float(direct)
+        inverse = self.get_mark_price(f"USD{quote}")
+        if inverse:
+            return 1.0 / float(inverse)
+        return None
+
     def get_positions(self, raise_on_error: bool = False) -> List[Dict[str, Any]]:
         """Return all open positions across cTrader, marked to the latest spot.
 
@@ -774,15 +799,23 @@ class CTraderService(BrokerService):
         positions = []
         for pos in self._positions:
             enriched = dict(pos)
-            mark = self.get_mark_price(str(enriched.get("symbol") or ""), enriched.get("side"))
+            symbol = str(enriched.get("symbol") or "")
+            mark = self.get_mark_price(symbol, enriched.get("side"))
             entry = float(enriched.get("entry_price") or 0)
             lots = float(enriched.get("quantity") or 0)
             if mark and entry and lots:
                 units = lots * self.CONTRACT_UNITS_PER_LOT
                 direction = 1 if str(enriched.get("side", "")).upper() == "BUY" else -1
+                quote_pnl = (mark - entry) * units * direction
                 enriched["current_price"] = mark
-                # Quote-currency P&L; the deposit currency may differ.
-                enriched["unrealized_pnl"] = round((mark - entry) * units * direction, 2)
+                rate = self.quote_to_usd_rate(symbol, mark)
+                if rate:
+                    enriched["unrealized_pnl"] = round(quote_pnl * rate, 2)
+                    enriched["pnl_currency"] = "USD"
+                else:
+                    # Cannot convert yet; label it so the UI cannot imply USD.
+                    enriched["unrealized_pnl"] = round(quote_pnl, 2)
+                    enriched["pnl_currency"] = symbol[3:] if len(symbol) == 6 else ""
             positions.append(enriched)
         return positions
 

@@ -1495,10 +1495,13 @@ async def close_position(position_id: int):
             if reported_pnl is not None:
                 pnl = float(reported_pnl)
             elif exit_price and trade.entry_price:
-                # trade.quantity is lots for cTrader; P&L needs contract units.
+                # trade.quantity is lots for cTrader; P&L needs contract units,
+                # and lands in the quote currency until converted.
                 units = float(trade.quantity or 0) * ctrader_broker.CONTRACT_UNITS_PER_LOT
                 direction = 1 if trade.direction == "BUY" else -1
-                pnl = (exit_price - trade.entry_price) * units * direction
+                quote_pnl = (exit_price - trade.entry_price) * units * direction
+                rate = ctrader_broker.quote_to_usd_rate(trade.symbol, exit_price)
+                pnl = quote_pnl * rate if rate else None
             else:
                 pnl = None
         elif paper_mode:
