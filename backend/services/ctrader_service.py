@@ -383,6 +383,7 @@ class CTraderService(BrokerService):
     VOLUME_CENTS_PER_LOT = 10_000_000
     MIN_VOLUME_CENTS = 100_000  # 0.01 lot
     STEP_VOLUME_CENTS = 1_000
+    CONTRACT_UNITS_PER_LOT = 100_000
     # Bid/ask/trendbar integers are always 1/100000 of a price unit (not 10^digits).
     SPOTWARE_PRICE_SCALE = 100_000
     MAX_FX_STOP_PIPS = 120
@@ -713,9 +714,48 @@ class CTraderService(BrokerService):
             "broker": "ctrader",
         }
 
+    def get_mark_price(self, symbol: str, side: Optional[str] = None) -> Optional[float]:
+        """Last streamed price for a symbol.
+
+        A position is closed against the opposite side of the book, so a BUY
+        exits on the bid and a SELL exits on the ask. Without a side, return the
+        mid. Returns None when no spot has been streamed yet, so callers can
+        record "unknown" instead of inventing a price.
+        """
+        spot = self._last_spots.get(self._normalize_symbol(symbol)) or self._last_spots.get(
+            self.normalize_symbol_name(symbol)
+        )
+        if not spot:
+            return None
+        bid = spot.get("bid")
+        ask = spot.get("ask")
+        wanted = (side or "").upper()
+        if wanted in ("BUY", "LONG"):
+            price = bid or ask
+        elif wanted in ("SELL", "SHORT"):
+            price = ask or bid
+        elif bid and ask:
+            price = (float(bid) + float(ask)) / 2
+        else:
+            price = bid or ask
+        return float(price) if price else None
+
     def get_positions(self) -> List[Dict[str, Any]]:
-        """Return all open positions across cTrader."""
-        return list(self._positions)
+        """Return all open positions across cTrader, marked to the latest spot."""
+        positions = []
+        for pos in self._positions:
+            enriched = dict(pos)
+            mark = self.get_mark_price(str(enriched.get("symbol") or ""), enriched.get("side"))
+            entry = float(enriched.get("entry_price") or 0)
+            lots = float(enriched.get("quantity") or 0)
+            if mark and entry and lots:
+                units = lots * self.CONTRACT_UNITS_PER_LOT
+                direction = 1 if str(enriched.get("side", "")).upper() == "BUY" else -1
+                enriched["current_price"] = mark
+                # Quote-currency P&L; the deposit currency may differ.
+                enriched["unrealized_pnl"] = round((mark - entry) * units * direction, 2)
+            positions.append(enriched)
+        return positions
 
     def place_order(
         self,

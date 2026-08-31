@@ -1483,13 +1483,24 @@ async def close_position(position_id: int):
                     status_code=502,
                     detail=f"cTrader close failed; DB left open: {res.get('error')}",
                 )
-            exit_price = float(res.get("price") or trade.entry_price or 0)
-            pnl = float(res.get("pnl") or 0.0)
-            if pnl == 0.0 and trade.entry_price and exit_price:
-                if trade.direction == "BUY":
-                    pnl = (exit_price - trade.entry_price) * trade.quantity
-                else:
-                    pnl = (trade.entry_price - exit_price) * trade.quantity
+            # A live cTrader close is an async protocol send: the fill price
+            # arrives later on the execution event. Falling back to entry_price
+            # here recorded exit==entry and pnl==0.0 for every forex trade,
+            # which hid real losses from the daily-loss and expectancy gates.
+            exit_price = res.get("price") or ctrader_broker.get_mark_price(
+                trade.symbol, trade.direction
+            )
+            exit_price = float(exit_price) if exit_price else None
+            reported_pnl = res.get("pnl")
+            if reported_pnl is not None:
+                pnl = float(reported_pnl)
+            elif exit_price and trade.entry_price:
+                # trade.quantity is lots for cTrader; P&L needs contract units.
+                units = float(trade.quantity or 0) * ctrader_broker.CONTRACT_UNITS_PER_LOT
+                direction = 1 if trade.direction == "BUY" else -1
+                pnl = (exit_price - trade.entry_price) * units * direction
+            else:
+                pnl = None
         elif paper_mode:
             # Paper/backtest: close DB record without live exchange (loop trades are not
             # always mirrored in the in-memory paper engine, which caused fill errors).
