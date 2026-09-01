@@ -1,8 +1,9 @@
-"""Mirror live cTrader positions into the SQL Trade table used by the dashboard."""
+"""Mirror and reconcile live cTrader positions into the SQL Trade table used by the dashboard."""
 
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from backend.database.connection import SessionLocal
@@ -11,6 +12,26 @@ from backend.database.models import Trade
 logger = logging.getLogger(__name__)
 
 _OPEN_STATUSES = ("open", "filled")
+
+_CTRADER_EXTRA_SYMBOLS = {
+    "XAUUSD", "XAGUSD", "GOLD", "SILVER", "OIL", "WTI", "BRENT",
+    "XTIUSD", "XBRUSD", "US30", "NAS100", "US500", "GER40", "UK100",
+    "JP225", "SPX500", "WS30", "NDX", "DAX", "BTCUSD", "ETHUSD", "SOLUSD",
+}
+
+
+def is_ctrader_trade(trade: Any) -> bool:
+    """True for trades originating from or belonging to cTrader."""
+    broker = (getattr(trade, "broker", None) or getattr(trade, "exchange", None) or "").lower()
+    if "ctrader" in broker:
+        return True
+    if getattr(trade, "broker_position_id", None):
+        return True
+    sym = str(getattr(trade, "symbol", "") or "").upper().strip()
+    clean_sym = sym.split(".")[0].split("_")[0].replace("/", "").replace("-", "")
+    if clean_sym in _CTRADER_EXTRA_SYMBOLS or sym in _CTRADER_EXTRA_SYMBOLS:
+        return True
+    return len(clean_sym) == 6 and clean_sym.isalpha() and not clean_sym.endswith("USDT")
 
 
 def persist_ctrader_execution(
@@ -56,33 +77,60 @@ def persist_ctrader_execution(
         db.close()
 
 
-def upsert_ctrader_live_trades(db, live_positions: List[Dict[str, Any]]) -> int:
-    """Create missing open Trade rows for positions currently on the cTrader book.
+def reconcile_ctrader_positions(
+    db: Any,
+    live_positions: Optional[List[Dict[str, Any]]] = None,
+    broker: Optional[Any] = None,
+) -> Dict[str, int]:
+    """Reconcile DB open trades against live cTrader positions.
 
-    Does not close DB rows that are absent from the live book — a reconnect can
-    briefly report an empty book.
+    - Creates missing DB rows for positions active on cTrader.
+    - Updates entry prices / quantities for existing open rows.
+    - Marks DB rows as 'closed' with accurate exit prices and P&L when they are
+      absent from the live book (e.g. hit SL/TP or were closed).
     """
-    if not live_positions:
-        return 0
+    if broker is None:
+        try:
+            from backend.services.ctrader_service import ctrader_broker
+            broker = ctrader_broker
+        except Exception:
+            broker = None
+
+    if live_positions is None:
+        if broker is not None:
+            try:
+                live_positions = broker.get_positions()
+            except Exception as exc:
+                logger.warning("Failed to fetch cTrader live positions for reconcile: %s", exc)
+                return {"created": 0, "updated": 0, "closed": 0}
+        else:
+            return {"created": 0, "updated": 0, "closed": 0}
+
+    live_positions_list = list(live_positions or [])
 
     open_rows = (
         db.query(Trade)
-        .filter(Trade.broker == "ctrader", Trade.status.in_(_OPEN_STATUSES))
+        .filter(Trade.status.in_(_OPEN_STATUSES))
         .all()
     )
+    ctrader_open_rows = [row for row in open_rows if is_ctrader_trade(row)]
+
     by_pid = {
         str(row.broker_position_id): row
-        for row in open_rows
+        for row in ctrader_open_rows
         if row.broker_position_id
     }
     unmatched_by_symbol: Dict[str, List[Trade]] = {}
-    for row in open_rows:
+    for row in ctrader_open_rows:
         if row.broker_position_id:
             continue
         unmatched_by_symbol.setdefault(str(row.symbol).upper(), []).append(row)
 
+    matched_db_trade_ids = set()
     created = 0
-    for raw in live_positions:
+    updated = 0
+
+    for raw in live_positions_list:
         pid = str(raw.get("position_id") or "").strip()
         symbol = str(raw.get("symbol") or "").upper()
         side = str(raw.get("side") or raw.get("direction") or "BUY").upper()
@@ -93,22 +141,26 @@ def upsert_ctrader_live_trades(db, live_positions: List[Dict[str, Any]]) -> int:
 
         if pid and pid in by_pid:
             row = by_pid[pid]
+            matched_db_trade_ids.add(row.id)
             row.quantity = qty or row.quantity
-            if entry:
+            if entry > 0:
                 row.entry_price = entry
             row.direction = side
+            updated += 1
             continue
 
         pending = unmatched_by_symbol.get(symbol) or []
         if pending:
             row = pending.pop(0)
+            matched_db_trade_ids.add(row.id)
             if pid:
                 row.broker_position_id = pid
                 by_pid[pid] = row
             row.quantity = qty or row.quantity
-            if entry:
+            if entry > 0:
                 row.entry_price = entry
             row.direction = side
+            updated += 1
             continue
 
         db.add(
@@ -127,8 +179,87 @@ def upsert_ctrader_live_trades(db, live_positions: List[Dict[str, Any]]) -> int:
         )
         created += 1
 
+    # Reconcile absent trades (e.g. hit SL/TP or closed on cTrader)
+    closed = 0
+    now = datetime.now(timezone.utc)
+    for row in ctrader_open_rows:
+        if row.id in matched_db_trade_ids:
+            continue
+
+        # In-flight grace period: don't close newly created DB rows (<15s old) with no PID yet
+        if not row.broker_position_id and getattr(row, "timestamp", None):
+            ts = row.timestamp
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            if (now - ts).total_seconds() < 15.0:
+                continue
+
+        row.status = "closed"
+        row.closed_at = now
+
+        # Best effort exit price and P&L resolution
+        exit_px = None
+        pnl = None
+        recent_deal = None
+        if broker is not None:
+            try:
+                recent_deal = broker.get_recent_deal(
+                    position_id=row.broker_position_id,
+                    symbol=row.symbol,
+                )
+            except Exception:
+                recent_deal = None
+
+            if recent_deal:
+                if recent_deal.get("execution_price"):
+                    exit_px = float(recent_deal["execution_price"])
+                if recent_deal.get("gross_profit") is not None:
+                    pnl = float(recent_deal["gross_profit"])
+
+            if exit_px is None:
+                try:
+                    exit_px = broker.get_exit_price(
+                        row.symbol, row.direction, row.broker_position_id
+                    )
+                except Exception:
+                    exit_px = None
+
+        if pnl is None and exit_px and row.entry_price and row.quantity and broker is not None:
+            try:
+                lots = float(row.quantity or 0)
+                units = lots * getattr(broker, "CONTRACT_UNITS_PER_LOT", 100_000)
+                direction_mult = 1 if str(row.direction or "BUY").upper() in ("BUY", "LONG") else -1
+                quote_pnl = (exit_px - float(row.entry_price)) * units * direction_mult
+                rate = broker.quote_to_usd_rate(row.symbol, exit_px)
+                pnl = round(quote_pnl * rate, 2) if rate else round(quote_pnl, 2)
+            except Exception:
+                pnl = None
+
+        row.exit_price = exit_px
+        row.pnl = pnl
+        close_reason = (recent_deal.get("close_type") if recent_deal else None) or "SL/TP hit / closed on cTrader"
+        current_notes = getattr(row, "notes", "") or ""
+        try:
+            row.notes = current_notes + f" | Closed externally ({close_reason})"
+        except AttributeError:
+            pass
+        closed += 1
+        logger.info(
+            "cTrader ghost trade reconciled: id=%s symbol=%s pos_id=%s exit=%s pnl=%s reason=%s",
+            row.id, row.symbol, row.broker_position_id, exit_px, pnl, close_reason,
+        )
+
     db.commit()
-    return created
+    return {"created": created, "updated": updated, "closed": closed}
+
+
+def upsert_ctrader_live_trades(db, live_positions: List[Dict[str, Any]]) -> int:
+    """Create missing open Trade rows and reconcile closed cTrader positions.
+
+    Maintains backwards compatibility by returning the count of newly created rows.
+    """
+    res = reconcile_ctrader_positions(db, live_positions)
+    return res.get("created", 0)
 
 
 def overlay_live_mark(

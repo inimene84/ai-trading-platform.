@@ -182,6 +182,11 @@ class BrokerPositionSyncService:
             broker_raw = await asyncio.get_event_loop().run_in_executor(
                 None, lambda: broker.get_positions(raise_on_error=True)
             )
+            if broker_name == "ctrader":
+                from backend.services.ctrader_trade_sync import reconcile_ctrader_positions
+                res = reconcile_ctrader_positions(db, live_positions=broker_raw, broker=broker)
+                return res.get("closed", 0) + res.get("updated", 0)
+
             broker_symbols = {
                 bp['symbol'] for bp in broker_raw
                 if float(bp.get('quantity') or bp.get('positionAmt') or 0) != 0

@@ -58,11 +58,15 @@ class SignalCandidateEngine:
         }
         self.execution_config: Dict[str, Any] = {
             "forex_only": os.getenv("CTRADER_FOREX_ONLY", "true").lower() == "true",
-            "max_open_ctrader_positions": int(os.getenv("CTRADER_MAX_OPEN_POSITIONS", "10")),
+            "max_open_ctrader_positions": int(
+                os.getenv("CTRADER_MAX_OPEN_POSITIONS")
+                or os.getenv("MAX_CTRADER_POSITIONS")
+                or "10"
+            ),
             "max_ready_per_poll": int(os.getenv("CTRADER_MAX_READY_PER_POLL", "10")),
             "max_ctrader_lots": float(os.getenv("CTRADER_MAX_LOTS", "0.10")),
             "one_position_per_symbol": os.getenv("CTRADER_ONE_POSITION_PER_SYMBOL", "true").lower() == "true",
-            "include_metals": os.getenv("CTRADER_INCLUDE_METALS", "false").lower() == "true",
+            "include_metals": os.getenv("CTRADER_INCLUDE_METALS", "true").lower() == "true",
         }
 
     def _is_ctrader_forex_candidate(self, cand: Dict[str, Any]) -> bool:
@@ -411,8 +415,14 @@ class SignalCandidateEngine:
         """Scan specified market universe and produce trade candidate signals."""
         if not universe:
             universe = [
-                "EURUSD", "GBPUSD", "USDJPY", "XAUUSD", "AUDUSD", "USDCAD",
-                "BTCUSDT", "ETHUSDT", "SOLUSDT"
+                # Forex Majors
+                "EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "USDCHF", "NZDUSD",
+                # Forex Crosses
+                "EURGBP", "EURJPY", "GBPJPY", "EURAUD", "GBPAUD", "NZDJPY", "CHFJPY", "AUDJPY", "CADJPY",
+                # Metals
+                "XAUUSD", "XAGUSD",
+                # Crypto
+                "BTCUSDT", "ETHUSDT", "SOLUSDT",
             ]
 
         candidates_generated = []

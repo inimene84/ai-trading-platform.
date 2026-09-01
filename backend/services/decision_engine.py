@@ -411,9 +411,10 @@ class DecisionEngine:
                     return None
 
         # 6. Max positions check
-        if open_count >= self.config.max_positions:
+        max_positions_cap = getattr(self.config, "max_binance_positions", self.config.max_positions)
+        if open_count >= max_positions_cap:
             self._record_eval(symbol, signal.signal, signal.confidence,
-                              f"max positions reached ({self.config.max_positions})")
+                              f"max positions reached ({max_positions_cap})")
             return None
             
         # 7. Create Decision

@@ -16,7 +16,12 @@ from backend.services.trading_loop import trading_loop
 from backend.services.ai_analysis import ai_analysis_service
 from backend.services.risk_config import refresh_risk_config
 from backend.services.ctrader_service import ctrader_broker
-from backend.services.ctrader_trade_sync import overlay_live_mark, position_pnl_pct, upsert_ctrader_live_trades
+from backend.services.ctrader_trade_sync import (
+    overlay_live_mark,
+    position_pnl_pct,
+    reconcile_ctrader_positions,
+    upsert_ctrader_live_trades,
+)
 from backend.services.unified_trading import (
     UnifiedTrading, UnifiedOrder, OrderSide, OrderType,
 )
@@ -42,6 +47,8 @@ class LoopStatusResponse(BaseModel):
     cash: Optional[float] = None
     equity: Optional[float] = None
     margin_used: Optional[float] = None
+    trading_allowed: Optional[bool] = None
+    trading_status: Optional[str] = None
 
 class TradingConfigResponse(BaseModel):
     mode: str
@@ -221,22 +228,82 @@ async def get_portfolio():
     """Get current portfolio state with live Binance balance (or paper portfolio in paper mode)."""
     db = SessionLocal()
     try:
+        if ctrader_broker.has_credentials() and not (
+            ctrader_broker.is_connected()
+            if callable(getattr(ctrader_broker, "is_connected", None))
+            else bool(getattr(ctrader_broker, "is_connected", False))
+        ):
+            try:
+                await asyncio.to_thread(ctrader_broker.ensure_connected)
+            except Exception as exc:
+                logger.warning("cTrader auto-reconnect in get_portfolio failed: %s", exc)
+
+        live_ctrader: List[Dict[str, Any]] = []
+        is_ctrader_connected = (
+            ctrader_broker.is_connected()
+            if callable(getattr(ctrader_broker, "is_connected", None))
+            else bool(getattr(ctrader_broker, "is_connected", False))
+        )
+        try:
+            live_ctrader = list(ctrader_broker.get_positions() or [])
+            if is_ctrader_connected or live_ctrader:
+                reconcile_ctrader_positions(db, live_ctrader, broker=ctrader_broker)
+            elif live_ctrader:
+                upsert_ctrader_live_trades(db, live_ctrader)
+        except Exception as exc:
+            logger.warning("cTrader live-book sync for portfolio failed: %s", exc)
+
         open_trades = db.query(Trade).filter(Trade.status.in_(["open", "filled"])).all()
-        mark_prices = _fetch_mark_prices_for_symbols({t.symbol for t in open_trades})
+        live_by_pid = {
+            str(p.get("position_id")): p for p in live_ctrader if p.get("position_id")
+        }
+        live_by_symbol = {
+            str(p.get("symbol") or "").upper(): p for p in live_ctrader if p.get("symbol")
+        }
+        non_ctrader_symbols = {
+            t.symbol for t in open_trades if not _is_ctrader_trade(t)
+        }
+        mark_prices = _fetch_mark_prices_for_symbols(non_ctrader_symbols)
 
         total_notional = 0.0
         total_unrealized_pnl = 0.0
         positions = []
         for t in open_trades:
-            cur_price = mark_prices.get(t.symbol) or t.entry_price or 0.0
-            notional = (t.quantity or 0.0) * (t.entry_price or 0.0)
-            total_notional += notional
+            is_ctrader = _is_ctrader_trade(t)
+            direction = str(t.direction or "BUY").upper()
+            sym = str(t.symbol or "").upper()
 
-            if t.direction == "BUY":
-                u_pnl = (cur_price - (t.entry_price or cur_price)) * (t.quantity or 0.0)
+            if is_ctrader:
+                pid = str(getattr(t, "broker_position_id", "") or "").strip()
+                if is_ctrader_connected or live_ctrader:
+                    if pid and pid not in live_by_pid:
+                        continue
+                    if not pid and sym not in live_by_symbol:
+                        continue
+                mark = ctrader_broker.get_mark_price(sym, direction)
+                cur_price = _coalesce_mark_price(mark, t.entry_price) or 0.0
+                lots = float(t.quantity or 0)
+                notional = lots * ctrader_broker.CONTRACT_UNITS_PER_LOT * (t.entry_price or 0.0)
+                total_notional += notional
+                if mark and t.entry_price and lots:
+                    units = lots * ctrader_broker.CONTRACT_UNITS_PER_LOT
+                    direction_mult = 1 if direction == "BUY" else -1
+                    quote_pnl = (mark - float(t.entry_price)) * units * direction_mult
+                    rate = ctrader_broker.quote_to_usd_rate(sym, mark)
+                    u_pnl = round(quote_pnl * rate, 2) if rate else round(quote_pnl, 2)
+                else:
+                    u_pnl = 0.0
+                total_unrealized_pnl += u_pnl
             else:
-                u_pnl = ((t.entry_price or cur_price) - cur_price) * (t.quantity or 0.0)
-            total_unrealized_pnl += u_pnl
+                cur_price = mark_prices.get(t.symbol) or t.entry_price or 0.0
+                notional = (t.quantity or 0.0) * (t.entry_price or 0.0)
+                total_notional += notional
+
+                if direction == "BUY":
+                    u_pnl = (cur_price - (t.entry_price or cur_price)) * (t.quantity or 0.0)
+                else:
+                    u_pnl = ((t.entry_price or cur_price) - cur_price) * (t.quantity or 0.0)
+                total_unrealized_pnl += u_pnl
 
             positions.append({
                 "id": t.id,
@@ -722,10 +789,27 @@ async def get_positions():
     """Get all open positions with current P&L."""
     db = SessionLocal()
     try:
+        if ctrader_broker.has_credentials() and not (
+            ctrader_broker.is_connected()
+            if callable(getattr(ctrader_broker, "is_connected", None))
+            else bool(getattr(ctrader_broker, "is_connected", False))
+        ):
+            try:
+                await asyncio.to_thread(ctrader_broker.ensure_connected)
+            except Exception as exc:
+                logger.warning("cTrader auto-reconnect in get_positions failed: %s", exc)
+
         live_ctrader: List[Dict[str, Any]] = []
+        is_ctrader_connected = (
+            ctrader_broker.is_connected()
+            if callable(getattr(ctrader_broker, "is_connected", None))
+            else bool(getattr(ctrader_broker, "is_connected", False))
+        )
         try:
             live_ctrader = list(ctrader_broker.get_positions() or [])
-            if live_ctrader:
+            if is_ctrader_connected or live_ctrader:
+                reconcile_ctrader_positions(db, live_ctrader, broker=ctrader_broker)
+            elif live_ctrader:
                 upsert_ctrader_live_trades(db, live_ctrader)
         except Exception as exc:
             logger.warning("cTrader live-book sync for dashboard failed: %s", exc)
@@ -755,6 +839,13 @@ async def get_positions():
             sym = str(t.symbol or "").upper()
 
             if is_ctrader:
+                pid = str(getattr(t, "broker_position_id", "") or "").strip()
+                # If cTrader is connected or has live positions, skip ghost rows absent from live book
+                if is_ctrader_connected or live_ctrader:
+                    if pid and pid not in live_by_pid:
+                        continue
+                    if not pid and sym not in live_by_symbol:
+                        continue
                 mark = ctrader_broker.get_mark_price(sym, direction)
                 current_price = _coalesce_mark_price(mark, t.entry_price)
                 lots = float(t.quantity or 0)
@@ -822,6 +913,19 @@ async def get_trades(
     """Get trade history with filtering."""
     db = SessionLocal()
     try:
+        if status in (None, "open", "filled"):
+            try:
+                is_ctrader_connected = (
+                    ctrader_broker.is_connected()
+                    if callable(getattr(ctrader_broker, "is_connected", None))
+                    else bool(getattr(ctrader_broker, "is_connected", False))
+                )
+                live_ctrader = list(ctrader_broker.get_positions() or [])
+                if is_ctrader_connected or live_ctrader:
+                    reconcile_ctrader_positions(db, live_ctrader, broker=ctrader_broker)
+            except Exception as exc:
+                logger.warning("cTrader reconcile in get_trades failed: %s", exc)
+
         q = db.query(Trade).order_by(Trade.id.desc())
         if symbol:
             q = q.filter(Trade.symbol == symbol)

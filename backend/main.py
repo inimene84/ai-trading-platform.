@@ -13,6 +13,7 @@ from backend.routes import api_router
 from backend.services.ollama_service import ollama_service
 from backend.services.binance_wallet_poller import start_wallet_poller
 from backend.services.binance_order_poller import start_order_poller
+from backend.services.ctrader_poller import start_ctrader_poller
 from backend.services.unified_trading import UnifiedTrading
 from backend.services.ctrader_service import ctrader_broker
 from backend.services.binance_futures_service import binance_futures_broker
@@ -208,6 +209,11 @@ async def lifespan(app: FastAPI):
     task = asyncio.create_task(run_supervised_task("Binance Order Poller", start_order_poller))
     background_tasks.append(task)
     logger.info("✓ Binance order poller task scheduled under supervisor")
+
+    # 2.5 cTrader Position Poller
+    task = asyncio.create_task(run_supervised_task("cTrader Position Poller", start_ctrader_poller))
+    background_tasks.append(task)
+    logger.info("✓ cTrader position poller task scheduled under supervisor")
 
     # 3. Trading Loop
     interval = int(os.getenv("TRADING_LOOP_INTERVAL_MIN", "15"))

@@ -27,7 +27,7 @@
         "url": "http://backend:8000/api/signals/scan-markets",
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={\n  \"universe\": [\"EURUSD\", \"GBPUSD\", \"USDJPY\", \"XAUUSD\", \"AUDUSD\", \"USDCAD\", \"BTCUSDT\", \"ETHUSDT\", \"SOLUSDT\"],\n  \"timeframe\": \"M5\"\n}",
+        "jsonBody": "={\n  \"universe\": [\"EURUSD\", \"GBPUSD\", \"USDJPY\", \"AUDUSD\", \"USDCAD\", \"USDCHF\", \"NZDUSD\", \"EURGBP\", \"EURJPY\", \"GBPJPY\", \"EURAUD\", \"GBPAUD\", \"NZDJPY\", \"CHFJPY\", \"AUDJPY\", \"CADJPY\", \"XAUUSD\", \"XAGUSD\", \"BTCUSDT\", \"ETHUSDT\", \"SOLUSDT\"],\n  \"timeframe\": \"M5\"\n}",
         "sendHeaders": true,
         "headerParameters": {
           "parameters": [

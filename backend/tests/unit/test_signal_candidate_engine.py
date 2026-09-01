@@ -190,7 +190,8 @@ def test_execute_candidate_endpoint_dry_run(client, auth_headers):
         "sizing": {"lots": 0.1, "quantity": 0.1, "risk_usd": 50.0},
     }
 
-    res = client.post("/api/signals/execute-candidate", json={"candidate_id": sig_id, "force": True}, headers=auth_headers)
+    with patch("backend.services.signal_candidate_engine.ctrader_service.has_credentials", return_value=False):
+        res = client.post("/api/signals/execute-candidate", json={"candidate_id": sig_id, "force": True}, headers=auth_headers)
     assert res.status_code == 200
     data = res.json()
     assert data["success"] is True
@@ -262,6 +263,9 @@ async def test_execute_candidate_accepts_ctrader_sent_status():
     }
 
     with patch.object(signal_candidate_engine, "_open_ctrader_position_count", return_value=0), patch(
+        "backend.services.signal_candidate_engine.ctrader_service.ensure_connected",
+        return_value=True,
+    ), patch(
         "backend.services.signal_candidate_engine.ctrader_service.place_order",
         return_value={"status": "sent", "symbol": "EURUSD", "direction": "BUY", "quantity": 0.01},
     ), patch(
@@ -337,6 +341,9 @@ async def test_execute_candidate_skips_market_closed_without_blocking_queue():
 
     with patch.object(signal_candidate_engine, "_open_ctrader_position_count", return_value=0), patch.dict(
         signal_candidate_engine.execution_config, {"forex_only": False, "include_metals": True}
+    ), patch(
+        "backend.services.signal_candidate_engine.ctrader_service.ensure_connected",
+        return_value=True,
     ), patch(
         "backend.services.signal_candidate_engine.ctrader_service.place_order",
         return_value={"status": "error", "error": "MARKET_CLOSED — Trading is not available: Market is closed."},

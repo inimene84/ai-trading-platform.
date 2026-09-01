@@ -54,7 +54,11 @@ async def test_dashboard_positions_use_ctrader_mark_not_binance():
     ), patch(
         "backend.routes.trading._fetch_mark_prices_for_symbols", return_value={}
     ) as fetch_marks:
-        broker.get_positions.return_value = []
+        broker.has_credentials.return_value = False
+        broker.is_connected = MagicMock(return_value=False)
+        broker.get_positions.return_value = [
+            {"position_id": "1", "symbol": "EURUSD", "quantity": 0.01, "entry_price": 1.1615, "direction": "BUY"}
+        ]
         broker.get_mark_price.return_value = 1.1618
         broker.quote_to_usd_rate.return_value = 1.0
         broker.CONTRACT_UNITS_PER_LOT = 100_000

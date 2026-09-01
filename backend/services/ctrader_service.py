@@ -204,6 +204,7 @@ class CTraderProtocol:
                 self._service._positions = positions
                 logger.info(f"cTrader positions reconciled: {len(positions)} open")
                 self._subscribe_spots({p["symbol_id"] for p in positions})
+                self._service._notify_positions_changed(positions)
 
             elif ptype == 2126:  # ProtoOAExecutionEvent
                 ev = msgs.ProtoOAExecutionEvent()
@@ -212,6 +213,43 @@ class CTraderProtocol:
                 if ev.executionType in (2, 3):  # ORDER_ACCEPTED / ORDER_FILLED
                     self._service._last_order_error = None
                     self._service._order_ack_event.set()
+
+                # Record deal execution details if present
+                if hasattr(ev, "deal") and ev.deal and getattr(ev.deal, "dealId", 0):
+                    deal = ev.deal
+                    pid = str(getattr(deal, "positionId", "") or "").strip()
+                    sym_id = getattr(deal, "symbolId", 0)
+                    sym_name = self._service.symbol_name_for_id(sym_id)
+                    raw_price = getattr(deal, "executionPrice", None)
+                    exec_price = self._service.normalize_position_price(raw_price, sym_name) if raw_price else None
+                    close_detail = getattr(deal, "closePositionDetail", None)
+                    gross_profit = None
+                    closed_volume = None
+                    if close_detail:
+                        raw_gp = getattr(close_detail, "grossProfit", None)
+                        money_digits = getattr(close_detail, "moneyDigits", 2) or 2
+                        if raw_gp is not None:
+                            gross_profit = float(raw_gp) / (10 ** money_digits)
+                        raw_vol = getattr(close_detail, "closedVolume", None)
+                        if raw_vol:
+                            closed_volume = self._service.protocol_volume_to_lots(raw_vol)
+
+                    deal_type = getattr(deal, "closePositionType", None)
+                    close_type_name = str(deal_type) if deal_type is not None else "CLOSED"
+                    if hasattr(ev, "order") and ev.order and getattr(ev.order, "orderType", None) == 4:
+                        close_type_name = "SL_TP"
+
+                    self._service.record_deal({
+                        "position_id": pid,
+                        "deal_id": str(getattr(deal, "dealId", "")),
+                        "symbol": sym_name,
+                        "execution_price": exec_price,
+                        "gross_profit": gross_profit,
+                        "closed_volume": closed_volume,
+                        "close_type": close_type_name,
+                        "timestamp": getattr(deal, "executionTimestamp", int(time.time() * 1000)),
+                    })
+
                 # Refresh positions on fill/close
                 req_rec = msgs.ProtoOAReconcileReq()
                 req_rec.ctidTraderAccountId = self._creds.get("account_id", 0)
@@ -410,6 +448,8 @@ class CTraderService(BrokerService):
         self._order_ack_event = threading.Event()
         self._trendbar_last_req: Dict[str, float] = {}
         self._trendbar_events: Dict[str, threading.Event] = {}
+        self._recent_deals: Dict[str, Dict[str, Any]] = {}
+        self._on_positions_changed_callbacks: List[Any] = []
 
     # Spotware volume is in cents of a unit (0.01 of 1 unit of the base asset).
     # 1.00 standard FX lot = 100,000 units = 10,000,000 protocol volume.
@@ -880,6 +920,76 @@ class CTraderService(BrokerService):
         inverse = self.get_mark_price(f"USD{quote}")
         if inverse:
             return 1.0 / float(inverse)
+        return None
+
+    def register_positions_callback(self, callback: Any) -> None:
+        """Register a callback to be invoked when positions are reconciled or updated."""
+        if callback not in self._on_positions_changed_callbacks:
+            self._on_positions_changed_callbacks.append(callback)
+
+    def unregister_positions_callback(self, callback: Any) -> None:
+        """Unregister a positions callback."""
+        if callback in self._on_positions_changed_callbacks:
+            self._on_positions_changed_callbacks.remove(callback)
+
+    def _notify_positions_changed(self, positions: List[Dict[str, Any]]) -> None:
+        """Notify registered callbacks of positions change."""
+        for cb in list(self._on_positions_changed_callbacks):
+            try:
+                cb(positions)
+            except Exception as exc:
+                logger.warning(f"Error in cTrader positions callback: {exc}")
+
+    def record_deal(self, deal_info: Dict[str, Any]) -> None:
+        """Cache recent deal execution info for position reconciliation."""
+        pid = str(deal_info.get("position_id") or "").strip()
+        sym = str(deal_info.get("symbol") or "").strip().upper()
+        if pid:
+            self._recent_deals[pid] = deal_info
+        if sym:
+            self._recent_deals[sym] = deal_info
+        # Limit cache size to prevent memory leak
+        if len(self._recent_deals) > 200:
+            keys = list(self._recent_deals.keys())[:50]
+            for k in keys:
+                self._recent_deals.pop(k, None)
+
+    def get_recent_deal(
+        self,
+        position_id: Optional[str] = None,
+        symbol: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Return cached deal execution details if available."""
+        if position_id and str(position_id) in self._recent_deals:
+            return self._recent_deals[str(position_id)]
+        if symbol:
+            sym = self._normalize_symbol(symbol)
+            if sym in self._recent_deals:
+                return self._recent_deals[sym]
+        return None
+
+    def get_exit_price(
+        self,
+        symbol: str,
+        direction: Optional[str] = None,
+        position_id: Optional[str] = None,
+    ) -> Optional[float]:
+        """Best-effort exit price for a just-closed position.
+
+        1. Checks recent deal execution price for this position_id / symbol.
+        2. Falls back to the latest live mark / spot quote.
+        """
+        sym = self._normalize_symbol(symbol)
+        if position_id:
+            deal = self.get_recent_deal(position_id=position_id)
+            if deal and deal.get("execution_price"):
+                return float(deal["execution_price"])
+        deal = self.get_recent_deal(symbol=sym)
+        if deal and deal.get("execution_price"):
+            return float(deal["execution_price"])
+        mark = self.get_mark_price(sym, direction)
+        if mark and mark > 0:
+            return float(mark)
         return None
 
     def get_positions(self, raise_on_error: bool = False) -> List[Dict[str, Any]]:
