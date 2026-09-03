@@ -326,6 +326,21 @@ class RiskConfig(BaseSettings):
         validation_alias=AliasChoices("symbol_expectancy_min_trades", "SYMBOL_EXPECTANCY_MIN_TRADES"),
     )
 
+    # ── RANGING entries (config-gated; OFF by default) ──
+    # Skill miner edges include Ranging→Bullish/Bearish and CombinedStrategy
+    # already weights mean_reversion in RANGING, but the decision engine blocks
+    # every new ranging entry at two points. Unlock only when this flag is on,
+    # and only for mean-reversion / matching mined skills. Live trading still
+    # requires allow_ranging_in_live — paper/backtest is the intended default.
+    allow_ranging_entries: bool = PydanticField(
+        default=False,
+        validation_alias=AliasChoices("allow_ranging_entries", "ALLOW_RANGING_ENTRIES"),
+    )
+    allow_ranging_in_live: bool = PydanticField(
+        default=False,
+        validation_alias=AliasChoices("allow_ranging_in_live", "ALLOW_RANGING_IN_LIVE"),
+    )
+
     @property
     def symbol_blacklist(self) -> set[str]:
         return {
