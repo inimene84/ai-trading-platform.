@@ -44,14 +44,19 @@ def is_ctrader_symbol(symbol: str) -> bool:
 
 def is_ctrader_trade(trade) -> bool:
     """Detect a cTrader-owned row even when broker was not persisted."""
-    broker = (getattr(trade, "broker", None) or getattr(trade, "exchange", None) or "").lower()
+    broker_raw = getattr(trade, "broker", None) or getattr(trade, "exchange", None)
+    broker = broker_raw.lower() if isinstance(broker_raw, str) else ""
     if broker == "ctrader":
         return True
     if broker in ("binance_futures", "binance"):
         return False
-    if getattr(trade, "broker_position_id", None):
+    position_id = getattr(trade, "broker_position_id", None)
+    if isinstance(position_id, str) and position_id.strip():
         return True
-    return is_ctrader_symbol(getattr(trade, "symbol", ""))
+    if isinstance(position_id, int) and position_id:
+        return True
+    symbol = getattr(trade, "symbol", "")
+    return is_ctrader_symbol(symbol if isinstance(symbol, str) else "")
 
 
 def trades_for_direction_cap(all_open: list, broker_name: str) -> list:
