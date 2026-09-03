@@ -18,7 +18,7 @@ from backend.services.unified_trading import UnifiedTrading
 from backend.services.ctrader_service import ctrader_broker
 from backend.services.binance_futures_service import binance_futures_broker
 from backend.services.binance_websocket import binance_ws
-from backend.services.trading_loop import trading_loop
+from backend.services.trading_loop import trading_loop, get_active_broker_name
 
 from backend.security import admin_auth_enabled, is_sensitive_request, validate_admin_request
 # Load environment variables
@@ -145,7 +145,7 @@ async def lifespan(app: FastAPI):
         # Use the canonical resolver so router/session/loop cannot disagree when
         # TRADING_MODE or legacy PAPER_TRADING defaults are absent.
         init_kwargs = {
-            "broker": "binance_futures",
+            "broker": get_active_broker_name(),
             "mode": mode,
             "leverage": 1.0,
         }
