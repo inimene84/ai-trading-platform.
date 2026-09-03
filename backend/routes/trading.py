@@ -15,6 +15,13 @@ from backend.database.models import TradingSignal, Trade, PortfolioSnapshot
 from backend.services.trading_loop import trading_loop
 from backend.services.ai_analysis import ai_analysis_service
 from backend.services.risk_config import refresh_risk_config
+from backend.services.ctrader_service import ctrader_broker
+from backend.services.ctrader_trade_sync import (
+    overlay_live_mark,
+    position_pnl_pct,
+    reconcile_ctrader_positions,
+    upsert_ctrader_live_trades,
+)
 from backend.services.unified_trading import (
     UnifiedTrading, UnifiedOrder, OrderSide, OrderType,
 )
@@ -40,6 +47,8 @@ class LoopStatusResponse(BaseModel):
     cash: Optional[float] = None
     equity: Optional[float] = None
     margin_used: Optional[float] = None
+    trading_allowed: Optional[bool] = None
+    trading_status: Optional[str] = None
 
 class TradingConfigResponse(BaseModel):
     mode: str
@@ -85,6 +94,34 @@ def _to_yfinance_symbol(symbol: str) -> str:
     if s.endswith('BUSD'):
         return s[:-4] + '-USD'
     return s  # already yfinance format or unknown
+
+
+def _is_ctrader_symbol(symbol: str) -> bool:
+    """True for bare FX/metal pairs routed through cTrader, not Binance."""
+    sym = str(symbol or "").upper().strip()
+    if sym in ("XAUUSD", "XAGUSD", "GOLD", "SILVER"):
+        return True
+    return len(sym) == 6 and sym.isalpha() and not sym.endswith("USDT")
+
+
+def _is_ctrader_trade(trade: Any) -> bool:
+    """Detect cTrader dashboard rows even when broker was not persisted."""
+    broker = (getattr(trade, "broker", None) or getattr(trade, "exchange", None) or "").lower()
+    if broker == "ctrader":
+        return True
+    if getattr(trade, "broker_position_id", None):
+        return True
+    return _is_ctrader_symbol(getattr(trade, "symbol", ""))
+
+
+def _coalesce_mark_price(mark: Optional[float], entry: Optional[float]) -> float:
+    """Never surface a zero mark — fall back to entry when quotes are missing."""
+    for candidate in (mark, entry):
+        if candidate is not None:
+            val = float(candidate)
+            if val > 0:
+                return val
+    return 0.0
 
 
 @router.get("/strategies")
@@ -191,22 +228,82 @@ async def get_portfolio():
     """Get current portfolio state with live Binance balance (or paper portfolio in paper mode)."""
     db = SessionLocal()
     try:
+        if ctrader_broker.has_credentials() and not (
+            ctrader_broker.is_connected()
+            if callable(getattr(ctrader_broker, "is_connected", None))
+            else bool(getattr(ctrader_broker, "is_connected", False))
+        ):
+            try:
+                await asyncio.to_thread(ctrader_broker.ensure_connected)
+            except Exception as exc:
+                logger.warning("cTrader auto-reconnect in get_portfolio failed: %s", exc)
+
+        live_ctrader: List[Dict[str, Any]] = []
+        is_ctrader_connected = (
+            ctrader_broker.is_connected()
+            if callable(getattr(ctrader_broker, "is_connected", None))
+            else bool(getattr(ctrader_broker, "is_connected", False))
+        )
+        try:
+            live_ctrader = list(ctrader_broker.get_positions() or [])
+            if is_ctrader_connected or live_ctrader:
+                reconcile_ctrader_positions(db, live_ctrader, broker=ctrader_broker)
+            elif live_ctrader:
+                upsert_ctrader_live_trades(db, live_ctrader)
+        except Exception as exc:
+            logger.warning("cTrader live-book sync for portfolio failed: %s", exc)
+
         open_trades = db.query(Trade).filter(Trade.status.in_(["open", "filled"])).all()
-        mark_prices = _fetch_mark_prices_for_symbols({t.symbol for t in open_trades})
+        live_by_pid = {
+            str(p.get("position_id")): p for p in live_ctrader if p.get("position_id")
+        }
+        live_by_symbol = {
+            str(p.get("symbol") or "").upper(): p for p in live_ctrader if p.get("symbol")
+        }
+        non_ctrader_symbols = {
+            t.symbol for t in open_trades if not _is_ctrader_trade(t)
+        }
+        mark_prices = _fetch_mark_prices_for_symbols(non_ctrader_symbols)
 
         total_notional = 0.0
         total_unrealized_pnl = 0.0
         positions = []
         for t in open_trades:
-            cur_price = mark_prices.get(t.symbol) or t.entry_price or 0.0
-            notional = (t.quantity or 0.0) * (t.entry_price or 0.0)
-            total_notional += notional
+            is_ctrader = _is_ctrader_trade(t)
+            direction = str(t.direction or "BUY").upper()
+            sym = str(t.symbol or "").upper()
 
-            if t.direction == "BUY":
-                u_pnl = (cur_price - (t.entry_price or cur_price)) * (t.quantity or 0.0)
+            if is_ctrader:
+                pid = str(getattr(t, "broker_position_id", "") or "").strip()
+                if is_ctrader_connected or live_ctrader:
+                    if pid and pid not in live_by_pid:
+                        continue
+                    if not pid and sym not in live_by_symbol:
+                        continue
+                mark = ctrader_broker.get_mark_price(sym, direction)
+                cur_price = _coalesce_mark_price(mark, t.entry_price) or 0.0
+                lots = float(t.quantity or 0)
+                notional = lots * ctrader_broker.CONTRACT_UNITS_PER_LOT * (t.entry_price or 0.0)
+                total_notional += notional
+                if mark and t.entry_price and lots:
+                    units = lots * ctrader_broker.CONTRACT_UNITS_PER_LOT
+                    direction_mult = 1 if direction == "BUY" else -1
+                    quote_pnl = (mark - float(t.entry_price)) * units * direction_mult
+                    rate = ctrader_broker.quote_to_usd_rate(sym, mark)
+                    u_pnl = round(quote_pnl * rate, 2) if rate else round(quote_pnl, 2)
+                else:
+                    u_pnl = 0.0
+                total_unrealized_pnl += u_pnl
             else:
-                u_pnl = ((t.entry_price or cur_price) - cur_price) * (t.quantity or 0.0)
-            total_unrealized_pnl += u_pnl
+                cur_price = mark_prices.get(t.symbol) or t.entry_price or 0.0
+                notional = (t.quantity or 0.0) * (t.entry_price or 0.0)
+                total_notional += notional
+
+                if direction == "BUY":
+                    u_pnl = (cur_price - (t.entry_price or cur_price)) * (t.quantity or 0.0)
+                else:
+                    u_pnl = ((t.entry_price or cur_price) - cur_price) * (t.quantity or 0.0)
+                total_unrealized_pnl += u_pnl
 
             positions.append({
                 "id": t.id,
@@ -692,22 +789,94 @@ async def get_positions():
     """Get all open positions with current P&L."""
     db = SessionLocal()
     try:
+        if ctrader_broker.has_credentials() and not (
+            ctrader_broker.is_connected()
+            if callable(getattr(ctrader_broker, "is_connected", None))
+            else bool(getattr(ctrader_broker, "is_connected", False))
+        ):
+            try:
+                await asyncio.to_thread(ctrader_broker.ensure_connected)
+            except Exception as exc:
+                logger.warning("cTrader auto-reconnect in get_positions failed: %s", exc)
+
+        live_ctrader: List[Dict[str, Any]] = []
+        is_ctrader_connected = (
+            ctrader_broker.is_connected()
+            if callable(getattr(ctrader_broker, "is_connected", None))
+            else bool(getattr(ctrader_broker, "is_connected", False))
+        )
+        try:
+            live_ctrader = list(ctrader_broker.get_positions() or [])
+            if is_ctrader_connected or live_ctrader:
+                reconcile_ctrader_positions(db, live_ctrader, broker=ctrader_broker)
+            elif live_ctrader:
+                upsert_ctrader_live_trades(db, live_ctrader)
+        except Exception as exc:
+            logger.warning("cTrader live-book sync for dashboard failed: %s", exc)
+
         open_trades = db.query(Trade).filter(Trade.status.in_(["open", "filled"])).all()
-        mark_prices = _fetch_mark_prices_for_symbols({t.symbol for t in open_trades})
+        non_ctrader_symbols = {
+            t.symbol for t in open_trades if not _is_ctrader_trade(t)
+        }
+        mark_prices = _fetch_mark_prices_for_symbols(non_ctrader_symbols)
+        if live_ctrader:
+            try:
+                ctrader_broker.ensure_spot_quotes(
+                    [str(p.get("symbol") or "") for p in live_ctrader if p.get("symbol")]
+                )
+            except Exception as exc:
+                logger.warning("cTrader spot quote refresh failed: %s", exc)
+        live_by_pid = {
+            str(p.get("position_id")): p for p in live_ctrader if p.get("position_id")
+        }
+        live_by_symbol = {
+            str(p.get("symbol") or "").upper(): p for p in live_ctrader if p.get("symbol")
+        }
         positions = []
         for t in open_trades:
-            current_price = mark_prices.get(t.symbol) or t.entry_price
+            is_ctrader = _is_ctrader_trade(t)
+            direction = str(t.direction or "BUY").upper()
+            sym = str(t.symbol or "").upper()
 
-            if t.direction == "BUY":
-                unrealized_pnl = (current_price - t.entry_price) * t.quantity
+            if is_ctrader:
+                pid = str(getattr(t, "broker_position_id", "") or "").strip()
+                # If cTrader is connected or has live positions, skip ghost rows absent from live book
+                if is_ctrader_connected or live_ctrader:
+                    if pid and pid not in live_by_pid:
+                        continue
+                    if not pid and sym not in live_by_symbol:
+                        continue
+                mark = ctrader_broker.get_mark_price(sym, direction)
+                current_price = _coalesce_mark_price(mark, t.entry_price)
+                lots = float(t.quantity or 0)
+                if mark and t.entry_price and lots:
+                    units = lots * ctrader_broker.CONTRACT_UNITS_PER_LOT
+                    direction_mult = 1 if direction == "BUY" else -1
+                    quote_pnl = (mark - float(t.entry_price)) * units * direction_mult
+                    rate = ctrader_broker.quote_to_usd_rate(sym, mark)
+                    unrealized_pnl = round(quote_pnl * rate, 2) if rate else round(quote_pnl, 2)
+                else:
+                    unrealized_pnl = 0.0
             else:
-                unrealized_pnl = (t.entry_price - current_price) * t.quantity
+                current_price = _coalesce_mark_price(
+                    mark_prices.get(t.symbol),
+                    t.entry_price,
+                )
+                if direction == "BUY":
+                    unrealized_pnl = (current_price - t.entry_price) * t.quantity
+                else:
+                    unrealized_pnl = (t.entry_price - current_price) * t.quantity
 
-            pnl_pct = 0.0
-            if t.entry_price and t.quantity and t.entry_price * t.quantity > 0:
-                pnl_pct = (unrealized_pnl / (t.entry_price * t.quantity)) * 100
+            pnl_pct = position_pnl_pct(
+                entry=float(t.entry_price or 0),
+                mark=current_price,
+                direction=direction,
+                unrealized_pnl=unrealized_pnl,
+                quantity=float(t.quantity or 0),
+                is_ctrader=is_ctrader,
+            )
 
-            positions.append({
+            payload = {
                 "id": t.id,
                 "symbol": t.symbol,
                 "direction": t.direction,
@@ -719,8 +888,13 @@ async def get_positions():
                 "unrealized_pnl": round(unrealized_pnl, 2),
                 "unrealized_pnl_pct": round(pnl_pct, 2),
                 "strategy": t.strategy,
+                "broker": "ctrader" if is_ctrader else (
+                    getattr(t, "broker", None) or getattr(t, "exchange", None)
+                ),
+                "broker_position_id": getattr(t, "broker_position_id", None),
                 "opened_at": t.timestamp.isoformat() if t.timestamp else None,
-            })
+            }
+            positions.append(overlay_live_mark(payload, live_by_pid, live_by_symbol))
         return {"positions": positions, "count": len(positions)}
     finally:
         db.close()
@@ -739,6 +913,19 @@ async def get_trades(
     """Get trade history with filtering."""
     db = SessionLocal()
     try:
+        if status in (None, "open", "filled"):
+            try:
+                is_ctrader_connected = (
+                    ctrader_broker.is_connected()
+                    if callable(getattr(ctrader_broker, "is_connected", None))
+                    else bool(getattr(ctrader_broker, "is_connected", False))
+                )
+                live_ctrader = list(ctrader_broker.get_positions() or [])
+                if is_ctrader_connected or live_ctrader:
+                    reconcile_ctrader_positions(db, live_ctrader, broker=ctrader_broker)
+            except Exception as exc:
+                logger.warning("cTrader reconcile in get_trades failed: %s", exc)
+
         q = db.query(Trade).order_by(Trade.id.desc())
         if symbol:
             q = q.filter(Trade.symbol == symbol)
@@ -1156,6 +1343,79 @@ async def save_ctrader_tokens(req: SaveCTraderTokensRequest):
     return {"success": True, "message": "cTrader tokens stored and updated successfully"}
 
 
+class CTraderOAuthExchangeRequest(BaseModel):
+    code: str = Field(..., min_length=4, max_length=512)
+    redirect_uri: Optional[str] = None
+
+
+@router.get("/ctrader/oauth/url")
+async def get_ctrader_oauth_url():
+    """Browser authorization URL for requesting new cTrader OAuth tokens."""
+    from backend.brokers.auth import get_auth_url
+    from backend.services.ctrader_oauth import is_sandbox_app, ctrader_env
+
+    redirect_uri = os.getenv("CTRADER_REDIRECT_URI", "https://localhost/callback")
+    return {
+        "auth_url": get_auth_url(redirect_uri=redirect_uri),
+        "redirect_uri": redirect_uri,
+        "ctrader_env": ctrader_env(),
+        "sandbox_app": is_sandbox_app(),
+        "instructions": (
+            "Open auth_url in a browser, approve access, copy the `code` query param "
+            "from the redirect URL, then POST /trading/ctrader/oauth/exchange with {\"code\": \"...\"}."
+        ),
+    }
+
+
+@router.post("/ctrader/oauth/exchange")
+async def exchange_ctrader_oauth_code(req: CTraderOAuthExchangeRequest, request: Request):
+    """Exchange Spotware authorization code for fresh access + refresh tokens."""
+    from backend.security import validate_admin_request
+    from backend.brokers.auth import exchange_code_for_token
+    from backend.services.ctrader_tokens import ctrader_token_store
+    from backend.services.ctrader_service import ctrader_broker
+
+    validate_admin_request(request)
+    redirect_uri = req.redirect_uri or os.getenv("CTRADER_REDIRECT_URI", "https://localhost/callback")
+
+    try:
+        tokens = exchange_code_for_token(
+            code=req.code.strip(),
+            redirect_uri=redirect_uri,
+            save_to_env=False,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"OAuth exchange failed: {exc}") from exc
+
+    account_raw = os.getenv("CTRADER_ACCOUNT_ID", "0").strip()
+    data = {
+        "account_id": int(account_raw) if account_raw.isdigit() else 0,
+        "client_id": os.getenv("CTRADER_CLIENT_ID", ""),
+        "client_secret": os.getenv("CTRADER_CLIENT_SECRET", ""),
+        "access_token": tokens["access_token"],
+        "refresh_token": tokens.get("refresh_token", ""),
+        "expires_in": tokens.get("expires_in", 2_628_000),
+        "updated_at": int(datetime.now(timezone.utc).timestamp()),
+    }
+    ctrader_token_store.save_tokens(data)
+
+    env_path = Path(".env")
+    if env_path.exists():
+        from dotenv import set_key
+        set_key(str(env_path), "CTRADER_ACCESS_TOKEN", data["access_token"])
+        set_key(str(env_path), "CTRADER_REFRESH_TOKEN", data["refresh_token"])
+    os.environ["CTRADER_ACCESS_TOKEN"] = data["access_token"]
+    os.environ["CTRADER_REFRESH_TOKEN"] = data["refresh_token"]
+    ctrader_broker._token_store = ctrader_token_store
+
+    return {
+        "success": True,
+        "message": "New cTrader tokens saved. Restart backend or call POST /trading/ctrader/enable to connect.",
+        "account_id": data["account_id"],
+        "expires_in": data["expires_in"],
+    }
+
+
 class PipMarginCalcRequest(BaseModel):
     symbol: str
     lots: float = Field(gt=0, default=1.0)
@@ -1174,7 +1434,10 @@ async def get_ctrader_trendbars(
 ):
     """
     Get historical OHLCV trendbars for cTrader charting and technical analysis.
-    Uses ProtoOAGetTrendbarsReq when live connected, with fallback to high-fidelity cache.
+
+    Live sessions return broker data only; an empty ``bars`` list means no real
+    history was available (timeout or missing symbol). Paper mode may include
+    synthetic bars flagged with ``synthetic: true``.
     """
     from backend.services.ctrader_service import ctrader_broker
     bars = await asyncio.to_thread(
@@ -1190,6 +1453,7 @@ async def get_ctrader_trendbars(
         "period": period.upper(),
         "count": len(bars),
         "bars": bars,
+        "synthetic": bool(bars) and all(bar.get("synthetic") for bar in bars),
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -1329,6 +1593,39 @@ async def disable_ctrader_live():
     return {"message": "cTrader paper mode enabled", "dry_run": True}
 
 
+@router.get("/ctrader/positions")
+async def get_ctrader_live_positions():
+    """Live cTrader book (not the SQL Trade table)."""
+    from backend.services.ctrader_service import ctrader_broker
+    positions = ctrader_broker.get_positions()
+    return {
+        "connected": ctrader_broker.is_connected,
+        "dry_run": ctrader_broker.dry_run,
+        "positions": positions,
+        "count": len(positions),
+    }
+
+
+@router.post("/ctrader/positions/{position_id}/close")
+async def close_ctrader_live_position(
+    position_id: str,
+    volume: Optional[float] = Query(None, gt=0),
+    symbol: Optional[str] = Query(None),
+):
+    """Close a cTrader position by broker positionId (demo/live book, not DB id)."""
+    from backend.services.ctrader_service import ctrader_broker
+    if not ctrader_broker.is_connected and not ctrader_broker.dry_run:
+        raise HTTPException(status_code=400, detail="cTrader is not connected")
+    res = ctrader_broker.close_position(position_id, symbol=symbol, volume=volume)
+    if res.get("status") == "error":
+        raise HTTPException(status_code=502, detail=res.get("error") or "cTrader close failed")
+    return {
+        "success": True,
+        "result": res,
+        "positions": ctrader_broker.get_positions(),
+    }
+
+
 # ── Position Management ────────────────────────────────────────────────────────
 
 @router.post("/positions/{position_id}/close")
@@ -1336,6 +1633,7 @@ async def close_position(position_id: int):
     """Close a position on its originating broker, then persist the actual fill."""
     from backend.services.ctrader_service import ctrader_broker
     from backend.services.binance_futures_service import binance_futures_broker
+    from backend.services.trading_mode import get_trading_mode, TradingMode
 
     db = SessionLocal()
     try:
@@ -1344,14 +1642,55 @@ async def close_position(position_id: int):
             raise HTTPException(status_code=404, detail=f"Open position {position_id} not found")
 
         target_broker = getattr(trade, "broker", None) or getattr(trade, "exchange", None) or "binance_futures"
+        paper_mode = get_trading_mode() != TradingMode.LIVE
 
         if target_broker == "ctrader":
             res = ctrader_broker.close_position(
                 position_id=trade.broker_position_id or trade.broker_order_id or str(trade.id),
                 symbol=trade.symbol,
+                volume=trade.quantity,
             )
-            exit_price = float(res.get("price") or trade.entry_price)
-            pnl = float(res.get("pnl") or 0.0)
+            if res.get("status") == "error":
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"cTrader close failed; DB left open: {res.get('error')}",
+                )
+            # A live cTrader close is an async protocol send: the fill price
+            # arrives later on the execution event. Falling back to entry_price
+            # here recorded exit==entry and pnl==0.0 for every forex trade,
+            # which hid real losses from the daily-loss and expectancy gates.
+            exit_price = res.get("price") or ctrader_broker.get_mark_price(
+                trade.symbol, trade.direction
+            )
+            exit_price = float(exit_price) if exit_price else None
+            reported_pnl = res.get("pnl")
+            if reported_pnl is not None:
+                pnl = float(reported_pnl)
+            elif exit_price and trade.entry_price:
+                # trade.quantity is lots for cTrader; P&L needs contract units,
+                # and lands in the quote currency until converted.
+                units = float(trade.quantity or 0) * ctrader_broker.CONTRACT_UNITS_PER_LOT
+                direction = 1 if trade.direction == "BUY" else -1
+                quote_pnl = (exit_price - trade.entry_price) * units * direction
+                rate = ctrader_broker.quote_to_usd_rate(trade.symbol, exit_price)
+                pnl = quote_pnl * rate if rate else None
+            else:
+                pnl = None
+        elif paper_mode:
+            # Paper/backtest: close DB record without live exchange (loop trades are not
+            # always mirrored in the in-memory paper engine, which caused fill errors).
+            exit_price = float(trade.entry_price or 0)
+            try:
+                from backend.services.binance_market_data import binance_market_data
+                tick = await binance_market_data.get_ticker_24h(trade.symbol)
+                if tick and tick.get("lastPrice"):
+                    exit_price = float(tick["lastPrice"])
+            except Exception:
+                pass
+            if trade.direction == "BUY":
+                pnl = (exit_price - float(trade.entry_price or 0)) * float(trade.quantity or 0)
+            else:
+                pnl = (float(trade.entry_price or 0) - exit_price) * float(trade.quantity or 0)
         else:
             close_side = OrderSide.SELL if trade.direction == "BUY" else OrderSide.BUY
             response = UnifiedTrading().place_order(UnifiedOrder(
@@ -1389,7 +1728,8 @@ async def close_position(position_id: int):
         trade.pnl = round(pnl, 4) if pnl is not None else None
         trade.status = "closed"
         trade.closed_at = datetime.now(timezone.utc)
-        trade.notes = (trade.notes or "") + f" | Closed on {target_broker} via manual dashboard"
+        suffix = "paper-mode DB close" if paper_mode and target_broker != "ctrader" else target_broker
+        trade.notes = (trade.notes or "") + f" | Closed on {suffix} via manual dashboard"
         db.commit()
         return {
             "success": True,
@@ -1397,6 +1737,7 @@ async def close_position(position_id: int):
             "broker": target_broker,
             "exit_price": exit_price,
             "pnl": pnl,
+            "paper_mode": paper_mode,
             "message": f"Position {position_id} closed on {target_broker}",
         }
     except Exception:
@@ -2105,9 +2446,23 @@ async def event_stream(topics: str = ""):
 
 @router.get("/price")
 async def get_price(symbol: str = "BTCUSDT"):
-    """Return current mark/last price for a Binance Futures symbol."""
+    """Return current mark/last price for a symbol."""
+    sym = symbol.upper().strip()
+    if _is_ctrader_symbol(sym):
+        mark = ctrader_broker.get_mark_price(sym)
+        if not mark or mark <= 0:
+            ctrader_broker.ensure_spot_quotes([sym])
+            mark = ctrader_broker.get_mark_price(sym)
+        if mark and mark > 0:
+            return {
+                "symbol": sym,
+                "price": mark,
+                "change24h": 0.0,
+                "source": "ctrader",
+            }
+        return {"symbol": sym, "price": 0.0, "change24h": 0.0, "source": "ctrader"}
+
     from backend.services.binance_market_data import binance_market_data
-    sym = symbol.upper()
     try:
         ticker = await binance_market_data.get_ticker_24h(sym)
         if ticker:
@@ -2115,10 +2470,11 @@ async def get_price(symbol: str = "BTCUSDT"):
                 "symbol": sym,
                 "price": ticker.get("lastPrice", 0.0),
                 "change24h": ticker.get("priceChangePercent", 0.0),
+                "source": "binance",
             }
     except Exception:
         pass
-    return {"symbol": sym, "price": 0.0, "change24h": 0.0}
+    return {"symbol": sym, "price": 0.0, "change24h": 0.0, "source": "binance"}
 
 
 @router.get("/account/summary")

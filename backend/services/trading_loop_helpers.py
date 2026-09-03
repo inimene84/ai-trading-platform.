@@ -11,6 +11,8 @@ import os
 import asyncio
 from datetime import datetime, timezone
 
+from sqlalchemy import or_
+
 from backend.database.models import Trade, PortfolioSnapshot
 from backend.services.influxdb_writer import influx
 from backend.services.decision_engine import atr_from_bars
@@ -32,6 +34,23 @@ def is_plausible_exit_price(entry_price, exit_price) -> bool:
     if not exit_price or exit_price <= 0 or not entry_price or entry_price <= 0:
         return False
     return abs(exit_price - entry_price) / entry_price <= MAX_EXIT_PRICE_DEVIATION
+
+
+def trades_for_direction_cap(all_open: list, broker_name: str) -> list:
+    """Scope same-direction / exposure caps to one broker.
+
+    cTrader FX rows (EURUSD, GBPUSD, …) must not consume Binance correlation
+    budget — they are a separate book with their own risk limits.
+    """
+    name = (broker_name or "").strip().lower()
+    if name == "binance_futures":
+        return [
+            t for t in all_open
+            if (getattr(t, "broker", None) or "binance_futures") != "ctrader"
+        ]
+    if name == "ctrader":
+        return [t for t in all_open if getattr(t, "broker", None) == "ctrader"]
+    return list(all_open)
 
 
 def remove_closed_pyramid_layer(pyramid_layers: dict, trade) -> None:
@@ -156,18 +175,34 @@ class BrokerPositionSyncService:
         broker,
         pyramid_layers: dict,
         sl_cooldown: dict,
+        broker_name: str = "binance_futures",
     ) -> int:
         updated = 0
         try:
             broker_raw = await asyncio.get_event_loop().run_in_executor(
                 None, lambda: broker.get_positions(raise_on_error=True)
             )
+            if broker_name == "ctrader":
+                from backend.services.ctrader_trade_sync import reconcile_ctrader_positions
+                res = reconcile_ctrader_positions(db, live_positions=broker_raw, broker=broker)
+                return res.get("closed", 0) + res.get("updated", 0)
+
             broker_symbols = {
                 bp['symbol'] for bp in broker_raw
                 if float(bp.get('quantity') or bp.get('positionAmt') or 0) != 0
             }
 
-            db_trades = db.query(Trade).filter(Trade.status.in_(["open", "filled"])).all()
+            # Only reconcile rows that belong to the broker being synced. A
+            # cTrader forex row is invisible to a Binance snapshot, so syncing
+            # across brokers would close live FX positions as phantom orphans.
+            owner = Trade.broker == broker_name
+            if broker_name == "binance_futures":
+                owner = or_(owner, Trade.broker.is_(None))  # legacy rows predate the column
+            db_trades = (
+                db.query(Trade)
+                .filter(Trade.status.in_(["open", "filled"]), owner)
+                .all()
+            )
             # An entirely empty exchange snapshot while SQL still has open
             # trades is ambiguous: it may mean every position closed, but it
             # also occurs on permissions/testnet/API degradation. Never flatten

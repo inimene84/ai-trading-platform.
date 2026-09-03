@@ -56,7 +56,7 @@ def init_db_schema():
                 if "broker_metadata" not in cols:
                     conn.execute(text("ALTER TABLE trades ADD COLUMN broker_metadata JSON;"))
                 conn.commit()
-            except Exception as e:
+            except Exception:
                 pass
 
 

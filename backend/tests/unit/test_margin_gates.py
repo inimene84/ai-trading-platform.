@@ -1,5 +1,6 @@
 """P0 safety gates: cycle margin gate + same-direction correlation cap."""
 from backend.services.risk_config import RiskConfig
+from backend.services.trading_loop_helpers import trades_for_direction_cap
 
 
 def _apply_cycle_gate(rc: RiskConfig, equity: float, available: float, margin_used: float):
@@ -48,6 +49,29 @@ def test_same_direction_cap_counts_distinct_symbols():
     same_dir = {t.symbol for t in all_open if t.direction == "SELL"}
     assert len(same_dir) == 5
     assert len(same_dir) >= rc.max_same_direction_positions  # 6th short blocked
+
+
+def test_direction_cap_scoped_per_broker():
+    class T:
+        def __init__(self, symbol, direction, broker=None):
+            self.symbol, self.direction = symbol, direction
+            self.broker = broker
+
+    all_open = [
+        T("EURUSD", "BUY", "ctrader"),
+        T("GBPUSD", "BUY", "ctrader"),
+        T("USDJPY", "BUY", "ctrader"),
+        T("AUDUSD", "BUY", "ctrader"),
+        T("BTCUSDT", "BUY", "binance_futures"),
+        T("ETHUSDT", "BUY", None),
+    ]
+    binance_scope = trades_for_direction_cap(all_open, "binance_futures")
+    same_dir = {t.symbol for t in binance_scope if t.direction == "BUY"}
+    assert same_dir == {"BTCUSDT", "ETHUSDT"}
+    assert len(same_dir) < 3  # cTrader longs must not block Binance entries
+
+    ctrader_scope = trades_for_direction_cap(all_open, "ctrader")
+    assert {t.symbol for t in ctrader_scope} == {"EURUSD", "GBPUSD", "USDJPY", "AUDUSD"}
 
 
 def test_env_aliases_load():

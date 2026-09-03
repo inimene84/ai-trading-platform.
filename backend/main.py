@@ -10,11 +10,10 @@ import sentry_sdk
 import structlog
 
 from backend.routes import api_router
-from backend.database.connection import engine
-from backend.database.models import Base
 from backend.services.ollama_service import ollama_service
 from backend.services.binance_wallet_poller import start_wallet_poller
 from backend.services.binance_order_poller import start_order_poller
+from backend.services.ctrader_poller import start_ctrader_poller
 from backend.services.unified_trading import UnifiedTrading
 from backend.services.ctrader_service import ctrader_broker
 from backend.services.binance_futures_service import binance_futures_broker
@@ -157,6 +156,21 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"⚠ Unified Trading init warning: {e}")
 
+    if os.getenv("CTRADER_AUTO_CONNECT", "true").lower() == "true":
+        try:
+            if ctrader_broker.has_credentials():
+                loop = asyncio.get_running_loop()
+                connected = await loop.run_in_executor(None, ctrader_broker.ensure_connected)
+                if connected:
+                    logger.info("✓ cTrader broker auto-connected on startup")
+                else:
+                    logger.warning(
+                        "⚠ cTrader auto-connect failed — "
+                        "execute-candidate will retry before dispatch"
+                    )
+        except Exception as e:
+            logger.warning(f"⚠ cTrader auto-connect error: {e}")
+
     # Restore exchange SL/TP after restart (sentry halt may have cancelled them).
     if os.getenv("ACTIVE_BROKER", "ctrader") == "binance_futures" and resolved_mode == TradingMode.LIVE:
         try:
@@ -195,6 +209,11 @@ async def lifespan(app: FastAPI):
     task = asyncio.create_task(run_supervised_task("Binance Order Poller", start_order_poller))
     background_tasks.append(task)
     logger.info("✓ Binance order poller task scheduled under supervisor")
+
+    # 2.5 cTrader Position Poller
+    task = asyncio.create_task(run_supervised_task("cTrader Position Poller", start_ctrader_poller))
+    background_tasks.append(task)
+    logger.info("✓ cTrader position poller task scheduled under supervisor")
 
     # 3. Trading Loop
     interval = int(os.getenv("TRADING_LOOP_INTERVAL_MIN", "15"))

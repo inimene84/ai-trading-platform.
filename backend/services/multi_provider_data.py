@@ -14,7 +14,6 @@ All providers return uniform bar dict list:
   [{'date': str, 'open': float, 'high': float, 'low': float, 'close': float, 'volume': float}, ...]
 """
 
-import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Any

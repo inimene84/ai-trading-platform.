@@ -38,10 +38,11 @@ async def reconcile_positions() -> dict[str, Any]:
     """Sync DB open trades with live broker; report exchange-only positions."""
     from backend.database.connection import SessionLocal
     from backend.database.models import Trade
-    from backend.services.trading_loop import get_active_broker
+    from backend.services.trading_loop import get_active_broker, get_active_broker_name
     from backend.services.trading_loop_helpers import BrokerPositionSyncService
 
     broker = get_active_broker()
+    broker_name = get_active_broker_name()
     db = SessionLocal()
     summary: dict[str, Any] = {
         "db_closed": 0,
@@ -49,7 +50,9 @@ async def reconcile_positions() -> dict[str, Any]:
         "error": None,
     }
     try:
-        synced = await BrokerPositionSyncService.sync_positions(db, broker, {}, {})
+        synced = await BrokerPositionSyncService.sync_positions(
+            db, broker, {}, {}, broker_name=broker_name
+        )
         summary["db_closed"] = synced
 
         broker_raw = await asyncio.get_event_loop().run_in_executor(

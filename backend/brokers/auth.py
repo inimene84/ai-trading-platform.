@@ -17,15 +17,44 @@ Afterwards, use refresh_access_token() to renew silently.
 import os
 import json
 import httpx
-from urllib.parse import urlencode
 from pathlib import Path
+from urllib.parse import urlencode
 from dotenv import load_dotenv, set_key
 
 load_dotenv()
 
-SPOTWARE_AUTH_URL = "https://connect.spotware.com/apps/auth"
-SPOTWARE_TOKEN_URL = "https://connect.spotware.com/apps/token"
-ENV_FILE = Path(".env")
+from backend.services.ctrader_oauth import auth_url as _ctrader_auth_url, token_urls as _ctrader_token_urls
+
+ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
+
+
+def _normalize_spotware_tokens(data: dict) -> dict:
+    if data.get("errorCode"):
+        raise ValueError(f"{data.get('errorCode')}: {data.get('description')}")
+    access = data.get("accessToken") or data.get("access_token")
+    refresh = data.get("refreshToken") or data.get("refresh_token")
+    if not access:
+        raise ValueError(f"No access token in Spotware response: {data}")
+    return {
+        "access_token": access,
+        "refresh_token": refresh or "",
+        "expires_in": int(data.get("expiresIn") or data.get("expires_in") or 2_628_000),
+        "token_type": data.get("tokenType") or data.get("token_type") or "bearer",
+    }
+
+
+def _post_spotware_token(payload: dict) -> dict:
+    last_err = None
+    for url in _ctrader_token_urls():
+        try:
+            resp = httpx.post(url, data=payload, timeout=20.0)
+            data = resp.json()
+            if resp.status_code == 200 and not data.get("errorCode"):
+                return _normalize_spotware_tokens(data)
+            last_err = f"{url}: {data.get('errorCode') or resp.status_code} {data.get('description') or resp.text[:200]}"
+        except Exception as exc:
+            last_err = f"{url}: {exc}"
+    raise RuntimeError(last_err or "Spotware token request failed")
 
 
 def get_auth_url(
@@ -44,7 +73,7 @@ def get_auth_url(
         "scope": scope,
         "response_type": "code",
     }
-    return f"{SPOTWARE_AUTH_URL}?{urlencode(params)}"
+    return f"{_ctrader_auth_url()}?{urlencode(params)}"
 
 
 def exchange_code_for_token(
@@ -62,7 +91,7 @@ def exchange_code_for_token(
     client_secret = client_secret or os.getenv("CTRADER_CLIENT_SECRET")
 
     resp = httpx.post(
-        SPOTWARE_TOKEN_URL,
+        _ctrader_token_urls()[0],
         data={
             "grant_type": "authorization_code",
             "code": code,
@@ -71,8 +100,18 @@ def exchange_code_for_token(
             "client_secret": client_secret,
         },
     )
-    resp.raise_for_status()
-    tokens = resp.json()
+    try:
+        tokens = _normalize_spotware_tokens(resp.json())
+    except ValueError:
+        tokens = _post_spotware_token(
+            {
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": redirect_uri,
+                "client_id": client_id,
+                "client_secret": client_secret,
+            }
+        )
 
     if save_to_env and ENV_FILE.exists():
         set_key(str(ENV_FILE), "CTRADER_ACCESS_TOKEN", tokens["access_token"])
@@ -96,17 +135,14 @@ def refresh_access_token(
     client_id = client_id or os.getenv("CTRADER_CLIENT_ID")
     client_secret = client_secret or os.getenv("CTRADER_CLIENT_SECRET")
 
-    resp = httpx.post(
-        SPOTWARE_TOKEN_URL,
-        data={
+    tokens = _post_spotware_token(
+        {
             "grant_type": "refresh_token",
             "refresh_token": refresh_token,
             "client_id": client_id,
             "client_secret": client_secret,
-        },
+        }
     )
-    resp.raise_for_status()
-    tokens = resp.json()
 
     if save_to_env and ENV_FILE.exists():
         set_key(str(ENV_FILE), "CTRADER_ACCESS_TOKEN", tokens["access_token"])

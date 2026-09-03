@@ -44,6 +44,18 @@ def _tf_to_ctrader_period(timeframe: str) -> str:
     return mapping.get(timeframe, "H1")
 
 
+def tf_to_binance_interval(timeframe: str) -> str:
+    """Map cTrader-style (M5) or Binance-style (5m) timeframes to Binance kline interval."""
+    mapping = {
+        "M1": "1m", "M5": "5m", "M15": "15m", "M30": "30m",
+        "H1": "1h", "H4": "4h", "D1": "1d", "W1": "1w",
+        "1m": "1m", "5m": "5m", "15m": "15m", "30m": "30m",
+        "1h": "1h", "4h": "4h", "1d": "1d", "1w": "1w",
+    }
+    key = timeframe if timeframe in mapping else timeframe.upper()
+    return mapping.get(key, "5m")
+
+
 def _normalize_bars(raw: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     for b in raw or []:
@@ -66,7 +78,11 @@ async def fetch_bars(symbol: str, timeframe: str = "1h", limit: int = 100) -> Di
 
     if asset_class == "crypto":
         from backend.services.binance_market_data import binance_market_data
-        bars = await binance_market_data.get_klines(symbol=sym, interval=timeframe, limit=limit)
+        # Callers pass cTrader-style timeframes (M5, H1); Binance rejects those
+        # outright and the empty result used to look like a flat market.
+        bars = await binance_market_data.get_klines(
+            symbol=sym, interval=tf_to_binance_interval(timeframe), limit=limit
+        )
         return {"symbol": sym, "asset_class": asset_class, "source": "binance", "data": _normalize_bars(bars)}
 
     if asset_class in ("forex", "metal"):

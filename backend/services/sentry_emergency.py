@@ -9,11 +9,17 @@ import os
 from typing import Any
 
 import structlog
+from sqlalchemy import or_
 
 from backend.services.sentry_state import halt_trading, read_state
+from backend.services.trading_loop_helpers import is_plausible_exit_price
 from backend.utils.telegram import send_telegram_message
 
 logger = structlog.get_logger(__name__)
+
+# A close only counts when the exchange accepted it (or the leg was already
+# flat). Anything else means the position is still live.
+CLOSE_SUCCESS_STATUSES = {"sent", "ok", "already_flat", "simulated"}
 
 
 def _close_all_positions_sync() -> dict[str, Any]:
@@ -38,8 +44,16 @@ def _close_all_positions_sync() -> dict[str, Any]:
     errors = []
     
     try:
-        # 1. Close open DB trades
-        open_trades = db.query(Trade).filter(Trade.status.in_(["open", "filled"])).all()
+        # 1. Close open DB trades. This routes through the Binance broker, so it
+        # must not touch rows owned by another venue.
+        open_trades = (
+            db.query(Trade)
+            .filter(
+                Trade.status.in_(["open", "filled"]),
+                or_(Trade.broker == "binance_futures", Trade.broker.is_(None)),
+            )
+            .all()
+        )
         for trade in open_trades:
             try:
                 res = binance_futures_broker.place_order(
@@ -48,7 +62,17 @@ def _close_all_positions_sync() -> dict[str, Any]:
                     action='close',
                     quantity=trade.quantity,
                     comment='Sentry emergency close'
-                )
+                ) or {}
+                status = str(res.get('status') or '').lower()
+                # Marking the row closed after a rejected order left real money
+                # open on the exchange while the platform believed it was flat.
+                if status not in CLOSE_SUCCESS_STATUSES:
+                    errors.append(
+                        f"DB trade {trade.id} ({trade.symbol}): close {status or 'unknown'} "
+                        f"— {res.get('message') or res.get('reason') or 'no detail'}; left open"
+                    )
+                    continue
+
                 exit_price = res.get('price') or res.get('filled_price')
                 if not exit_price:
                     try:
@@ -56,16 +80,21 @@ def _close_all_positions_sync() -> dict[str, Any]:
                         ticker = client.futures_symbol_ticker(symbol=binance_futures_broker._to_futures_symbol(trade.symbol))
                         exit_price = float(ticker['price'])
                     except Exception:
-                        exit_price = trade.entry_price
-                
-                if trade.direction == "BUY":
-                    pnl = (exit_price - trade.entry_price) * trade.quantity
+                        exit_price = None
+
+                if exit_price and is_plausible_exit_price(trade.entry_price, exit_price):
+                    if trade.direction == "BUY":
+                        pnl = (exit_price - trade.entry_price) * trade.quantity
+                    else:
+                        pnl = (trade.entry_price - exit_price) * trade.quantity
+                    trade.exit_price = exit_price
+                    trade.pnl = round(pnl, 2)
                 else:
-                    pnl = (trade.entry_price - exit_price) * trade.quantity
-                
+                    # Record the close honestly rather than inventing a flat result.
+                    trade.exit_price = None
+                    trade.pnl = None
+
                 trade.status = "closed"
-                trade.exit_price = exit_price
-                trade.pnl = round(pnl, 2)
                 trade.closed_at = datetime.now(timezone.utc)
                 trade.notes = (trade.notes or "") + " | Closed by Sentry Emergency Halt"
                 db.add(trade)

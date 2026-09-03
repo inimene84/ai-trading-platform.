@@ -127,7 +127,7 @@ export const StatusView = () => {
     try {
       if (enable) {
         const res = await apiService.enableCTraderLive();
-        showToast(res.message || 'cTrader live connection attempted', res.connected ? 'success' : 'warning');
+        showToast(res.message || 'cTrader live connection attempted', res.connected ? 'success' : 'info');
       } else {
         const res = await apiService.disableCTraderLive();
         showToast(res.message || 'cTrader paper mode active', 'info');

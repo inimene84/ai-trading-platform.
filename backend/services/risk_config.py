@@ -39,7 +39,22 @@ class RiskConfig(BaseSettings):
     )
     
     # Risk Limits
-    max_positions: int = 4
+    max_positions: int = PydanticField(
+        default=20,
+        validation_alias=AliasChoices("max_positions", "MAX_POSITIONS"),
+    )
+    max_binance_positions: int = PydanticField(
+        default=10,
+        validation_alias=AliasChoices(
+            "max_binance_positions", "MAX_BINANCE_POSITIONS", "BINANCE_MAX_OPEN_POSITIONS"
+        ),
+    )
+    max_ctrader_positions: int = PydanticField(
+        default=10,
+        validation_alias=AliasChoices(
+            "max_ctrader_positions", "MAX_CTRADER_POSITIONS", "CTRADER_MAX_OPEN_POSITIONS"
+        ),
+    )
     max_directional_exposure_usdt: float = 500.0
     trade_usdt_amount: float = 10.0
     # ── P0 safety gates ──
@@ -51,9 +66,9 @@ class RiskConfig(BaseSettings):
         validation_alias=AliasChoices("min_available_margin_usdt", "MIN_AVAILABLE_MARGIN_USDT"),
     )
     # Correlation cap: max open positions (distinct symbols) in the SAME
-    # direction. Alts are ~0.9 correlated — 8 parallel shorts is one bet.
+    # direction.
     max_same_direction_positions: int = PydanticField(
-        default=3,
+        default=10,
         validation_alias=AliasChoices("max_same_direction_positions", "MAX_SAME_DIRECTION_POSITIONS"),
     )
     # Portfolio-level direction cap: total same-direction NOTIONAL may reach
@@ -115,7 +130,10 @@ class RiskConfig(BaseSettings):
             "max_daily_loss_pct", "RISK_MAX_DAILY_LOSS_PCT"
         ),
     )
-    max_open_positions: int = 10
+    max_open_positions: int = PydanticField(
+        default=20,
+        validation_alias=AliasChoices("max_open_positions", "MAX_OPEN_POSITIONS"),
+    )
     
     # LLM Overhaul Toggles
     use_risk_reviewer_llm: bool = PydanticField(
@@ -336,8 +354,10 @@ def refresh_risk_config() -> RiskConfig:
     """Force-reload configuration from environment variables."""
     global _risk_config
     # Reload dotenv to ensure we grab the latest changes from .env
+    import os
     from dotenv import load_dotenv
-    load_dotenv(override=True)
+    env_path = os.getenv("ENV_FILE_PATH", ".env")
+    load_dotenv(env_path, override=True)
     _risk_config = RiskConfig()
     return _risk_config
 

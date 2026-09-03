@@ -1,31 +1,30 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import {
-  Maximize2,
-  Minimize2,
   RefreshCw,
-  Sliders,
-  Layers,
-  LayoutGrid,
   Zap,
-  TrendingUp,
-  Activity,
   ArrowUpRight,
   ArrowDownRight,
-  Shield,
-  Eye,
   BarChart2,
   Sparkles,
-  Info,
-  CheckCircle2,
 } from 'lucide-react';
 import { apiService } from '../services/apiService';
 import { TradingChart } from './TradingChart';
 import { cn } from '../lib/utils';
+import {
+  CANDLE_REQUEST_EVENTS,
+  armSpotwareLoader,
+  chartCandleCount,
+  dismissSpotwareLoader,
+  formatSpotwareCandles,
+  pushCandlesToChart,
+  toLightweightBars,
+  toUnixSeconds,
+} from '../lib/spotwareCandles';
 
 interface OpenApiChartViewProps {
   initialSymbol?: string;
   initialTimeframe?: string;
-  onQuickTrade?: (symbol: string, direction: 'BUY' | 'SELL') => void;
+  onQuickTrade?: (symbol: string, direction: 'buy' | 'sell') => void;
 }
 
 const SUPPORTED_SYMBOLS = [
@@ -63,24 +62,29 @@ const LAYOUTS = [
   { id: 5, label: 'Quarters', icon: '4Q' },
 ];
 
-export const OpenApiChartView: React.FC<OpenApiChartViewProps> = ({
+const OpenApiChartView: React.FC<OpenApiChartViewProps> = ({
   initialSymbol = 'EURUSD',
   initialTimeframe = '5M',
   onQuickTrade,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartInstanceRef = useRef<any>(null);
+  const liveTimerRef = useRef<number | null>(null);
   const [activeSymbol, setActiveSymbol] = useState(initialSymbol);
   const [activeTimeframe, setActiveTimeframe] = useState(initialTimeframe);
+  const symbolRef = useRef(activeSymbol);
+  const timeframeRef = useRef(activeTimeframe);
+  symbolRef.current = activeSymbol;
+  timeframeRef.current = activeTimeframe;
   const [chartEngine, setChartEngine] = useState<'spotware' | 'lightweight'>('lightweight');
   const [isLoading, setIsLoading] = useState(true);
   const [activeLayout, setActiveLayout] = useState(0);
   const [candleData, setCandleData] = useState<any[]>([]);
   const [spec, setSpec] = useState<any>(null);
   const [quickLots, setQuickLots] = useState(0.1);
+  const [canvasFallback, setCanvasFallback] = useState(false);
   const [tradeStatus, setTradeStatus] = useState<string | null>(null);
 
-  // Load symbol specs
   useEffect(() => {
     apiService
       .getCTraderSymbolSpec(activeSymbol)
@@ -88,13 +92,12 @@ export const OpenApiChartView: React.FC<OpenApiChartViewProps> = ({
       .catch(() => {});
   }, [activeSymbol]);
 
-  // Fetch candle data for lightweight fallback or backup
   const fetchCandles = useCallback(async () => {
     setIsLoading(true);
     try {
-      const res: any = await apiService.getCTraderTrendbars(activeSymbol, activeTimeframe, 150);
+      const res: any = await apiService.getCTraderTrendbars(activeSymbol, activeTimeframe, 200);
       if (res && res.bars) {
-        setCandleData(res.bars);
+        setCandleData(toLightweightBars(res.bars));
       }
     } catch (err) {
       console.warn('Failed to fetch trendbars', err);
@@ -103,15 +106,100 @@ export const OpenApiChartView: React.FC<OpenApiChartViewProps> = ({
     }
   }, [activeSymbol, activeTimeframe]);
 
+  const fetchBars = useCallback(async (sym: string, tf: string, count = 1000) => {
+    const res: any = await apiService.getCTraderTrendbars(sym, tf, count);
+    return (res && res.bars) || [];
+  }, []);
+
+  const ingest = useCallback(async (chart: any, sym: string, tf: string) => {
+    try {
+      const bars = await fetchBars(sym, tf);
+      if (!bars.length) return false;
+      const ok = pushCandlesToChart(chart, bars, sym, tf);
+      if (ok) {
+        armSpotwareLoader(chart);
+        dismissSpotwareLoader(chart);
+      }
+      if (ok && chartCandleCount(chart, sym, tf) > 0) {
+        setCanvasFallback(false);
+      }
+      return ok;
+    } catch (err) {
+      console.warn('Spotware candle ingest failed', err);
+      return false;
+    }
+  }, [fetchBars]);
+
   useEffect(() => {
     fetchCandles();
   }, [fetchCandles]);
 
-  // Initialize Spotware OpenAPI Chart Library
   useEffect(() => {
     if (chartEngine !== 'spotware') return;
 
     let isMounted = true;
+    const retryTimers: number[] = [];
+    setCanvasFallback(false);
+
+    const attachCandleHandlers = (chart: any) => {
+      const handler = async (
+        sym: string,
+        tf: string,
+        _fromTs: number,
+        _toTs: number,
+        count: number,
+        callback: (candles: any[]) => void
+      ) => {
+        try {
+          const bars = await fetchBars(sym || symbolRef.current, tf || timeframeRef.current, count || 200);
+          const formatted = formatSpotwareCandles(
+            bars,
+            sym || symbolRef.current,
+            tf || timeframeRef.current
+          );
+          if (typeof callback === 'function') callback(formatted);
+          if (bars.length) {
+            pushCandlesToChart(
+              chart,
+              bars,
+              sym || symbolRef.current,
+              tf || timeframeRef.current
+            );
+          }
+        } catch (e) {
+          console.warn('onCandlesRequest error', e);
+        }
+      };
+      for (const name of CANDLE_REQUEST_EVENTS) {
+        try {
+          chart.addEventHandler(name, handler);
+        } catch {
+          /* event name may not exist on this build */
+        }
+      }
+    };
+
+    const startLiveRates = (chart: any, sym: string) => {
+      if (liveTimerRef.current) {
+        window.clearInterval(liveTimerRef.current);
+        liveTimerRef.current = null;
+      }
+      liveTimerRef.current = window.setInterval(async () => {
+        if (!isMounted || !chartInstanceRef.current) return;
+        try {
+          const bars = await fetchBars(symbolRef.current, timeframeRef.current, 2);
+          const last = bars[bars.length - 1];
+          if (!last) return;
+          const ts = toUnixSeconds(last.time ?? last.timestamp);
+          const price = Number(last.close);
+          if (ts && price && typeof chart.data?.addRate === 'function') {
+            chart.data.addRate(sym, ts, price, Number(last.volume || 0));
+          }
+        } catch {
+          /* ignore live tick failures */
+        }
+      }, 15000);
+    };
 
     const initChart = () => {
       if (!containerRef.current || !(window as any).T4PChart) {
@@ -119,7 +207,6 @@ export const OpenApiChartView: React.FC<OpenApiChartViewProps> = ({
       }
 
       try {
-        // Clear previous children
         containerRef.current.innerHTML = '';
 
         const options = {
@@ -186,72 +273,71 @@ export const OpenApiChartView: React.FC<OpenApiChartViewProps> = ({
 
         const chart = new (window as any).T4PChart(containerRef.current, options);
         chartInstanceRef.current = chart;
+        if (typeof chart.setTimeframe === 'function') {
+          chart.setTimeframe(activeTimeframe);
+        }
+        if (typeof chart.setSymbol === 'function') {
+          chart.setSymbol(activeSymbol);
+        }
+        armSpotwareLoader(chart);
+        dismissSpotwareLoader(chart);
 
-        // Set available symbol catalog
         if (chart.data && typeof chart.data.setSymbols === 'function') {
           chart.data.setSymbols(SUPPORTED_SYMBOLS.map((s) => s.symbol));
         }
 
-        // Add dynamic historical candle request handler
-        chart.addEventHandler(
-          'onCandlesRequest',
-          async (
-            sym: string,
-            tf: string,
-            fromTs: number,
-            toTs: number,
-            count: number,
-            callback: (candles: any[]) => void
-          ) => {
-            try {
-              const res: any = await apiService.getCTraderTrendbars(sym || activeSymbol, tf || activeTimeframe, count || 120);
-              if (res && res.bars && typeof callback === 'function') {
-                const formatted = res.bars.map((b: any) => ({
-                  symbol: sym || activeSymbol,
-                  timeframe: tf || activeTimeframe,
-                  timestamp: Math.floor(b.timestamp / 1000),
-                  open: b.open,
-                  high: b.high,
-                  low: b.low,
-                  close: b.close,
-                  volume: b.volume,
-                }));
-                callback(formatted);
-              }
-            } catch (e) {
-              console.warn('onCandlesRequest error', e);
+        attachCandleHandlers(chart);
+
+        const pushNow = () => {
+          if (!isMounted || chartInstanceRef.current !== chart) return;
+          void ingest(chart, symbolRef.current, timeframeRef.current);
+        };
+
+        if (typeof chart.addEventHandler === 'function') {
+          chart.addEventHandler('onChartReady', pushNow);
+        }
+
+        pushNow();
+        for (const delay of [100, 500, 1500, 3000]) {
+          retryTimers.push(window.setTimeout(pushNow, delay));
+        }
+        for (const delay of [50, 150, 400, 1000, 2000, 3500]) {
+          retryTimers.push(
+            window.setTimeout(() => {
+              if (!isMounted || chartInstanceRef.current !== chart) return;
+              dismissSpotwareLoader(chart);
+            }, delay)
+          );
+        }
+
+        retryTimers.push(
+          window.setTimeout(() => {
+            if (!isMounted || chartInstanceRef.current !== chart) return;
+            if (chartCandleCount(chart, symbolRef.current, timeframeRef.current) === 0) {
+              setCanvasFallback(true);
             }
-          }
+          }, 10000)
         );
 
-        // Preload initial candles
-        apiService
-          .getCTraderTrendbars(activeSymbol, activeTimeframe, 120)
-          .then((res: any) => {
-            if (res && res.bars && chart.data && typeof chart.data.setCandles === 'function') {
-              const formatted = res.bars.map((b: any) => ({
-                symbol: activeSymbol,
-                timeframe: activeTimeframe,
-                timestamp: Math.floor(b.timestamp / 1000),
-                open: b.open,
-                high: b.high,
-                low: b.low,
-                close: b.close,
-                volume: b.volume,
-              }));
-              chart.data.setCandles(formatted);
-            }
-          })
-          .catch(() => {});
-
+        startLiveRates(chart, symbolRef.current);
         return true;
       } catch (err) {
         console.error('Error initializing Spotware Charting Library:', err);
+        if (isMounted) {
+          setCanvasFallback(true);
+          setChartEngine('lightweight');
+        }
         return false;
       }
     };
 
-    // Check if script tag already exists
+    const start = () => {
+      requestAnimationFrame(() => {
+        if (!isMounted) return;
+        initChart();
+      });
+    };
+
     if (!(window as any).T4PChart) {
       const script = document.createElement('script');
       script.src = '/libs/chart-api.min.js';
@@ -262,7 +348,7 @@ export const OpenApiChartView: React.FC<OpenApiChartViewProps> = ({
           if (isMounted) setChartEngine('lightweight');
           return;
         }
-        if (isMounted) initChart();
+        if (isMounted) start();
       };
       script.onerror = () => {
         console.warn('Failed to load /libs/chart-api.min.js — falling back to lightweight charts');
@@ -270,18 +356,52 @@ export const OpenApiChartView: React.FC<OpenApiChartViewProps> = ({
       };
       document.body.appendChild(script);
     } else {
-      initChart();
+      start();
     }
 
     return () => {
       isMounted = false;
+      for (const id of retryTimers) window.clearTimeout(id);
+      if (liveTimerRef.current) {
+        window.clearInterval(liveTimerRef.current);
+        liveTimerRef.current = null;
+      }
       if (chartInstanceRef.current && typeof chartInstanceRef.current.drop === 'function') {
         try {
           chartInstanceRef.current.drop();
-        } catch (e) {}
+        } catch {
+          /* already torn down */
+        }
       }
+      if (chartInstanceRef.current && typeof chartInstanceRef.current.destroy === 'function') {
+        try {
+          chartInstanceRef.current.destroy();
+        } catch {
+          /* already torn down */
+        }
+      }
+      chartInstanceRef.current = null;
     };
-  }, [chartEngine, activeSymbol, activeTimeframe, activeLayout]);
+  }, [chartEngine, activeLayout, ingest, fetchBars]);
+
+  useEffect(() => {
+    if (chartEngine !== 'spotware') return;
+    const chart = chartInstanceRef.current;
+    if (!chart) return;
+    if (typeof chart.setSymbol === 'function') {
+      chart.setSymbol(activeSymbol);
+    }
+    if (typeof chart.setTitle === 'function') {
+      chart.setTitle(activeSymbol);
+    } else if (typeof chart.setDisplayName === 'function') {
+      chart.setDisplayName(activeSymbol);
+    }
+    if (typeof chart.setTimeframe === 'function') {
+      chart.setTimeframe(activeTimeframe);
+    }
+    void ingest(chart, activeSymbol, activeTimeframe);
+    dismissSpotwareLoader(chart);
+  }, [activeSymbol, activeTimeframe, chartEngine, ingest]);
 
   const handleSymbolChange = (sym: string) => {
     setActiveSymbol(sym);
@@ -323,7 +443,7 @@ export const OpenApiChartView: React.FC<OpenApiChartViewProps> = ({
         setTimeout(() => setTradeStatus(null), 4000);
       }
       if (onQuickTrade) {
-        onQuickTrade(activeSymbol, direction);
+        onQuickTrade(activeSymbol, direction === 'BUY' ? 'buy' : 'sell');
       }
     } catch (err: any) {
       setTradeStatus(`Error: ${err.message || 'Execution failed'}`);
@@ -333,9 +453,7 @@ export const OpenApiChartView: React.FC<OpenApiChartViewProps> = ({
 
   return (
     <div className="flex-1 flex flex-col h-full bg-[#08090d] text-slate-100 overflow-hidden select-none">
-      {/* ── Top Bar: Symbol Selector, Timeframe Pills, Multi-Layout & Engine Switcher ── */}
       <div className="flex items-center justify-between px-4 py-2.5 bg-[#0d0f17] border-b border-slate-800/80 shrink-0 gap-3 flex-wrap">
-        {/* Symbol Dropdown */}
         <div className="flex items-center gap-3">
           <div className="relative">
             <select
@@ -362,7 +480,6 @@ export const OpenApiChartView: React.FC<OpenApiChartViewProps> = ({
           )}
         </div>
 
-        {/* Timeframe Selector Pills */}
         <div className="flex items-center bg-slate-900/80 p-0.5 rounded-lg border border-slate-800">
           {TIMEFRAMES.map((tf) => (
             <button
@@ -380,9 +497,7 @@ export const OpenApiChartView: React.FC<OpenApiChartViewProps> = ({
           ))}
         </div>
 
-        {/* Multi-view Layout Controls & Engine Switcher */}
         <div className="flex items-center gap-2">
-          {/* Multi-View layout selector (Spotware Canvas only) */}
           {chartEngine === 'spotware' && (
             <div className="hidden lg:flex items-center gap-1 bg-slate-900/80 p-0.5 rounded-lg border border-slate-800">
               {LAYOUTS.map((l) => (
@@ -403,10 +518,16 @@ export const OpenApiChartView: React.FC<OpenApiChartViewProps> = ({
             </div>
           )}
 
-          {/* Engine Switcher */}
           <div className="flex items-center bg-slate-900/90 p-0.5 rounded-lg border border-slate-800 text-[11px] font-medium">
             <button
-              onClick={() => setChartEngine('spotware')}
+              onClick={() => {
+                if (chartEngine === 'spotware' && canvasFallback) {
+                  setCanvasFallback(false);
+                  const chart = chartInstanceRef.current;
+                  if (chart) void ingest(chart, activeSymbol, activeTimeframe);
+                }
+                setChartEngine('spotware');
+              }}
               className={cn(
                 'px-2.5 py-1 rounded transition-all flex items-center gap-1.5',
                 chartEngine === 'spotware'
@@ -441,15 +562,26 @@ export const OpenApiChartView: React.FC<OpenApiChartViewProps> = ({
         </div>
       </div>
 
-      {/* ── Main Chart Workspace ── */}
       <div className="flex-1 relative overflow-hidden bg-[#07080c]">
         {chartEngine === 'spotware' ? (
-          <div
-            ref={containerRef}
-            id="spotware-chart-root"
-            className="w-full h-full absolute inset-0"
-            style={{ width: '100%', height: '100%', minHeight: '400px' }}
-          />
+          <>
+            <div
+              ref={containerRef}
+              id="spotware-chart-root"
+              className="w-full h-full absolute inset-0"
+              style={{ width: '100%', height: '100%', minHeight: '400px' }}
+            />
+            {canvasFallback && (
+              <div className="absolute inset-0 z-10 bg-[#07080c] p-4 flex flex-col">
+                <div className="mb-2 text-[11px] font-mono text-amber-300 bg-amber-950/40 border border-amber-800/50 rounded-lg px-3 py-2">
+                  OpenAPI canvas stayed blank — showing live cTrader candles in the lightweight engine. Switch back to OpenAPI Canvas to retry.
+                </div>
+                <div className="flex-1 bg-slate-950/60 rounded-xl border border-slate-800/80 p-2 overflow-hidden">
+                  <TradingChart data={candleData} />
+                </div>
+              </div>
+            )}
+          </>
         ) : (
           <div className="w-full h-full p-4 flex flex-col">
             <div className="flex-1 bg-slate-950/60 rounded-xl border border-slate-800/80 p-2 overflow-hidden">
@@ -458,7 +590,6 @@ export const OpenApiChartView: React.FC<OpenApiChartViewProps> = ({
           </div>
         )}
 
-        {/* Quick Trade Floating HUD */}
         <div className="absolute bottom-4 right-4 z-20 bg-slate-900/90 backdrop-blur-md p-3 rounded-2xl border border-slate-800 shadow-2xl flex flex-col gap-2.5 w-64">
           <div className="flex items-center justify-between">
             <span className="text-[11px] font-mono font-bold text-slate-400 flex items-center gap-1">
@@ -508,4 +639,5 @@ export const OpenApiChartView: React.FC<OpenApiChartViewProps> = ({
     </div>
   );
 };
+
 export default OpenApiChartView;

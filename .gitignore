@@ -55,6 +55,7 @@ FETCH_HEAD
 
 # Ad-hoc/experimental scripts — never commit (may contain live secrets)
 scratch/
+.firecrawl/
 
 # Extra secret-bearing files
 *.pem

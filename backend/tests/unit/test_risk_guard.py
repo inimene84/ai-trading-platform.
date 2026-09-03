@@ -49,6 +49,7 @@ def test_risk_guard_blocks_excessive_positions(db_session):
         max_position_risk_pct=1.0,
         max_portfolio_drawdown_pct=20.0,
         max_daily_loss_pct=5.0,
+        max_positions=2,
         max_open_positions=2,  # set low limit
         sl_cooldown_minutes=30
     )
@@ -169,8 +170,15 @@ def test_risk_guard_blocks_excessive_daily_loss(db_session):
 
 
 def test_risk_guard_blocks_excessive_directional_exposure(db_session):
-    # Exposure cap of $500; two open trades totalling $600 notional must trip.
-    cfg = RiskConfig(max_directional_exposure_usdt=500.0, max_positions=10, max_open_positions=10)
+    # Hard USDT cap applies when equity sizing is off (no dynamic equity multiplier).
+    # Default equity_sizing_enabled=True would raise the cap to equity * 4 in paper
+    # mode and this $600 book would not trip.
+    cfg = RiskConfig(
+        max_directional_exposure_usdt=500.0,
+        max_positions=10,
+        max_open_positions=10,
+        equity_sizing_enabled=False,
+    )
     trades = [
         Trade(symbol="BTCUSDT", direction="BUY", quantity=0.005, entry_price=60000.0, status="open"),  # $300
         Trade(symbol="ETHUSDT", direction="BUY", quantity=0.1, entry_price=3000.0, status="open"),      # $300
@@ -179,8 +187,57 @@ def test_risk_guard_blocks_excessive_directional_exposure(db_session):
         enforce_risk_limits(db_session, cfg, trades, None)
 
 
+def test_risk_guard_equity_multiplier_raises_hard_usdt_cap(db_session):
+    """With equity sizing, the directional cap is max(hard USDT, equity * mult)."""
+    cfg = RiskConfig(
+        max_directional_exposure_usdt=500.0,
+        max_direction_notional_equity_mult=4.0,
+        max_positions=10,
+        max_open_positions=10,
+        equity_sizing_enabled=True,
+    )
+    snap = PortfolioSnapshot(
+        total_value=10000.0,
+        cash=10000.0,
+        timestamp=datetime.now(timezone.utc),
+    )
+    trades = [
+        Trade(symbol="BTCUSDT", direction="BUY", quantity=0.005, entry_price=60000.0, status="open"),  # $300
+        Trade(symbol="ETHUSDT", direction="BUY", quantity=0.1, entry_price=3000.0, status="open"),      # $300
+    ]
+    # $600 < max($500, $10000 * 4) = $40000 — must not trip.
+    enforce_risk_limits(db_session, cfg, trades, snap)
+
+
+def test_risk_guard_equity_multiplier_still_enforces_when_equity_is_small(db_session):
+    cfg = RiskConfig(
+        max_directional_exposure_usdt=500.0,
+        max_direction_notional_equity_mult=4.0,
+        max_positions=10,
+        max_open_positions=10,
+        equity_sizing_enabled=True,
+    )
+    snap = PortfolioSnapshot(
+        total_value=100.0,
+        cash=100.0,
+        timestamp=datetime.now(timezone.utc),
+    )
+    trades = [
+        Trade(symbol="BTCUSDT", direction="BUY", quantity=0.005, entry_price=60000.0, status="open"),  # $300
+        Trade(symbol="ETHUSDT", direction="BUY", quantity=0.1, entry_price=3000.0, status="open"),      # $300
+    ]
+    # cap = max($500, $100 * 4) = $500; $600 must trip.
+    with pytest.raises(RiskBreach, match="directional exposure exceeded"):
+        enforce_risk_limits(db_session, cfg, trades, snap)
+
+
 def test_risk_guard_allows_exposure_within_cap(db_session):
-    cfg = RiskConfig(max_directional_exposure_usdt=500.0, max_positions=10, max_open_positions=10)
+    cfg = RiskConfig(
+        max_directional_exposure_usdt=500.0,
+        max_positions=10,
+        max_open_positions=10,
+        equity_sizing_enabled=False,
+    )
     trades = [
         Trade(symbol="BTCUSDT", direction="BUY", quantity=0.001, entry_price=60000.0, status="open"),  # $60
     ]
@@ -189,6 +246,7 @@ def test_risk_guard_allows_exposure_within_cap(db_session):
 
 def test_disable_risk_guard_ignored_in_live_mode(db_session, monkeypatch):
     # DISABLE_RISK_GUARD must NOT bypass guards when trading live.
+    monkeypatch.setenv("TRADING_MODE", "live")
     monkeypatch.setenv("DISABLE_RISK_GUARD", "true")
     monkeypatch.setenv("PAPER_TRADING", "false")
     monkeypatch.setenv("DRY_RUN_ALL", "false")
@@ -202,6 +260,7 @@ def test_disable_risk_guard_ignored_in_live_mode(db_session, monkeypatch):
 
 
 def test_disable_risk_guard_honored_in_paper_mode(db_session, monkeypatch):
+    monkeypatch.setenv("TRADING_MODE", "paper")
     monkeypatch.setenv("DISABLE_RISK_GUARD", "true")
     monkeypatch.setenv("DRY_RUN_ALL", "true")  # -> paper mode
     cfg = RiskConfig(max_positions=1, max_open_positions=1)
@@ -228,3 +287,36 @@ def test_daily_loss_uses_prior_day_baseline_when_no_snapshot_today(db_session):
                              timestamp=datetime.now(timezone.utc))
     with pytest.raises(RiskBreach, match="daily loss exceeded"):
         enforce_risk_limits(db_session, cfg, [], live)
+
+
+def test_risk_guard_allows_20_positions_across_dual_brokers(db_session):
+    cfg = RiskConfig(
+        max_positions=20,
+        max_open_positions=20,
+        max_binance_positions=10,
+        max_ctrader_positions=10,
+        max_portfolio_drawdown_pct=99.0,
+        max_daily_loss_pct=99.0,
+        max_directional_exposure_usdt=0,  # disable exposure check
+    )
+
+    ctrader_syms = ["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "NZDUSD", "USDCHF", "USDCAD", "EURGBP", "EURJPY", "GBPJPY"]
+    binance_syms = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT", "BNBUSDT", "AVAXUSDT", "LINKUSDT", "NEARUSDT", "LTCUSDT", "DOTUSDT"]
+
+    trades = [
+        Trade(symbol=s, direction="BUY", quantity=0.1, entry_price=1.0, broker="ctrader", status="open")
+        for s in ctrader_syms
+    ] + [
+        Trade(symbol=s, direction="BUY", quantity=1.0, entry_price=1.0, broker="binance_futures", status="open")
+        for s in binance_syms
+    ]
+
+    assert len(trades) == 20
+    # 20 distinct symbols should pass cleanly
+    enforce_risk_limits(db_session, cfg, trades, None)
+
+    # 21st position should breach risk cap
+    trades.append(Trade(symbol="ATOMUSDT", direction="BUY", quantity=1.0, entry_price=1.0, broker="binance_futures", status="open"))
+    with pytest.raises(RiskBreach, match="Max open positions exceeded: 21 > 20"):
+        enforce_risk_limits(db_session, cfg, trades, None)
+

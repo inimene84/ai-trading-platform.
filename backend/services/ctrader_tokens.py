@@ -17,7 +17,7 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-SPOTWARE_TOKEN_URL = "https://connect.spotware.com/apps/token"
+from backend.services.ctrader_oauth import token_urls as _ctrader_token_urls
 TOKENS_FILE = Path("data/ctrader_tokens.json")
 
 
@@ -102,34 +102,37 @@ class CTraderTokenStore:
             return tokens.get("access_token")
 
         logger.info("cTrader token rotation: renewing access token via Spotware OAuth...")
-        try:
-            resp = httpx.post(
-                SPOTWARE_TOKEN_URL,
-                data={
-                    "grant_type": "refresh_token",
-                    "refresh_token": refresh_token,
-                    "client_id": client_id,
-                    "client_secret": client_secret,
-                },
-                timeout=15.0,
-            )
-            if resp.status_code == 200:
+        payload = {
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_token,
+            "client_id": client_id,
+            "client_secret": client_secret,
+        }
+        for token_url in _ctrader_token_urls():
+            try:
+                resp = httpx.post(token_url, data=payload, timeout=15.0)
                 data = resp.json()
-                new_access = data.get("accessToken") or data.get("access_token")
-                new_refresh = data.get("refreshToken") or data.get("refresh_token") or refresh_token
-                expires = data.get("expiresIn") or data.get("expires_in") or 2592000
-
-                tokens["access_token"] = new_access
-                tokens["refresh_token"] = new_refresh
-                tokens["updated_at"] = now
-                tokens["expires_in"] = expires
-                self.save_tokens(tokens)
-                logger.info("cTrader token successfully renewed and rotated!")
-                return new_access
-            else:
-                logger.error(f"cTrader token refresh rejected ({resp.status_code}): {resp.text}")
-        except Exception as e:
-            logger.error(f"cTrader token refresh network error: {e}")
+                if resp.status_code == 200 and not data.get("errorCode"):
+                    new_access = data.get("accessToken") or data.get("access_token")
+                    new_refresh = data.get("refreshToken") or data.get("refresh_token") or refresh_token
+                    expires = data.get("expiresIn") or data.get("expires_in") or 2592000
+                    if not new_access:
+                        continue
+                    tokens["access_token"] = new_access
+                    tokens["refresh_token"] = new_refresh
+                    tokens["updated_at"] = now
+                    tokens["expires_in"] = expires
+                    self.save_tokens(tokens)
+                    logger.info("cTrader token successfully renewed via %s", token_url)
+                    return new_access
+                logger.error(
+                    "cTrader token refresh rejected via %s (%s): %s",
+                    token_url,
+                    resp.status_code,
+                    data.get("description") or resp.text[:200],
+                )
+            except Exception as e:
+                logger.error(f"cTrader token refresh network error ({token_url}): {e}")
 
         return tokens.get("access_token")
 

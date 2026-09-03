@@ -33,15 +33,23 @@ from backend.services.trading_loop_helpers import (
     ExchangeProtectionManager,
     PerformanceMetricsWriter,
     remove_closed_pyramid_layer,
+    trades_for_direction_cap,
 )
 
 load_dotenv()
 
 # ── Broker selector ──────────────────────────────────────────────────────────
+DEFAULT_ACTIVE_BROKER = "ctrader"
+
+
+def get_active_broker_name() -> str:
+    """Name of the active broker. Single source of truth for broker resolution."""
+    return os.getenv("ACTIVE_BROKER", DEFAULT_ACTIVE_BROKER).strip() or DEFAULT_ACTIVE_BROKER
+
+
 def get_active_broker():
     """Dynamically resolve the active broker based on environment."""
-    broker_name = os.getenv("ACTIVE_BROKER", "ctrader")
-    if broker_name == "binance_futures":
+    if get_active_broker_name() == "binance_futures":
         return binance_futures_broker
     return ctrader_broker
 
@@ -200,8 +208,15 @@ class TradingLoopService:
     @property
     def status(self) -> dict:
         balance_info = self._get_effective_balance()
+        allowed = is_trading_allowed()
+        effective_state = self._state
+        if self._running:
+            if not allowed:
+                effective_state = "halted"
+            elif self._state == "halted":
+                effective_state = "running"
         return {
-            "state": self._state,
+            "state": effective_state,
             "running": self._running,
             "interval_minutes": self._interval_minutes,
             "symbols": self._symbols,
@@ -213,7 +228,7 @@ class TradingLoopService:
             "cash": float(balance_info.get("available", balance_info.get("balance", 0.0))),
             "equity": float(balance_info.get("equity", balance_info.get("balance", 0.0))),
             "margin_used": float(balance_info.get("margin_used", 0.0)),
-            "trading_allowed": is_trading_allowed(),
+            "trading_allowed": allowed,
             "trading_status": get_trading_status().value,
         }
 
@@ -331,7 +346,20 @@ class TradingLoopService:
             broker=binance_futures_broker,
             pyramid_layers=self._pyramid_layers,
             sl_cooldown=self._sl_cooldown,
+            broker_name="binance_futures",
         )
+        try:
+            from backend.services.ctrader_service import ctrader_broker
+            if ctrader_broker.has_credentials():
+                await BrokerPositionSyncService.sync_positions(
+                    db=db,
+                    broker=ctrader_broker,
+                    pyramid_layers=self._pyramid_layers,
+                    sl_cooldown=self._sl_cooldown,
+                    broker_name="ctrader",
+                )
+        except Exception as _ct_e:
+            logger.warning("cTrader position sync during trading loop failed: %s", _ct_e)
 
     async def stop(self):
         """Stop the trading loop."""
@@ -592,7 +620,13 @@ class TradingLoopService:
             
             # Count unique symbols with open positions (including filled)
             from sqlalchemy import func
-            self._open_count = db.query(func.count(func.distinct(Trade.symbol))).filter(Trade.status.in_(["open", "filled"])).scalar() or 0
+            self._open_count = db.query(func.count(func.distinct(Trade.symbol))).filter(
+                Trade.status.in_(["open", "filled"]),
+                (Trade.broker != "ctrader") | (Trade.broker.is_(None))
+            ).scalar() or 0
+            self._total_open_count = db.query(func.count(func.distinct(Trade.symbol))).filter(
+                Trade.status.in_(["open", "filled"])
+            ).scalar() or 0
         finally:
             db.close()
 
@@ -712,7 +746,13 @@ class TradingLoopService:
                     db_check.commit()
                     logger.info(f"  Position Manager: {_exits_triggered} positions closed this cycle.")
                     # Refresh open count after exits
-                    self._open_count = db_check.query(func.count(func.distinct(Trade.symbol))).filter(Trade.status.in_(["open", "filled"])).scalar() or 0
+                    self._open_count = db_check.query(func.count(func.distinct(Trade.symbol))).filter(
+                        Trade.status.in_(["open", "filled"]),
+                        (Trade.broker != "ctrader") | (Trade.broker.is_(None))
+                    ).scalar() or 0
+                    self._total_open_count = db_check.query(func.count(func.distinct(Trade.symbol))).filter(
+                        Trade.status.in_(["open", "filled"])
+                    ).scalar() or 0
             except Exception as e:
                 logger.error(f"Position Manager cycle error: {e}")
                 db_check.rollback()
@@ -1044,10 +1084,17 @@ class TradingLoopService:
                 _new_notional = decision.quantity * decision.entry_price
                 if not decision.is_pyramid:
                     all_open = db.query(Trade).filter(Trade.status.in_(["open", "filled"])).all()
-                    _long_notional = sum(t.quantity * (t.entry_price or 0.0) for t in all_open if t.direction == "BUY")
-                    _short_notional = sum(t.quantity * (t.entry_price or 0.0) for t in all_open if t.direction == "SELL")
+                    scoped_open = trades_for_direction_cap(all_open, get_active_broker_name())
+                    _long_notional = sum(
+                        t.quantity * (t.entry_price or 0.0)
+                        for t in scoped_open if t.direction == "BUY"
+                    )
+                    _short_notional = sum(
+                        t.quantity * (t.entry_price or 0.0)
+                        for t in scoped_open if t.direction == "SELL"
+                    )
                     # Correlation cap: distinct symbols already open in this direction
-                    _same_dir_syms = {t.symbol for t in all_open if t.direction == decision.action}
+                    _same_dir_syms = {t.symbol for t in scoped_open if t.direction == decision.action}
                     _dir_cap = self.risk_config.max_same_direction_positions
 
                     if len(_same_dir_syms) >= _dir_cap:
@@ -1107,15 +1154,19 @@ class TradingLoopService:
                 #    and overshoot the cap (race on shared self._open_count).
                 async with self._execution_lock:
                     # Re-check the position cap inside the lock with the freshest count
-                    if not existing and self._open_count >= self.risk_config.max_positions:
+                    max_binance_cap = getattr(self.risk_config, "max_binance_positions", 10)
+                    max_total_cap = self.risk_config.max_positions
+                    total_open = getattr(self, "_total_open_count", self._open_count)
+                    if not existing and (self._open_count >= max_binance_cap or total_open >= max_total_cap):
+                        cap_msg = f"binance cap ({max_binance_cap})" if self._open_count >= max_binance_cap else f"total cap ({max_total_cap})"
                         logger.warning(
                             f"  [ {symbol} ] entry skipped: max positions "
-                            f"({self.risk_config.max_positions}) reached at execution time"
+                            f"({cap_msg}) reached at execution time"
                         )
                         signal_status = "rejected"
                         signal_reason = (
                             f"{signal_reason} | max positions "
-                            f"({self.risk_config.max_positions}) at execution time"
+                            f"({cap_msg}) at execution time"
                         )
                         decision = None
 
@@ -1141,6 +1192,7 @@ class TradingLoopService:
                         )
                         if order_result.success and not existing:
                             self._open_count += 1
+                            self._total_open_count = getattr(self, "_total_open_count", 0) + 1
                             reserved_open_slot = True
                 if decision and order_result and order_result.success:
                     _trades = 1
@@ -1243,6 +1295,7 @@ class TradingLoopService:
             if reserved_open_slot and not open_slot_committed:
                 # Undo the in-cycle reservation if SQL persistence failed.
                 self._open_count = max(0, self._open_count - 1)
+                self._total_open_count = max(0, getattr(self, "_total_open_count", 1) - 1)
             return {"signals": 0, "trades": 0}
         finally:
             db.close()
@@ -1472,13 +1525,13 @@ class TradingLoopService:
 
     @staticmethod
     def _to_yfinance_symbol(symbol: str) -> str:
-        """Convert Binance-native BTCUSDT/BTCUSDC → yfinance BTC-USD format."""
+        """Convert Binance-native or forex symbols to yfinance format."""
         s = symbol.upper().strip()
-        if s.endswith('USDT') or s.endswith('USDC'):
+        if s.endswith('USDT') or s.endswith('USDC') or s.endswith('BUSD'):
             return s[:-4] + '-USD'
-        if s.endswith('BUSD'):
-            return s[:-4] + '-USD'
-        return s  # already yfinance format or unknown
+        if len(s) == 6 and not s.endswith('=X'):
+            return f"{s}=X"
+        return s
 
     async def _filter_tradeable_symbols(self, symbols: list[str]) -> list[str]:
         """Apply the symbol-quality gate: hard blacklist + 24h liquidity floor.
@@ -1650,6 +1703,18 @@ class TradingLoopService:
                 )
         except Exception as e:
             logger.debug(f"  [{symbol}] WS candle cache read exception: {e}")
+
+        # 1.5 For cTrader/forex symbols, fetch cTrader trendbars
+        if not symbol.upper().endswith(("USDT", "USDC", "BUSD")):
+            try:
+                from backend.services.ctrader_service import ctrader_service
+                if ctrader_service.has_credentials():
+                    ct_bars = await asyncio.to_thread(ctrader_service.get_trendbars, symbol, "H1", count=100)
+                    if ct_bars and len(ct_bars) >= 10:
+                        logger.info(f"  [{symbol}] cTrader trendbars hit: {len(ct_bars)} bars")
+                        return ct_bars
+            except Exception as _ct_e:
+                logger.debug(f"  [{symbol}] cTrader trendbar fetch error: {_ct_e}")
 
         # 2. Try Binance Futures REST API (cached with TTL)
         try:

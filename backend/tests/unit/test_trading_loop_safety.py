@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 
 from backend.services.trading_loop import TradingLoopService
 from backend.services.trading_loop_helpers import remove_closed_pyramid_layer
+from backend.services.trading_mode import TradingMode
 
 
 def _trade(symbol, trade_id, entry_price, notes=None):
@@ -79,11 +80,44 @@ def test_status_uses_broker_balance():
         "equity": 91.5,
         "margin_used": 47.0,
     }
-    with patch("backend.services.trading_loop.get_active_broker", return_value=mock_broker):
+    # status() reads paper portfolio unless trading mode is LIVE. Patch the
+    # module used by the late import in _get_effective_balance.
+    with patch(
+        "backend.services.trading_mode.get_trading_mode",
+        return_value=TradingMode.LIVE,
+    ), patch(
+        "backend.services.trading_loop.get_active_broker",
+        return_value=mock_broker,
+    ):
         st = loop.status
     assert st["cash"] == 44.0
     assert st["equity"] == 91.5
     assert st["margin_used"] == 47.0
+
+
+def test_status_uses_paper_portfolio_in_paper_mode():
+    loop = TradingLoopService()
+    mock_broker = MagicMock()
+    mock_broker.get_balance.return_value = {
+        "available": 44.0,
+        "equity": 91.5,
+        "margin_used": 47.0,
+    }
+    with patch(
+        "backend.services.trading_mode.get_trading_mode",
+        return_value=TradingMode.PAPER,
+    ), patch(
+        "backend.services.trading_loop.get_active_broker",
+        return_value=mock_broker,
+    ), patch(
+        "backend.services.unified_trading.trading_router.get_paper_portfolio",
+        return_value={"cash": 12.0, "equity": 15.0, "margin_used": 3.0},
+    ):
+        st = loop.status
+    assert st["cash"] == 12.0
+    assert st["equity"] == 15.0
+    assert st["margin_used"] == 3.0
+    mock_broker.get_balance.assert_not_called()
 
 
 def test_check_sl_tp_skips_software_close_on_live_binance():

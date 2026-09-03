@@ -1643,11 +1643,41 @@ class BinanceFuturesService:
             "open_positions": len(self.get_positions()),
         }
 
-    def close_position(self, position_id: str | int = "", symbol: Optional[str] = None) -> dict:
-        """Close an open position on Binance Futures by placing a market close order."""
+    def close_position(
+        self,
+        position_id: str | int = "",
+        symbol: Optional[str] = None,
+        direction: Optional[str] = None,
+    ) -> dict:
+        """Close an open position on Binance Futures by placing a market close order.
+
+        `direction` is the side of the position being closed, which in hedge
+        mode selects positionSide. Hardcoding SELL here aimed every close at
+        the SHORT leg, so closing a long either errored or hit the wrong leg.
+        """
         if not symbol:
             return {"status": "error", "message": "Symbol required to close Binance position"}
-        return self.place_order(symbol=symbol, direction="SELL", action="close", quantity=None)
+
+        held = (direction or "").upper()
+        if held in ("LONG", "BUY"):
+            held = "BUY"
+        elif held in ("SHORT", "SELL"):
+            held = "SELL"
+        else:
+            futures_sym = self._to_futures_symbol(symbol)
+            held = next(
+                (
+                    "BUY" if (p.get("side") or "").upper() in ("BUY", "LONG") else "SELL"
+                    for p in self.get_positions()
+                    if p.get("symbol") == futures_sym
+                    and abs(float(p.get("quantity") or 0)) > 0
+                ),
+                "",
+            )
+            if not held:
+                return {"status": "already_flat", "symbol": symbol}
+
+        return self.place_order(symbol=symbol, direction=held, action="close", quantity=None)
 
     def cancel_order(self, order_id: str, symbol: Optional[str] = None) -> dict:
         try:

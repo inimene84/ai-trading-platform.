@@ -28,6 +28,15 @@
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={\n  \"lookahead_minutes\": 60\n}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "={{ $env.BACKEND_API_KEY }}"
+            }
+          ]
+        },
         "options": {}
       },
       "id": "2b3c4d5e-6f7a-8b9c-0d1e-2f3a4b5c6d02",
