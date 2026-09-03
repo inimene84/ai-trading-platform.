@@ -90,16 +90,18 @@ async def test_emergency_drawdown_bypasses_min_hold():
 async def test_min_hold_blocks_technical_exit():
     mgr = PositionManager()
     mgr.config.min_position_hold_min = 20
-    # Downtrend bars with a loss > 5%
+    # ~6% loss (below the -5% technical trigger, above the -8% emergency).
     bars = []
     for i in range(20):
-        c = 100.0 - i * 0.6
+        c = 100.0 if i < 12 else 100.0 - (i - 11) * 0.8
         bars.append({"open": c, "high": c + 0.2, "low": c - 0.2, "close": c, "volume": 1000})
+    current = bars[-1]["close"]
+    assert -8.0 < ((current - 100.0) / 100.0) * 100 < -5.0
 
     result = await mgr.analyze_open_position(
         "ETHUSDT",
         _trade(entry=100.0, held_minutes=5),
         bars,
-        current_price=bars[-1]["close"],
+        current_price=current,
     )
     assert result.exit is False

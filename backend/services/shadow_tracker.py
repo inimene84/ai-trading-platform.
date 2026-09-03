@@ -18,7 +18,6 @@ from sqlalchemy.orm import Session
 
 from backend.database.models import ShadowOutcome, TradingSignal
 from backend.services.decision_engine import atr_from_bars
-from backend.services.multi_asset_bars import classify_symbol
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +38,7 @@ _GATE_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("min_edge", ("min-edge", "min_edge")),
     ("correlation", (
         "direction notional", "exposure cap", "same direction", "correlation",
+        "long notional", "short notional",
     )),
     ("expectancy", ("expectancy",)),
     ("max_positions", ("max positions",)),

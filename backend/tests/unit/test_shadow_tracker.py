@@ -32,6 +32,7 @@ def test_classify_gate_from_real_reason_strings():
     assert classify_gate("vetoed by risk reviewer: too much event risk") == "llm_risk"
     assert classify_gate("strategy confidence below threshold (0.60) in TRENDING regime") == "confidence"
     assert classify_gate("BUY blocked: LONG notional $x > 4.0x equity") == "correlation"
+    assert classify_gate("entry decision | LONG direction notional cap (4.0x equity)") == "correlation"
     assert classify_gate("max positions reached (10)") == "max_positions"
     assert classify_gate("  [ETHUSDT] SKIP (min-edge): expected capture") == "min_edge"
     assert classify_gate("entry decision", "executed") == "other"
