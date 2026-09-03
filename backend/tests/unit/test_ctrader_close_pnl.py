@@ -74,6 +74,7 @@ async def test_close_uses_streamed_mark_price_and_contract_units():
     broker.close_position.return_value = {"status": "sent"}
     broker.get_mark_price.return_value = 159.819
     broker.CONTRACT_UNITS_PER_LOT = 100_000
+    broker.units_per_lot.return_value = 100_000
     broker.quote_to_usd_rate.return_value = 1 / 159.819  # JPY -> USD
 
     with patch("backend.routes.trading.SessionLocal", return_value=db), patch(

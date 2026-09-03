@@ -149,13 +149,16 @@ def test_sizing_caps_metal_lots():
 
 def test_sizing_uses_live_equity_not_paper_10k():
     engine = signal_candidate_engine
-    engine.timing_config["account_equity_override"] = 10_000
     with patch.object(engine, "_account_equity", return_value=159.0), patch.dict(
         engine.execution_config, {"max_ctrader_lots": 0.10, "max_metal_lots": 0.01}
+    ), patch.dict(
+        engine.timing_config, {"default_risk_pct": 0.5, "account_equity_override": 10_000}
     ):
         size = engine._calculate_size("EURUSD", 1.1700, 1.1650, "ctrader")
+    # 0.5% of $159 is ~$0.80. The $10k override would risk $50 and size 0.10 lots.
     assert size["risk_usd"] == pytest.approx(0.80, abs=0.05)
     assert size["lots"] <= 0.02
+    assert size["lots"] < 0.10
 
 
 def test_account_equity_does_not_use_10k_when_live_creds_have_no_snapshot():
