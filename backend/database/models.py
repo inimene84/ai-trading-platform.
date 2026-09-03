@@ -282,3 +282,31 @@ class StrategySkill(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     last_mined_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class ShadowOutcome(Base):
+    """Hypothetical SL/TP walk for a blocked/vetoed signal (shadow tracker).
+
+    Unique on signal_id so rescoring is idempotent. mfe_r/mae_r are R-multiples
+    of the stop distance (not raw price).
+    """
+    __tablename__ = "shadow_outcomes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    signal_id = Column(Integer, unique=True, nullable=False, index=True)
+    symbol = Column(String(20), nullable=False, index=True)
+    direction = Column(String(10), nullable=False)
+    gate = Column(String(40), nullable=False, index=True)
+    signal_time = Column(DateTime(timezone=True), nullable=True, index=True)
+    confidence = Column(Float, nullable=False, default=0.0)
+    entry_price = Column(Float, nullable=True)
+    stop_loss = Column(Float, nullable=True)
+    take_profit = Column(Float, nullable=True)
+    exit_price = Column(Float, nullable=True)
+    exit_reason = Column(String(20), nullable=False, default="timeout")  # sl|tp|timeout
+    pnl_pct = Column(Float, nullable=False, default=0.0)
+    pnl_r = Column(Float, nullable=False, default=0.0)
+    mfe_r = Column(Float, nullable=False, default=0.0)
+    mae_r = Column(Float, nullable=False, default=0.0)
+    bars_elapsed = Column(Integer, nullable=False, default=0)
+    scored_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
