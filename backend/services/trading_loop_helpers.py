@@ -16,6 +16,7 @@ from sqlalchemy import or_
 from backend.database.models import Trade, PortfolioSnapshot
 from backend.services.influxdb_writer import influx
 from backend.services.decision_engine import atr_from_bars
+from backend.services.multi_asset_bars import classify_symbol
 from backend.services.unified_trading import UnifiedTrading, UnifiedOrder, OrderSide, OrderType
 from backend.services.position_manager import get_position_manager
 
@@ -34,6 +35,28 @@ def is_plausible_exit_price(entry_price, exit_price) -> bool:
     if not exit_price or exit_price <= 0 or not entry_price or entry_price <= 0:
         return False
     return abs(exit_price - entry_price) / entry_price <= MAX_EXIT_PRICE_DEVIATION
+
+
+def is_ctrader_symbol(symbol: str) -> bool:
+    """True for FX/metal pairs that must never be sent to Binance Futures."""
+    return classify_symbol(str(symbol or "")) in ("forex", "metal")
+
+
+def is_ctrader_trade(trade) -> bool:
+    """Detect a cTrader-owned row even when broker was not persisted."""
+    broker_raw = getattr(trade, "broker", None) or getattr(trade, "exchange", None)
+    broker = broker_raw.lower() if isinstance(broker_raw, str) else ""
+    if broker == "ctrader":
+        return True
+    if broker in ("binance_futures", "binance"):
+        return False
+    position_id = getattr(trade, "broker_position_id", None)
+    if isinstance(position_id, str) and position_id.strip():
+        return True
+    if isinstance(position_id, int) and position_id:
+        return True
+    symbol = getattr(trade, "symbol", "")
+    return is_ctrader_symbol(symbol if isinstance(symbol, str) else "")
 
 
 def trades_for_direction_cap(all_open: list, broker_name: str) -> list:
@@ -101,6 +124,8 @@ class EmergencyExitManager:
             ut_pre = UnifiedTrading()
             for trade in pre_open:
                 try:
+                    if is_ctrader_trade(trade):
+                        continue  # cTrader legs are owned by ctrader sync/poller, not Binance
                     live_px = live_prices.get(trade.symbol, 0.0)
                     if live_px <= 0:
                         continue  # can't check without a price
@@ -127,8 +152,8 @@ class EmergencyExitManager:
                             quantity=trade.quantity,
                             reduce_only=True,
                         ))
-                        if res.success:
-                            trade.exit_price = res.filled_price or live_px
+                        if res.success and res.filled_price:
+                            trade.exit_price = res.filled_price
                             if res.realized_pnl is not None:
                                 trade.pnl = float(res.realized_pnl) - res.commission
                             else:
@@ -145,18 +170,25 @@ class EmergencyExitManager:
                             sl_cooldown[trade.symbol] = datetime.now(timezone.utc)
                             exits_triggered += 1
                             logger.warning(f"  [EMERGENCY EXIT] {trade.symbol} CLOSED. PnL={pnl_pct:.1f}%")
+                        elif res.success or (
+                            hasattr(res, 'message') and (
+                                '-2022' in str(res.message) or 'already' in str(res.message).lower()
+                            )
+                        ):
+                            # already_flat is mapped to success with no fill — do not
+                            # invent PnL from the last mark; record an unknown close.
+                            logger.info(f"  [EMERGENCY EXIT] {trade.symbol} already flat on exchange — marking DB closed")
+                            trade.status = 'closed'
+                            trade.closed_at = datetime.now(timezone.utc)
+                            trade.exit_price = None
+                            trade.pnl = None
+                            trade.notes = (trade.notes or '') + ' | EMERGENCY-EXIT: already flat on exchange'
+                            db.add(trade)
+                            remove_closed_pyramid_layer(pyramid_layers, trade)
+                            sl_cooldown[trade.symbol] = datetime.now(timezone.utc)
+                            exits_triggered += 1
                         else:
-                            if hasattr(res, 'message') and ('-2022' in str(res.message) or 'already' in str(res.message).lower()):
-                                logger.info(f"  [EMERGENCY EXIT] {trade.symbol} already flat on exchange — marking DB closed")
-                                trade.status = 'closed'
-                                trade.closed_at = datetime.now(timezone.utc)
-                                trade.notes = (trade.notes or '') + ' | EMERGENCY-EXIT: already flat on exchange'
-                                db.add(trade)
-                                remove_closed_pyramid_layer(pyramid_layers, trade)
-                                sl_cooldown[trade.symbol] = datetime.now(timezone.utc)
-                                exits_triggered += 1
-                            else:
-                                logger.error(f"  [EMERGENCY EXIT] {trade.symbol} FAILED: {res.message}")
+                            logger.error(f"  [EMERGENCY EXIT] {trade.symbol} FAILED: {res.message}")
                 except Exception as e:
                     logger.error(f"  [EMERGENCY EXIT] {trade.symbol} error: {e}")
             if exits_triggered > 0:
@@ -730,6 +762,8 @@ class ExchangeProtectionManager:
             trades = db.query(Trade).filter(Trade.status.in_(["open", "filled"])).all()
             by_symbol: dict[str, Trade] = {}
             for trade in trades:
+                if is_ctrader_trade(trade):
+                    continue
                 if not trade.stop_loss and not trade.take_profit:
                     continue
                 existing = by_symbol.get(trade.symbol)
@@ -776,6 +810,8 @@ class ExchangeProtectionManager:
 
             trades = db.query(Trade).filter(Trade.symbol == symbol, Trade.status.in_(["open", "filled"])).all()
             for trade in trades:
+                if is_ctrader_trade(trade):
+                    continue
                 if not trade.stop_loss and not trade.take_profit:
                     continue
                 res = broker.ensure_protective_orders(

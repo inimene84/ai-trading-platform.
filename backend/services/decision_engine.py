@@ -50,6 +50,17 @@ def _reviewer_gate_fail_open() -> bool:
     return get_trading_mode() != TradingMode.LIVE
 
 
+def _positive_price_level(level: Optional[float]) -> Optional[float]:
+    """Treat 0 / negative / unparseable as 'no level' — never a valid stop or target."""
+    if level is None:
+        return None
+    try:
+        value = float(level)
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
 def atr_from_bars(bars: List[Dict[str, Any]], fallback_price: float, periods: int = 14) -> float:
     """True-range ATR using aligned prev-close windows (avoids length mismatch on short series)."""
     if not bars:
@@ -79,6 +90,11 @@ def compute_sl_tp_levels(
         atr = atr_from_bars(bars, entry_price)
     except Exception:
         atr = entry_price * 0.02
+
+    # 0.0 used to be treated as a real stop. min(0, entry - ATR) kept it, then
+    # Binance stripped stop_loss<=0 as "missing" and the long sat naked.
+    signal_sl = _positive_price_level(signal_sl)
+    signal_tp = _positive_price_level(signal_tp)
 
     if direction == "BUY":
         sl = signal_sl if signal_sl is not None else (entry_price - (atr * config.sl_atr_mult))

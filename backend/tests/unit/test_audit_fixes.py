@@ -4,6 +4,7 @@ Each test pins a behaviour that previously produced a wrong trade rather than
 an error, which is why none of them were caught by the existing suite.
 """
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -12,6 +13,7 @@ from backend.services.binance_futures_service import BinanceFuturesService
 from backend.services.ctrader_service import CTraderService
 from backend.services.multi_asset_bars import fetch_bars, tf_to_binance_interval
 from backend.services.signal_candidate_engine import signal_candidate_engine
+from backend.services.trading_loop_helpers import EmergencyExitManager
 
 
 def _bars(n, base=1.10, step=0.0001):
@@ -250,3 +252,45 @@ def test_binance_close_position_on_flat_book_does_not_order():
         res = svc.close_position(symbol="ETHUSDT")
     order.assert_not_called()
     assert res["status"] == "already_flat"
+
+
+def test_binance_place_order_skips_forex_instead_of_inventing_usdt_pair():
+    """EURUSD used to become EURUSDUSDT and hit the Binance API."""
+    svc = BinanceFuturesService.__new__(BinanceFuturesService)
+    svc.dry_run = False
+    res = svc.place_order(symbol="EURUSD", direction="BUY", quantity=0.1)
+    assert res["status"] == "skipped"
+    assert "EURUSDUSDT" not in str(res)
+
+
+@pytest.mark.asyncio
+async def test_emergency_exit_skips_ctrader_rows():
+    fx = SimpleNamespace(
+        symbol="EURUSD",
+        direction="BUY",
+        quantity=0.1,
+        entry_price=1.16,
+        broker="ctrader",
+        notes="",
+        status="open",
+    )
+    db = MagicMock()
+    db.query.return_value.filter.return_value.all.return_value = [fx]
+    broker = MagicMock()
+    broker.get_positions.return_value = [
+        {"symbol": "EURUSD", "mark_price": 1.10, "entry_price": 1.16},
+    ]
+
+    with patch(
+        "backend.services.trading_loop_helpers.UnifiedTrading"
+    ) as ut_cls, patch(
+        "backend.services.trading_loop_helpers.get_position_manager"
+    ) as pm_fn:
+        pm_fn.return_value.emergency_drawdown_pct = -1.0
+        closed = await EmergencyExitManager.run_emergency_exits(
+            db, broker, pyramid_layers={}, sl_cooldown={},
+        )
+
+    assert closed == 0
+    ut_cls.return_value.place_order.assert_not_called()
+    assert fx.status == "open"

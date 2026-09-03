@@ -55,10 +55,13 @@ def test_compute_sl_tp_sell_direction(risk_config):
     assert tp < 100.0
 
 
-def test_compute_sl_tp_honors_zero_signal_sl(risk_config):
+def test_compute_sl_tp_zero_signal_sl_falls_back_to_atr(risk_config):
+    """A 0.0 strategy stop used to survive min() and then get stripped at
+    Binance as 'missing', leaving a naked long. Treat 0 as 'no signal stop'."""
     bars = _make_bars(20, base=100.0)
     sl, tp = compute_sl_tp_levels(bars, "BUY", 100.0, risk_config, signal_sl=0.0, signal_tp=120.0)
-    assert sl == 0.0
+    assert sl > 0
+    assert sl < 100.0
     assert tp == 120.0
 
 

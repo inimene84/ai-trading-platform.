@@ -34,6 +34,7 @@ from backend.services.trading_loop_helpers import (
     PerformanceMetricsWriter,
     remove_closed_pyramid_layer,
     trades_for_direction_cap,
+    is_ctrader_trade,
 )
 
 load_dotenv()
@@ -649,10 +650,20 @@ class TradingLoopService:
                 logger.info(f"  [POSITION MGR] Reviewing {len(open_trades)} open positions for exits...")
                 for trade in open_trades:
                     try:
+                        if is_ctrader_trade(trade):
+                            continue
                         trade_bars = await self._fetch_bars(trade.symbol)
                         if not trade_bars or len(trade_bars) < 10:
                             continue
                         curr_price = trade_bars[-1]["close"]
+                        # Prefer the live mark over a (possibly hours-old) candle close.
+                        fsym = binance_futures_broker._to_futures_symbol(trade.symbol)
+                        for p in self._cycle_positions:
+                            if p.get("symbol") == (fsym or trade.symbol):
+                                mark = float(p.get("mark_price") or 0)
+                                if mark > 0:
+                                    curr_price = mark
+                                break
                         # Fetch funding rate for position exit review
                         try:
                             fr_data = await binance_market_data.get_funding_rate(trade.symbol)
@@ -1211,7 +1222,9 @@ class TradingLoopService:
                         strategy=self._strategy_name,
                         binance_order_id=order_result.order_id,
                         stop_loss=decision.stop_loss, take_profit=decision.take_profit,
-                        notes=f"pyramid_layer_{len(self._pyramid_layers.get(symbol, []))}" if decision.is_pyramid else None
+                        notes=f"pyramid_layer_{len(self._pyramid_layers.get(symbol, []))}" if decision.is_pyramid else None,
+                        broker=get_active_broker_name(),
+                        exchange=get_active_broker_name(),
                     )
                     db.add(trade)
                     db.commit()
@@ -1433,6 +1446,8 @@ class TradingLoopService:
             .all()
         )
         for trade in trades:
+            if is_ctrader_trade(trade):
+                continue
 
             hit = False
             if trade.direction == "BUY":
@@ -1609,12 +1624,19 @@ class TradingLoopService:
 
         passed, rejected = [], []
         for s in candidates:
-            v = vol_by_sym.get(s.upper())
-            # Unknown symbol (delisted / not on futures) → reject as unsafe
+            su = s.upper()
+            v = vol_by_sym.get(su)
+            # Unknown to Binance (delisted / FX / metal): reject new entries,
+            # but never drop an already-open leg from management.
             if v is None:
-                rejected.append((s, "no-ticker"))
+                if su in open_symbols:
+                    passed.append(s)
+                else:
+                    rejected.append((s, "no-ticker"))
                 continue
             if v >= min_vol:
+                passed.append(s)
+            elif su in open_symbols:
                 passed.append(s)
             else:
                 rejected.append((s, f"{v/1e6:.1f}M<{min_vol/1e6:.0f}M"))
