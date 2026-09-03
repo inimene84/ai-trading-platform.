@@ -626,7 +626,6 @@ class SignalCandidateEngine:
                         curr,
                     )
                     continue
-                event_key = f"{curr}:{(ev.get('event') or '').strip().lower()}"
                 already = any(
                     c.get("strategy") == "MACRO_EVENT_POST_REACTION"
                     and c.get("symbol") == matched_sym
