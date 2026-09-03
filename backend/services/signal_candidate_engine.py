@@ -136,13 +136,19 @@ class SignalCandidateEngine:
         return self._open_ctrader_base_counts().get(base, 0) < cap
 
     def _account_equity(self) -> float:
-        """Live cTrader equity when connected; otherwise the paper override."""
+        """Live cTrader equity when connected; otherwise a conservative fallback.
+
+        A live account with no snapshot must not inherit the $10k paper override —
+        that sized 0.10 lots on a ~$159 IC Markets book.
+        """
         try:
             equity = float(getattr(ctrader_service, "equity", 0) or 0)
             if equity > 0:
                 return equity
         except Exception:
             pass
+        if ctrader_service.has_credentials():
+            return float(os.getenv("CTRADER_FALLBACK_EQUITY", "150"))
         return float(self.timing_config.get("account_equity_override") or 10_000.0)
 
     def prune_candidates(self, now_ts: Optional[int] = None) -> int:
@@ -842,6 +848,14 @@ class SignalCandidateEngine:
         try:
             qty = cand["sizing"]["lots"] if cand["broker"] == "ctrader" else cand["sizing"]["quantity"]
             if cand["broker"] == "ctrader":
+                live_size = self._calculate_size(
+                    str(cand.get("symbol") or ""),
+                    float(cand.get("entry_price") or 0),
+                    float(cand.get("stop_loss") or 0),
+                    "ctrader",
+                )
+                cand["sizing"] = live_size
+                qty = live_size["lots"]
                 max_lots = float(self.execution_config.get("max_ctrader_lots") or 0)
                 if classify_symbol(str(cand.get("symbol") or "")) == "metal":
                     metal_cap = float(self.execution_config.get("max_metal_lots") or 0.01)

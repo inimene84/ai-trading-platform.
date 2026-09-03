@@ -1,5 +1,6 @@
 """Regression tests for metal contract size, news mapping, and risk caps."""
 
+import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -155,3 +156,15 @@ def test_sizing_uses_live_equity_not_paper_10k():
         size = engine._calculate_size("EURUSD", 1.1700, 1.1650, "ctrader")
     assert size["risk_usd"] == pytest.approx(0.80, abs=0.05)
     assert size["lots"] <= 0.02
+
+
+def test_account_equity_does_not_use_10k_when_live_creds_have_no_snapshot():
+    engine = signal_candidate_engine
+    engine.timing_config["account_equity_override"] = 10_000
+    with patch(
+        "backend.services.signal_candidate_engine.ctrader_service.equity", 0.0
+    ), patch(
+        "backend.services.signal_candidate_engine.ctrader_service.has_credentials",
+        return_value=True,
+    ), patch.dict(os.environ, {"CTRADER_FALLBACK_EQUITY": "150"}):
+        assert engine._account_equity() == 150.0
