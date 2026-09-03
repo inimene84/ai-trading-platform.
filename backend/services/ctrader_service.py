@@ -80,6 +80,22 @@ class CTraderProtocol:
         except Exception as e:
             logger.error(f"cTrader spot subscription failed: {e}")
 
+    def _request_symbol_specs(self, symbol_ids):
+        """Load per-symbol lotSize / minVolume. Metals are not 10M cents/lot."""
+        wanted = sorted({int(sid) for sid in symbol_ids if sid})
+        if not wanted:
+            return
+        try:
+            from ctrader_open_api.messages import OpenApiMessages_pb2 as msgs
+
+            req = msgs.ProtoOASymbolByIdReq()
+            req.ctidTraderAccountId = self._creds.get("account_id", 0)
+            req.symbolId.extend(wanted)
+            self._send(req, 2116)
+            logger.info("cTrader requested symbol specs for %s ids", len(wanted))
+        except Exception as e:
+            logger.error(f"cTrader symbol-spec request failed: {e}")
+
     def dataReceived(self, data: bytes):
         self.last_heartbeat = time.time()
         self._buf += data
@@ -210,11 +226,35 @@ class CTraderProtocol:
                     len(self._service._symbol_ids),
                     self._service._symbol_ids.get("NZDJPY"),
                 )
+                self._request_symbol_specs(self._service.priority_symbol_ids())
                 # Reconcile often arrives before this large catalog. Refresh names
                 # after IDs are unique so NZDJPY is not left labeled XAUUSD.
                 req_rec = msgs.ProtoOAReconcileReq()
                 req_rec.ctidTraderAccountId = self._creds.get("account_id", 0)
                 self._send(req_rec, 2124)
+
+            elif ptype == 2117:  # ProtoOASymbolByIdRes
+                res = msgs.ProtoOASymbolByIdRes()
+                res.ParseFromString(msg.payload)
+                for sym in res.symbol:
+                    name = self._service.symbol_name_for_id(sym.symbolId)
+                    if not name:
+                        continue
+                    spec = {
+                        "lot_size": int(getattr(sym, "lotSize", 0) or 0),
+                        "min_volume": int(getattr(sym, "minVolume", 0) or 0),
+                        "max_volume": int(getattr(sym, "maxVolume", 0) or 0),
+                        "step_volume": int(getattr(sym, "stepVolume", 0) or 0),
+                        "digits": int(getattr(sym, "digits", 0) or 0),
+                        "pip_position": int(getattr(sym, "pipPosition", 0) or 0),
+                    }
+                    self._service._symbol_specs[name] = spec
+                    logger.info(
+                        "cTrader symbol spec %s id=%s lotSize=%s minVolume=%s stepVolume=%s",
+                        name, sym.symbolId, spec["lot_size"],
+                        spec["min_volume"], spec["step_volume"],
+                    )
+                self._service.refresh_position_lots()
 
             elif ptype == 2122:  # ProtoOATraderRes
                 trader_res = msgs.ProtoOATraderRes()
@@ -240,7 +280,12 @@ class CTraderProtocol:
                 for p in reconcile_res.position:
                     side = "BUY" if p.tradeData.tradeSide == 1 else "SELL"
                     sym_name = self._service.symbol_name_for_id(p.tradeData.symbolId)
-                    volume_lots = self._service.protocol_volume_to_lots(p.tradeData.volume)
+                    raw_volume = int(p.tradeData.volume or 0)
+                    volume_lots = self._service.protocol_volume_to_lots(
+                        raw_volume,
+                        sym_name,
+                        lot_size=self._service.lot_size_cents(sym_name),
+                    )
                     # Surface the protection the broker actually holds. A stop
                     # inside the broker's stop level is dropped silently, so
                     # "requested" and "attached" are not the same thing.
@@ -249,6 +294,7 @@ class CTraderProtocol:
                         "symbol_id": p.tradeData.symbolId,
                         "side": side,
                         "quantity": volume_lots,
+                        "volume_cents": raw_volume,
                         "entry_price": self._service.normalize_position_price(
                             getattr(p, "price", None),
                             sym_name,
@@ -262,6 +308,14 @@ class CTraderProtocol:
                 self._service._positions = positions
                 logger.info(f"cTrader positions reconciled: {len(positions)} open")
                 self._subscribe_spots({p["symbol_id"] for p in positions})
+                missing_specs = [
+                    p["symbol_id"]
+                    for p in positions
+                    if p.get("symbol_id")
+                    and not self._service._symbol_specs.get(str(p.get("symbol") or ""))
+                ]
+                if missing_specs:
+                    self._request_symbol_specs(missing_specs)
                 self._service._notify_positions_changed(positions)
 
             elif ptype == 2126:  # ProtoOAExecutionEvent
@@ -290,7 +344,9 @@ class CTraderProtocol:
                             gross_profit = float(raw_gp) / (10 ** money_digits)
                         raw_vol = getattr(close_detail, "closedVolume", None)
                         if raw_vol:
-                            closed_volume = self._service.protocol_volume_to_lots(raw_vol)
+                            closed_volume = self._service.protocol_volume_to_lots(
+                                raw_vol, sym_name
+                            )
 
                     deal_type = getattr(deal, "closePositionType", None)
                     close_type_name = str(deal_type) if deal_type is not None else "CLOSED"
@@ -508,6 +564,7 @@ class CTraderService(BrokerService):
         self._auth_event = threading.Event()
         self._account_id: Optional[int] = None
         self._symbol_ids: Dict[str, int] = dict(self.DEFAULT_SYMBOL_IDS)
+        self._symbol_specs: Dict[str, Dict[str, Any]] = {}
         self._positions: List[Dict[str, Any]] = []
         self._trendbar_cache: Dict[str, List[Dict[str, Any]]] = {}
         self._last_spots: Dict[str, Dict[str, Any]] = {}
@@ -537,23 +594,67 @@ class CTraderService(BrokerService):
         self._sl_restore_sent: Dict[str, float] = {}
 
     # Spotware volume is in cents of a unit (0.01 of 1 unit of the base asset).
-    # 1.00 standard FX lot = 100,000 units = 10,000,000 protocol volume.
+    # FX: 1.00 lot = 100,000 units = 10,000,000 protocol volume.
+    # Metals use the broker lotSize (IC Markets silver = 1,000 oz, not COMEX 5,000).
     VOLUME_CENTS_PER_LOT = 10_000_000
-    MIN_VOLUME_CENTS = 100_000  # 0.01 lot
+    MIN_VOLUME_CENTS = 100_000  # 0.01 FX lot
     STEP_VOLUME_CENTS = 1_000
     CONTRACT_UNITS_PER_LOT = 100_000
-    # Contract size per 1.00 lot. FX is 100,000 units; metals are ounces.
-    # Using 100k for XAGUSD marked a 2-cent silver move as -$187 on 0.01 lots.
+    # IC Markets cTrader commodity sheet: gold 100 oz, silver 1,000 oz per 1.00 lot.
+    # Treating XAGUSD as 5,000 oz made QuantTrade show -€6 while the desk showed -€114
+    # on the same 12-cent move (1,000 oz * $0.12 ≈ $120 / €114).
     UNITS_PER_LOT: Dict[str, float] = {
         "XAUUSD": 100.0,
-        "XAGUSD": 5_000.0,
+        "XAGUSD": 1_000.0,
         "GOLD": 100.0,
-        "SILVER": 5_000.0,
+        "SILVER": 1_000.0,
+    }
+    MIN_VOLUME_CENTS_BY_SYMBOL: Dict[str, int] = {
+        "XAUUSD": 100,     # 1 oz
+        "XAGUSD": 1_000,   # 10 oz
+        "GOLD": 100,
+        "SILVER": 1_000,
     }
 
     @classmethod
-    def units_per_lot(cls, symbol: str) -> float:
+    def lot_size_cents_for(cls, symbol: Optional[str] = None) -> int:
+        name = cls.normalize_symbol_name(symbol) if symbol else ""
+        units = cls.UNITS_PER_LOT.get(name)
+        if units:
+            return int(round(float(units) * 100.0))
+        return cls.VOLUME_CENTS_PER_LOT
+
+    @classmethod
+    def min_volume_cents_for(cls, symbol: Optional[str] = None) -> int:
+        name = cls.normalize_symbol_name(symbol) if symbol else ""
+        return int(cls.MIN_VOLUME_CENTS_BY_SYMBOL.get(name, cls.MIN_VOLUME_CENTS))
+
+    def lot_size_cents(self, symbol: Optional[str] = None) -> int:
+        name = self.normalize_symbol_name(symbol) if symbol else ""
+        spec = self._symbol_specs.get(name) or {}
+        if spec.get("lot_size"):
+            return int(spec["lot_size"])
+        return self.lot_size_cents_for(symbol)
+
+    def min_volume_cents(self, symbol: Optional[str] = None) -> int:
+        name = self.normalize_symbol_name(symbol) if symbol else ""
+        spec = self._symbol_specs.get(name) or {}
+        if spec.get("min_volume"):
+            return int(spec["min_volume"])
+        return self.min_volume_cents_for(symbol)
+
+    def step_volume_cents(self, symbol: Optional[str] = None) -> int:
+        name = self.normalize_symbol_name(symbol) if symbol else ""
+        spec = self._symbol_specs.get(name) or {}
+        if spec.get("step_volume"):
+            return int(spec["step_volume"])
+        return self.STEP_VOLUME_CENTS
+
+    @classmethod
+    def units_per_lot(cls, symbol: str, lot_size_cents: Optional[int] = None) -> float:
         """Base-asset units in one standard lot for mark-to-market P&L."""
+        if lot_size_cents:
+            return float(lot_size_cents) / 100.0
         name = cls.normalize_symbol_name(symbol) if symbol else ""
         return float(cls.UNITS_PER_LOT.get(name, cls.CONTRACT_UNITS_PER_LOT))
 
@@ -568,15 +669,34 @@ class CTraderService(BrokerService):
     MIN_JPY_STOP_PIPS = float(os.getenv("CTRADER_MIN_JPY_STOP_PIPS", "30"))
 
     @classmethod
-    def lots_to_protocol_volume(cls, lots: float) -> int:
-        raw = int(round(float(lots) * cls.VOLUME_CENTS_PER_LOT))
-        raw = max(cls.MIN_VOLUME_CENTS, raw)
-        step = cls.STEP_VOLUME_CENTS
-        return max(cls.MIN_VOLUME_CENTS, int(round(raw / step) * step))
+    def lots_to_protocol_volume(
+        cls,
+        lots: float,
+        symbol: str = "",
+        lot_size: Optional[int] = None,
+        min_volume: Optional[int] = None,
+        step_volume: Optional[int] = None,
+    ) -> int:
+        size = int(lot_size or cls.lot_size_cents_for(symbol))
+        min_vol = int(min_volume or cls.min_volume_cents_for(symbol))
+        step = int(step_volume or cls.STEP_VOLUME_CENTS)
+        raw = int(round(float(lots) * size))
+        raw = max(min_vol, raw)
+        if step > 0:
+            raw = int(round(raw / step) * step)
+        return max(min_vol, raw)
 
     @classmethod
-    def protocol_volume_to_lots(cls, raw: int) -> float:
-        return float(raw) / cls.VOLUME_CENTS_PER_LOT
+    def protocol_volume_to_lots(
+        cls,
+        raw: int,
+        symbol: str = "",
+        lot_size: Optional[int] = None,
+    ) -> float:
+        size = int(lot_size or cls.lot_size_cents_for(symbol))
+        if size <= 0:
+            return 0.0
+        return float(raw) / size
 
     @classmethod
     def relative_stop_units(cls, current_price: float, target_price: float, digits: int) -> int:
@@ -750,6 +870,19 @@ class CTraderService(BrokerService):
             merged[name] = sid
         return merged
 
+    def priority_symbol_ids(self) -> List[int]:
+        """Metals plus any open position — enough to size volume correctly."""
+        wanted: set[int] = set()
+        for name in ("XAUUSD", "XAGUSD", "GOLD", "SILVER"):
+            sid = self._symbol_ids.get(name)
+            if sid:
+                wanted.add(int(sid))
+        for pos in self._positions:
+            sid = pos.get("symbol_id")
+            if sid:
+                wanted.add(int(sid))
+        return sorted(wanted)
+
     def relabel_cached_symbols(self) -> None:
         """Re-apply catalog names after merge (reconcile can beat ProtoOASymbolsListRes)."""
         for pos in self._positions:
@@ -767,6 +900,19 @@ class CTraderService(BrokerService):
             relabeled_spots[name] = spot
         if relabeled_spots:
             self._last_spots = relabeled_spots
+        self.refresh_position_lots()
+
+    def refresh_position_lots(self) -> None:
+        """Recompute displayed lots from protocol cents after lotSize is known."""
+        for pos in self._positions:
+            raw = pos.get("volume_cents")
+            symbol = pos.get("symbol") or ""
+            if raw in (None, 0):
+                continue
+            lots = self.protocol_volume_to_lots(
+                int(raw), symbol, lot_size=self.lot_size_cents(symbol)
+            )
+            pos["quantity"] = lots
 
     def symbol_name_for_id(self, symbol_id: int) -> str:
         """Resolve broker symbolId → name. Catalog-first merge keeps IDs unique."""
@@ -1166,9 +1312,19 @@ class CTraderService(BrokerService):
             symbol = str(enriched.get("symbol") or "")
             mark = self.get_mark_price(symbol, enriched.get("side"))
             entry = float(enriched.get("entry_price") or 0)
-            lots = float(enriched.get("quantity") or 0)
-            if mark and entry and lots:
-                units = lots * self.units_per_lot(symbol)
+            volume_cents = enriched.get("volume_cents")
+            if volume_cents:
+                lots = self.protocol_volume_to_lots(
+                    int(volume_cents), symbol, lot_size=self.lot_size_cents(symbol)
+                )
+                enriched["quantity"] = lots
+                units = float(volume_cents) / 100.0
+            else:
+                lots = float(enriched.get("quantity") or 0)
+                units = lots * self.units_per_lot(
+                    symbol, lot_size_cents=self.lot_size_cents(symbol)
+                )
+            if mark and entry and units:
                 direction = 1 if str(enriched.get("side", "")).upper() == "BUY" else -1
                 quote_pnl = (mark - entry) * units * direction
                 enriched["current_price"] = mark
@@ -1257,8 +1413,15 @@ class CTraderService(BrokerService):
                 logger.error(f"cTrader symbol ID not found for {ct_symbol}")
                 return {"status": "error", "error": f"Unknown symbol {ct_symbol}"}
 
-            # Spotware volume is cents of a unit: 0.01 lot EURUSD = 100_000
-            raw_volume = self.lots_to_protocol_volume(lots)
+            # Spotware volume is cents of a unit. Metals use broker lotSize,
+            # not the FX 10_000_000 cents/lot scale.
+            raw_volume = self.lots_to_protocol_volume(
+                lots,
+                ct_symbol,
+                lot_size=self.lot_size_cents(ct_symbol),
+                min_volume=self.min_volume_cents(ct_symbol),
+                step_volume=self.step_volume_cents(ct_symbol),
+            )
             digits = self.digits_for(ct_symbol)
 
             order_req = msgs.ProtoOANewOrderReq()
@@ -1489,7 +1652,21 @@ class CTraderService(BrokerService):
             req = msgs.ProtoOAClosePositionReq()
             req.ctidTraderAccountId = self._account_id or 0
             req.positionId = int(position_id) if str(position_id).isdigit() else 0
-            req.volume = self.lots_to_protocol_volume(float(lots))
+            if (
+                matched
+                and matched.get("volume_cents")
+                and volume is None
+                and kwargs.get("quantity") is None
+            ):
+                req.volume = int(matched["volume_cents"])
+            else:
+                req.volume = self.lots_to_protocol_volume(
+                    float(lots),
+                    symbol,
+                    lot_size=self.lot_size_cents(symbol),
+                    min_volume=self.min_volume_cents(symbol),
+                    step_volume=self.step_volume_cents(symbol),
+                )
 
             reactor.callFromThread(lambda: self._protocol._send(req, 2111))
             return {
@@ -1535,10 +1712,15 @@ class CTraderService(BrokerService):
             "pip_position": pip_pos,
             "pip_size": pip_size,
             "tick_size": tick_size,
-            "lot_size": self.units_per_lot(ct_symbol),
-            "min_volume": 100_000,
-            "max_volume": 100_000_000,
-            "step_volume": 1_000,
+            "lot_size": self.units_per_lot(
+                ct_symbol, lot_size_cents=self.lot_size_cents(ct_symbol)
+            ),
+            "min_volume": self.min_volume_cents(ct_symbol),
+            "max_volume": int(
+                (self._symbol_specs.get(ct_symbol) or {}).get("max_volume")
+                or 100_000_000
+            ),
+            "step_volume": self.step_volume_cents(ct_symbol),
             "base_asset": base_asset,
             "quote_asset": quote_asset,
             "base_price": base_price,

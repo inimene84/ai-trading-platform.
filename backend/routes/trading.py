@@ -282,12 +282,22 @@ async def get_portfolio():
                         continue
                 mark = ctrader_broker.get_mark_price(sym, direction)
                 cur_price = _coalesce_mark_price(mark, t.entry_price) or 0.0
-                lots = float(t.quantity or 0)
-                units_per_lot = ctrader_broker.units_per_lot(sym)
-                notional = lots * units_per_lot * (t.entry_price or 0.0)
+                live = live_by_pid.get(pid) or live_by_symbol.get(sym)
+                lots = float((live or {}).get("quantity") or t.quantity or 0)
+                volume_cents = (live or {}).get("volume_cents")
+                if volume_cents:
+                    units = float(volume_cents) / 100.0
+                else:
+                    units = lots * ctrader_broker.units_per_lot(
+                        sym, lot_size_cents=ctrader_broker.lot_size_cents(sym)
+                    )
+                notional = units * (t.entry_price or 0.0)
                 total_notional += notional
-                if mark and t.entry_price and lots:
-                    units = lots * units_per_lot
+                if live and live.get("unrealized_pnl") is not None and (
+                    live.get("current_price") or volume_cents
+                ):
+                    u_pnl = float(live["unrealized_pnl"])
+                elif mark and t.entry_price and units:
                     direction_mult = 1 if direction == "BUY" else -1
                     quote_pnl = (mark - float(t.entry_price)) * units * direction_mult
                     rate = ctrader_broker.quote_to_usd_rate(sym, mark)
@@ -310,7 +320,7 @@ async def get_portfolio():
                 "id": t.id,
                 "symbol": t.symbol,
                 "direction": t.direction,
-                "quantity": t.quantity,
+                "quantity": lots if is_ctrader else t.quantity,
                 "entry_price": t.entry_price,
                 "current_price": cur_price,
                 "stop_loss": t.stop_loss,
@@ -849,9 +859,20 @@ async def get_positions():
                         continue
                 mark = ctrader_broker.get_mark_price(sym, direction)
                 current_price = _coalesce_mark_price(mark, t.entry_price)
-                lots = float(t.quantity or 0)
-                if mark and t.entry_price and lots:
-                    units = lots * ctrader_broker.units_per_lot(sym)
+                live = live_by_pid.get(pid) or live_by_symbol.get(sym)
+                lots = float((live or {}).get("quantity") or t.quantity or 0)
+                volume_cents = (live or {}).get("volume_cents")
+                if volume_cents:
+                    units = float(volume_cents) / 100.0
+                else:
+                    units = lots * ctrader_broker.units_per_lot(
+                        sym, lot_size_cents=ctrader_broker.lot_size_cents(sym)
+                    )
+                if live and live.get("unrealized_pnl") is not None and (
+                    live.get("current_price") or volume_cents
+                ):
+                    unrealized_pnl = float(live["unrealized_pnl"])
+                elif mark and t.entry_price and units:
                     direction_mult = 1 if direction == "BUY" else -1
                     quote_pnl = (mark - float(t.entry_price)) * units * direction_mult
                     rate = ctrader_broker.quote_to_usd_rate(sym, mark)
@@ -1186,7 +1207,7 @@ async def get_markets():
         {"symbol": "USDCHF", "display_name": "USD/CHF", "asset_class": "forex", "broker": "ctrader", "lot_size": 100000, "digits": 5, "base": "USD", "quote": "CHF"},
         {"symbol": "NZDUSD", "display_name": "NZD/USD", "asset_class": "forex", "broker": "ctrader", "lot_size": 100000, "digits": 5, "base": "NZD", "quote": "USD"},
         {"symbol": "XAUUSD", "display_name": "Gold / USD", "asset_class": "metals", "broker": "ctrader", "lot_size": 100, "digits": 2, "base": "XAU", "quote": "USD"},
-        {"symbol": "XAGUSD", "display_name": "Silver / USD", "asset_class": "metals", "broker": "ctrader", "lot_size": 5000, "digits": 3, "base": "XAG", "quote": "USD"},
+        {"symbol": "XAGUSD", "display_name": "Silver / USD", "asset_class": "metals", "broker": "ctrader", "lot_size": 1000, "digits": 3, "base": "XAG", "quote": "USD"},
         # Crypto Perpetuals (Binance Futures)
         {"symbol": "BTCUSDT", "display_name": "Bitcoin Perpetual", "asset_class": "crypto", "broker": "binance_futures", "lot_size": 1, "digits": 2, "base": "BTC", "quote": "USDT"},
         {"symbol": "ETHUSDT", "display_name": "Ethereum Perpetual", "asset_class": "crypto", "broker": "binance_futures", "lot_size": 1, "digits": 2, "base": "ETH", "quote": "USDT"},
@@ -1670,7 +1691,10 @@ async def close_position(position_id: int):
             elif exit_price and trade.entry_price:
                 # trade.quantity is lots for cTrader; P&L needs contract units,
                 # and lands in the quote currency until converted.
-                units = float(trade.quantity or 0) * ctrader_broker.units_per_lot(trade.symbol)
+                units = float(trade.quantity or 0) * ctrader_broker.units_per_lot(
+                    trade.symbol,
+                    lot_size_cents=ctrader_broker.lot_size_cents(trade.symbol),
+                )
                 direction = 1 if trade.direction == "BUY" else -1
                 quote_pnl = (exit_price - trade.entry_price) * units * direction
                 rate = ctrader_broker.quote_to_usd_rate(trade.symbol, exit_price)

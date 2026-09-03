@@ -15,11 +15,11 @@ from backend.services.signal_candidate_engine import (
 def test_units_per_lot_uses_ounces_for_metals_not_fx_units():
     assert CTraderService.units_per_lot("EURUSD") == 100_000
     assert CTraderService.units_per_lot("XAUUSD") == 100
-    assert CTraderService.units_per_lot("XAGUSD") == 5_000
+    assert CTraderService.units_per_lot("XAGUSD") == 1_000
 
 
 def test_silver_mark_to_market_is_not_fx_notional():
-    """0.01 silver lots * 2c must not look like a -$187 FX move."""
+    """IC Markets 0.01 lot is 10 oz, not 100k FX units."""
     svc = CTraderService()
     svc._positions = [
         {
@@ -35,8 +35,8 @@ def test_silver_mark_to_market_is_not_fx_notional():
         "XAGUSD": {"bid": 66.905, "ask": 66.905},
     }
     pos = svc.get_positions()[0]
-    # 0.01 * 5000 oz * -0.187 = -9.35
-    assert pos["unrealized_pnl"] == pytest.approx(-9.35, abs=0.05)
+    # 0.01 * 1000 oz * -0.187 = -1.87
+    assert pos["unrealized_pnl"] == pytest.approx(-1.87, abs=0.05)
     assert pos["unrealized_pnl"] > -20
 
 
