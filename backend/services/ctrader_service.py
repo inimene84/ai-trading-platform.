@@ -534,6 +534,7 @@ class CTraderService(BrokerService):
         self._trendbar_events: Dict[str, threading.Event] = {}
         self._recent_deals: Dict[str, Dict[str, Any]] = {}
         self._on_positions_changed_callbacks: List[Any] = []
+        self._sl_restore_sent: Dict[str, float] = {}
 
     # Spotware volume is in cents of a unit (0.01 of 1 unit of the base asset).
     # 1.00 standard FX lot = 100,000 units = 10,000,000 protocol volume.
@@ -561,6 +562,10 @@ class CTraderService(BrokerService):
     MAX_FX_STOP_PIPS = 120
     # Broker stop level. Protection closer than this is silently discarded.
     MIN_FX_STOP_PIPS = float(os.getenv("CTRADER_MIN_STOP_PIPS", "10"))
+    # Exotic JPY crosses (NZDJPY/CHFJPY) have a wider broker stop level than
+    # majors. 10 JPY pips (0.10) is silently discarded; TP survives because
+    # it is farther out. Live NZDJPY/CHFJPY at 21:33 UTC filled with TP and no SL.
+    MIN_JPY_STOP_PIPS = float(os.getenv("CTRADER_MIN_JPY_STOP_PIPS", "30"))
 
     @classmethod
     def lots_to_protocol_volume(cls, lots: float) -> int:
@@ -671,7 +676,10 @@ class CTraderService(BrokerService):
         quiet pair produced 2 pip stops, so live positions ran with no stop
         at all while the wider take-profit survived.
         """
-        return float(cls.pip_size_for(symbol)) * cls.MIN_FX_STOP_PIPS
+        pips = cls.MIN_FX_STOP_PIPS
+        if cls.normalize_symbol_name(symbol).endswith("JPY"):
+            pips = max(pips, cls.MIN_JPY_STOP_PIPS)
+        return float(cls.pip_size_for(symbol)) * pips
 
     @classmethod
     def clamp_protective_prices(
@@ -1263,6 +1271,14 @@ class CTraderService(BrokerService):
             # relativeStopLoss/TP are 1/100000 of a price unit, aligned to symbol digits
             if current_price and stop_loss_price:
                 sl_units = self.relative_stop_units(float(current_price), float(stop_loss_price), digits)
+                step = 10 ** max(0, 5 - int(digits))
+                min_units = int(round(
+                    self.min_protective_distance(ct_symbol, float(current_price))
+                    * self.SPOTWARE_PRICE_SCALE
+                ))
+                min_units = max(step, (min_units // step) * step)
+                if 0 < sl_units < min_units:
+                    sl_units = min_units
                 if sl_units > 0:
                     order_req.relativeStopLoss = sl_units
                 else:
@@ -1334,6 +1350,102 @@ class CTraderService(BrokerService):
             return {"success": True, "message": "Cancel request sent", "order_id": order_id}
         except Exception as e:
             return {"success": False, "message": str(e), "order_id": order_id}
+
+    @classmethod
+    def missing_stop_price(
+        cls,
+        symbol: str,
+        side: str,
+        entry: float,
+        mark: Optional[float] = None,
+    ) -> float:
+        """Absolute stop for a live position that the broker dropped."""
+        entry_f = float(entry)
+        mark_f = float(mark) if mark and float(mark) > 0 else entry_f
+        min_dist = cls.min_protective_distance(symbol, entry_f)
+        digits = cls.digits_for(symbol)
+        if str(side).upper() in ("BUY", "LONG"):
+            sl = min(entry_f - min_dist, mark_f - min_dist)
+        else:
+            sl = max(entry_f + min_dist, mark_f + min_dist)
+        sl, _ = cls.clamp_protective_prices(symbol, entry_f, sl, None, direction=side)
+        return float(round(sl, digits))
+
+    def amend_position_sltp(
+        self,
+        position_id: str | int,
+        stop_loss: Optional[float] = None,
+        take_profit: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Set absolute SL/TP on an open cTrader position (ProtoOAAmendPositionSLTPReq)."""
+        if self._dry_run or not self.is_connected or self._protocol is None:
+            return {
+                "status": "simulated",
+                "position_id": str(position_id),
+                "stop_loss": stop_loss,
+                "take_profit": take_profit,
+            }
+        try:
+            from ctrader_open_api.messages import OpenApiMessages_pb2 as msgs
+            from twisted.internet import reactor
+
+            req = msgs.ProtoOAAmendPositionSLTPReq()
+            req.ctidTraderAccountId = self._account_id or 0
+            req.positionId = int(position_id)
+            if stop_loss:
+                req.stopLoss = float(stop_loss)
+            if take_profit:
+                req.takeProfit = float(take_profit)
+            payload_type = int(getattr(req, "payloadType", 0) or 2113)
+            reactor.callFromThread(lambda: self._protocol._send(req, payload_type))
+            logger.info(
+                "cTrader amend SL/TP sent for %s sl=%s tp=%s",
+                position_id,
+                stop_loss,
+                take_profit,
+            )
+            return {
+                "status": "sent",
+                "position_id": str(position_id),
+                "stop_loss": stop_loss,
+                "take_profit": take_profit,
+            }
+        except Exception as e:
+            logger.error("cTrader amend SL/TP failed for %s: %s", position_id, e)
+            return {"status": "error", "error": str(e), "position_id": str(position_id)}
+
+    def restore_missing_stops(self) -> List[Dict[str, Any]]:
+        """Attach a broker-legal stop to any live position that has none."""
+        restored: List[Dict[str, Any]] = []
+        now = time.time()
+        for pos in self.get_positions():
+            if pos.get("stop_loss"):
+                continue
+            pid = str(pos.get("position_id") or "")
+            if pid and now - self._sl_restore_sent.get(pid, 0) < 60:
+                continue
+            symbol = str(pos.get("symbol") or "")
+            side = str(pos.get("side") or "BUY")
+            entry = float(pos.get("entry_price") or 0)
+            if not symbol or entry <= 0:
+                continue
+            sl = self.missing_stop_price(
+                symbol, side, entry, pos.get("current_price")
+            )
+            res = self.amend_position_sltp(
+                pos.get("position_id"),
+                stop_loss=sl,
+                take_profit=pos.get("take_profit"),
+            )
+            if pid:
+                self._sl_restore_sent[pid] = now
+            restored.append({
+                "symbol": symbol,
+                "position_id": pos.get("position_id"),
+                "stop_loss": sl,
+                "result": res.get("status"),
+            })
+        return restored
 
     def close_position(
         self,

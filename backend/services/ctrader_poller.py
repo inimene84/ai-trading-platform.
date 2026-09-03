@@ -64,7 +64,13 @@ async def sync_ctrader_once() -> dict:
 
         loop = asyncio.get_running_loop()
         live_positions = await loop.run_in_executor(None, ctrader_broker.get_positions)
+        restored = await loop.run_in_executor(None, ctrader_broker.restore_missing_stops)
+        if restored:
+            logger.warning("cTrader restored missing stops: %s", restored)
+            live_positions = await loop.run_in_executor(None, ctrader_broker.get_positions)
         res = reconcile_ctrader_positions(db, live_positions=live_positions, broker=ctrader_broker)
+        if restored:
+            res["restored_stops"] = restored
         return res
     except Exception as exc:
         logger.warning(f"cTrader position sync cycle error: {exc}")

@@ -83,9 +83,27 @@ def test_jpy_minimum_uses_jpy_pip_size():
         "USDJPY", entry, sl, None, direction="SELL"
     )
     assert _pips("USDJPY", entry, clamped_sl) == pytest.approx(
-        CTraderService.MIN_FX_STOP_PIPS, rel=1e-6
+        CTraderService.MIN_JPY_STOP_PIPS, rel=1e-6
     )
     assert clamped_sl > entry, "a short's stop belongs above entry"
+
+
+def test_jpy_cross_minimum_is_wider_than_major_fx():
+    """Live NZDJPY/CHFJPY: 10 JPY pips (0.10) were sent and the broker dropped them."""
+    sl, _ = CTraderService.clamp_protective_prices(
+        "NZDJPY", 91.640, 91.681, None, direction="SELL"
+    )
+    assert sl - 91.640 == pytest.approx(0.30, abs=1e-6)
+    sl, _ = CTraderService.clamp_protective_prices(
+        "CHFJPY", 192.863, 192.960, None, direction="SELL"
+    )
+    assert sl - 192.863 == pytest.approx(0.30, abs=1e-6)
+
+
+def test_missing_stop_price_sits_beyond_mark_for_losing_short():
+    sl = CTraderService.missing_stop_price("CHFJPY", "SELL", 192.863, 193.400)
+    assert sl > 193.400
+    assert sl - 193.400 == pytest.approx(0.30, abs=1e-6)
 
 
 def test_protection_is_forced_onto_the_correct_side():
