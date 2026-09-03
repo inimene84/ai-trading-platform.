@@ -40,6 +40,18 @@ def _loop(risk=None):
     return loop
 
 
+def test_regime_detector_is_reused_per_symbol():
+    loop = _loop()
+    eth_a = loop._regime_detector_for("ETHUSDT")
+    eth_b = loop._regime_detector_for("ETHUSDT")
+    btc = loop._regime_detector_for("BTCUSDT")
+    assert eth_a is eth_b
+    assert eth_a is not btc
+    eth_a._history.append("TRENDING")
+    assert eth_b._history[-1] == "TRENDING"
+    assert btc._history == []
+
+
 # --------------------------------------------------------------------------- #
 # _should_evaluate_bar — entry pipeline runs at most once per bar
 # --------------------------------------------------------------------------- #

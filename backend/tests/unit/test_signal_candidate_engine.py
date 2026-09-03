@@ -4,13 +4,17 @@ Unit tests for the Layered Signal Candidate Engine, Timing Windows, and REST Rou
 
 import pytest
 import time
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 from starlette.testclient import TestClient
 from backend.main import app
 from backend.services.signal_candidate_engine import (
     signal_candidate_engine,
+    SignalCandidateEngine,
     TimingMode,
     CandidateStatus,
+    CANDIDATE_TTL_SECONDS,
+    EQUITY_FALLBACK_USD,
 )
 from backend.services.ctrader_service import CTraderService
 from backend.services.multi_asset_bars import classify_symbol, tf_to_binance_interval
@@ -545,3 +549,105 @@ async def test_execute_candidate_keeps_ready_on_paper_failure():
     assert res["success"] is False
     assert signal_candidate_engine.candidates[sig_id]["status"] == CandidateStatus.READY
     assert signal_candidate_engine.candidates[sig_id]["execution_result"]["success"] is False
+
+
+def test_resolve_equity_uses_live_broker_and_logs_fallback():
+    engine = SignalCandidateEngine()
+    with patch(
+        "backend.services.signal_candidate_engine.ctrader_service.get_balance",
+        return_value={"equity": 40000.0, "balance": 40000.0},
+    ):
+        assert engine._resolve_equity("ctrader") == pytest.approx(40000.0)
+        # Cached — second call must not re-hit the broker.
+        with patch(
+            "backend.services.signal_candidate_engine.ctrader_service.get_balance",
+            side_effect=AssertionError("should use cache"),
+        ):
+            assert engine._resolve_equity("ctrader") == pytest.approx(40000.0)
+
+    engine._equity_cache.clear()
+    with patch(
+        "backend.services.signal_candidate_engine.binance_futures_broker.get_balance",
+        return_value={"equity": 0.0, "balance": 0.0},
+    ):
+        assert engine._resolve_equity("binance_futures") == pytest.approx(EQUITY_FALLBACK_USD)
+
+
+def test_calculate_size_scales_with_live_equity():
+    engine = SignalCandidateEngine()
+    with patch(
+        "backend.services.signal_candidate_engine.ctrader_service.get_balance",
+        return_value={"equity": 10000.0},
+    ):
+        small = engine._calculate_size("EURUSD", 1.0850, 1.0820, "ctrader")
+    engine._equity_cache.clear()
+    with patch(
+        "backend.services.signal_candidate_engine.ctrader_service.get_balance",
+        return_value={"equity": 50000.0},
+    ):
+        large = engine._calculate_size("EURUSD", 1.0850, 1.0820, "ctrader")
+    assert large["risk_usd"] == pytest.approx(small["risk_usd"] * 5.0)
+    assert large["lots"] > small["lots"]
+
+
+def test_calculate_size_crypto_uses_candidate_stop_not_hardcoded_pct():
+    engine = SignalCandidateEngine()
+    with patch(
+        "backend.services.signal_candidate_engine.binance_futures_broker.get_balance",
+        return_value={"equity": 10000.0},
+    ):
+        tight = engine._calculate_size("BTCUSDT", 100.0, 99.8, "binance_futures")
+        wide = engine._calculate_size("BTCUSDT", 100.0, 96.0, "binance_futures")
+    # Same $50 risk: tighter stop → larger qty (sized from the stop, not 0.4%).
+    assert tight["quantity"] > wide["quantity"]
+    assert tight["risk_usd"] == pytest.approx(50.0)
+    assert wide["risk_usd"] == pytest.approx(50.0)
+
+
+def test_prune_terminal_candidates_drops_old_terminal_keeps_live():
+    engine = SignalCandidateEngine()
+    now = int(time.time())
+    old_iso = datetime.fromtimestamp(now - CANDIDATE_TTL_SECONDS - 60, tz=timezone.utc).isoformat()
+    fresh_iso = datetime.fromtimestamp(now - 60, tz=timezone.utc).isoformat()
+    engine.candidates = {
+        "old-exec": {
+            "status": CandidateStatus.EXECUTED,
+            "created_at": old_iso,
+            "latest_exec_at": now - CANDIDATE_TTL_SECONDS - 10,
+        },
+        "fresh-exp": {
+            "status": CandidateStatus.EXPIRED,
+            "created_at": fresh_iso,
+            "latest_exec_at": now - 10,
+        },
+        "live": {
+            "status": CandidateStatus.READY,
+            "created_at": old_iso,
+            "earliest_exec_at": now - 10,
+            "latest_exec_at": now + 600,
+        },
+    }
+    removed = engine._prune_terminal_candidates(now)
+    assert removed == 1
+    assert "old-exec" not in engine.candidates
+    assert "fresh-exp" in engine.candidates
+    assert "live" in engine.candidates
+
+
+def test_get_ready_signals_prunes_stale_terminal_store():
+    engine = SignalCandidateEngine()
+    now = int(time.time())
+    old_iso = datetime.fromtimestamp(now - CANDIDATE_TTL_SECONDS - 5, tz=timezone.utc).isoformat()
+    engine.candidates["stale"] = {
+        "status": CandidateStatus.CANCELLED,
+        "created_at": old_iso,
+        "latest_exec_at": now - CANDIDATE_TTL_SECONDS,
+        "broker": "ctrader",
+        "symbol": "EURUSD",
+        "confidence": 0.9,
+        "earliest_exec_at": now - CANDIDATE_TTL_SECONDS - 100,
+    }
+    with patch.object(engine, "_open_ctrader_symbols", return_value=set()), \
+         patch.object(engine, "_ctrader_execution_slots_remaining", return_value=10):
+        engine.get_ready_signals(current_ts=now, enforce_ctrader_position_cap=False)
+    assert "stale" not in engine.candidates

@@ -10,6 +10,7 @@ from backend.strategies.market_regime import MarketRegimeDetector
 from backend.services.opinion_layer import analyze_symbol as opinion_analyze
 from backend.services.kronos_gate import apply_kronos_gate
 from backend.services import kronos_service
+from backend.services.skill_miner import skill_miner
 
 logger = logging.getLogger(__name__)
 
@@ -122,10 +123,15 @@ class Decision:
     is_pyramid: bool = False
 
 class DecisionEngine:
-    def __init__(self, risk_config: RiskConfig):
+    def __init__(
+        self,
+        risk_config: RiskConfig,
+        regime_detector: Optional[MarketRegimeDetector] = None,
+    ):
         self.config = risk_config
         self.strategy = CombinedStrategy()
-        self.regime_detector = MarketRegimeDetector()
+        # Injected by the trading loop so per-symbol history survives cycles.
+        self.regime_detector = regime_detector or MarketRegimeDetector()
         self.enable_kronos = os.getenv("ENABLE_KRONOS", "true").lower() == "true"
         # Snapshot of the most recent evaluation so the loop can persist a
         # signal row for EVERY symbol it scans (not just executed trades).
@@ -145,6 +151,76 @@ class DecisionEngine:
             "take_profit": tp,
             "approved": approved,
         }
+
+    def _ranging_entries_permitted(self) -> bool:
+        """Config + mode gate. Default is fully off — including paper.
+
+        allow_ranging_entries unlocks the ranging *path*. Live still needs
+        allow_ranging_in_live so a paper experiment cannot leak into production.
+        """
+        if not getattr(self.config, "allow_ranging_entries", False):
+            return False
+        if get_trading_mode() == TradingMode.LIVE and not getattr(
+            self.config, "allow_ranging_in_live", False
+        ):
+            return False
+        return True
+
+    def _ranging_setup_matches(self, symbol: str, signal: Any) -> bool:
+        """Allow ranging only for mean-reversion or a matching mined skill.
+
+        Does not invent win-rate constants; uses CombinedStrategy's source
+        name/reasoning and skill_miner.match_skill. Fail-closed on errors.
+        """
+        strat = str(getattr(signal, "strategy", "") or "").lower()
+        reasoning = str(getattr(signal, "reasoning", "") or "").lower()
+        if strat == "mean_reversion":
+            return True
+        if "mean_reversion" in reasoning or "mean_rev" in reasoning:
+            return True
+        return self._ranging_skill_match(symbol, signal)
+
+    def _ranging_skill_match(self, symbol: str, signal: Any) -> bool:
+        """True when skill miner has a positive-edge skill aligned with this setup."""
+        try:
+            direction = str(getattr(signal, "signal", None) or getattr(signal, "direction", "") or "").upper()
+            ctx = {
+                "symbol": symbol,
+                "direction": direction,
+                "regime": "RANGING",
+                "mean_reversion_signal": direction,
+            }
+            skill = skill_miner.match_skill(ctx)
+            if not skill:
+                return False
+            skill_dir = str(skill.get("direction") or "").lower()
+            wanted = "bullish" if direction == "BUY" else "bearish" if direction == "SELL" else ""
+            if wanted and skill_dir not in (wanted, "neutral"):
+                return False
+            name = str(skill.get("name") or "").lower()
+            desc = str(skill.get("description") or "").lower()
+            looks_ranging = any(
+                token in name or token in desc
+                for token in ("rang", "mean-rev", "mean_rev", "mean rev", "chop")
+            )
+            if not looks_ranging:
+                summary = skill.get("feature_summary") or {}
+                if isinstance(summary, dict):
+                    try:
+                        looks_ranging = abs(float(summary.get("regime", 1.0))) <= 0.25
+                    except (TypeError, ValueError):
+                        looks_ranging = "rang" in str(summary.get("regime", "")).lower()
+            if not looks_ranging:
+                return False
+            edge = float(skill.get("edge_score") or 0.0)
+            avg_pnl = float(skill.get("avg_pnl") or 0.0)
+            return edge > 0.0 or avg_pnl > 0.0
+        except Exception as err:
+            logger.warning("[%s] ranging skill match failed (fail-closed): %s", symbol, err)
+            return False
+
+    def _ranging_entry_allowed(self, symbol: str, signal: Any) -> bool:
+        return self._ranging_entries_permitted() and self._ranging_setup_matches(symbol, signal)
 
     async def evaluate_symbol(
         self,
@@ -282,15 +358,20 @@ class DecisionEngine:
             )
             return None
 
-        # 3b. Early RANGING regime block — skip BEFORE paying for Kronos/LLM.
-        # The _create_entry_decision also blocks RANGING, but that runs AFTER
-        # all the expensive AI analysis. Blocking early saves API costs.
+        # 3b. Early RANGING regime block — skip BEFORE paying for Kronos/LLM
+        # unless the config-gated ranging path matches mean-reversion / a mined
+        # skill. Default (flag off) preserves the historical hard block.
         if regime_result.regime == "RANGING":
-            self._record_eval(
-                symbol, signal.signal, signal.confidence,
-                "RANGING regime: blocked early (saves Kronos/LLM cost)",
+            if not self._ranging_entry_allowed(symbol, signal):
+                self._record_eval(
+                    symbol, signal.signal, signal.confidence,
+                    "RANGING regime: blocked early (saves Kronos/LLM cost)",
+                )
+                return None
+            logger.info(
+                f"[{symbol}] RANGING regime: allowing matching setup "
+                f"(strategy={getattr(signal, 'strategy', '')})"
             )
-            return None
 
         # Adjust signal confidence based on the perp funding rate
         # Funding rate units on Binance: 0.0001 = 0.01% per 8h.
@@ -501,12 +582,13 @@ class DecisionEngine:
                 max_notional = self.account_equity * self.config.max_trade_notional_equity_mult
                 notional = max(trade_usdt, min(notional, max_notional))
         
-        # Block NEW entries in RANGING regime (choppy = no new positions)
-        # Pyramid adds are already separately blocked by the pyramid RANGING check.
-        # Uses the regime passed in from the caller to avoid redundant detection.
+        # Block NEW entries in RANGING regime unless the config-gated ranging
+        # path matched a mean-reversion / mined-skill setup. Pyramid adds stay
+        # blocked in chop regardless of the flag.
         if regime == "RANGING" and not is_pyramid:
-            logger.info(f"[{symbol}] RANGING regime: blocking new entry (flat $25 sizing preserved)")
-            return None
+            if not self._ranging_entry_allowed(symbol, signal):
+                logger.info(f"[{symbol}] RANGING regime: blocking new entry")
+                return None
 
         # Floor at Binance MIN_NOTIONAL ($20 for most symbols, $100 for BTC)
         # BTC uses $100 flat to match Binance min notional requirement.

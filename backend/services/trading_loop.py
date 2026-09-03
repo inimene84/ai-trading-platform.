@@ -7,7 +7,7 @@ import asyncio
 import os
 import structlog
 from datetime import datetime, timezone, timedelta
-from typing import Optional
+from typing import Optional, Dict
 
 import yfinance as yf
 from dotenv import load_dotenv
@@ -22,6 +22,7 @@ from backend.services.binance_websocket import binance_ws
 from backend.services.multi_provider_data import multi_provider_data
 
 from backend.strategies.market_regime import MarketRegimeDetector
+from backend.services.decision_engine import DecisionEngine
 from backend.services.unified_trading import UnifiedTrading, UnifiedOrder, OrderSide, OrderType
 from backend.services.position_manager import get_position_manager
 from backend.services.sentry_state import get_trading_status, is_trading_allowed
@@ -95,8 +96,10 @@ class TradingLoopService:
         self._last_cycle: Optional[str] = None
         self._next_cycle: Optional[str] = None
         self._cycle_count = 0
-        # Market regime detector — one instance shared across all cycles/symbols
-        self._regime_detector = MarketRegimeDetector()
+        # One MarketRegimeDetector per symbol so 5-bar smoothing history
+        # actually accumulates across cycles (a new detector per evaluate
+        # call would reset history every time).
+        self._regime_detectors: Dict[str, MarketRegimeDetector] = {}
         self._unified_trading = None  # Will be set to singleton in start()
         self._pyramid_layers = {}
         self._execution_lock = asyncio.Lock()
@@ -126,6 +129,14 @@ class TradingLoopService:
         # evaluated. The loop cycles every 15 min on 1h bars, so without this
         # the same bar was re-decided up to 4x (churn + redundant LLM cost).
         self._last_eval_bar: dict = {}
+
+    def _regime_detector_for(self, symbol: str) -> MarketRegimeDetector:
+        """Reuse one detector per symbol so regime smoothing can accumulate."""
+        det = self._regime_detectors.get(symbol)
+        if det is None:
+            det = MarketRegimeDetector()
+            self._regime_detectors[symbol] = det
+        return det
 
     @staticmethod
     def _bar_open_age_seconds(bar: dict) -> Optional[float]:
@@ -952,7 +963,6 @@ class TradingLoopService:
         """Inner implementation — runs under the symbol semaphore."""
         import structlog
         structlog.contextvars.bind_contextvars(symbol=symbol)
-        from backend.services.decision_engine import DecisionEngine
         from backend.database.connection import SessionLocal
         from backend.database.models import Trade, TradingSignal
         from datetime import datetime, timezone
@@ -1054,7 +1064,10 @@ class TradingLoopService:
                 current_funding_rate = 0.0
 
             # 4. Evaluate using Decision Engine
-            decision_engine = DecisionEngine(self.risk_config)
+            decision_engine = DecisionEngine(
+                self.risk_config,
+                regime_detector=self._regime_detector_for(symbol),
+            )
             decision_engine.account_equity = getattr(self, "_cycle_equity", 0.0)
             decision = await decision_engine.evaluate_symbol(
                 symbol=symbol,

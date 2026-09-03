@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from backend.services.ctrader_service import CTraderService, ctrader_service
 from backend.services.ctrader_trade_sync import persist_ctrader_execution
 from backend.services.unified_trading import UnifiedTrading, UnifiedOrder, OrderSide, OrderType
+from backend.services.binance_futures_service import binance_futures_broker
 from backend.services.binance_market_data import binance_market_data
 from backend.services.multi_asset_bars import classify_symbol, tf_to_binance_interval
 
@@ -37,9 +38,19 @@ class CandidateStatus:
     CANCELLED = "CANCELLED"
 
 
+TERMINAL_CANDIDATE_STATUSES = frozenset({
+    CandidateStatus.EXECUTED,
+    CandidateStatus.EXPIRED,
+    CandidateStatus.CANCELLED,
+})
+CANDIDATE_TTL_SECONDS = 24 * 3600
+EQUITY_FALLBACK_USD = 10000.0
+
+
 class SignalCandidateEngine:
     def __init__(self):
         self.candidates: Dict[str, Dict[str, Any]] = {}
+        self._equity_cache: Dict[str, float] = {}
         self.timing_config: Dict[str, Any] = {
             "pre_event_window_min": 15,       # Minutes before release to evaluate pre-event
             "at_release_window_sec": 45,      # Max seconds for at-release before moving to post
@@ -48,7 +59,8 @@ class SignalCandidateEngine:
             "max_spread_pips": 2.0,           # Max allowable spread in pips for FX
             "max_slippage_pips": 1.5,         # Max slippage tolerance
             "default_risk_pct": 0.5,          # Default risk % per trade
-            "account_equity_override": 10000.0,
+            # Logged fallback only — live sizing uses broker equity via _resolve_equity().
+            "account_equity_override": EQUITY_FALLBACK_USD,
             "strategies_enabled": {
                 "momentum": True,
                 "fade": True,
@@ -122,6 +134,49 @@ class SignalCandidateEngine:
                 del self.candidates[cid]
                 removed += 1
         return removed
+
+    def _candidate_epoch(self, cand: Dict[str, Any]) -> Optional[float]:
+        """Unix timestamp for TTL age. Prefer executed/created ISO, else latest_exec_at."""
+        for key in ("executed_at", "created_at"):
+            raw = cand.get(key)
+            if not raw:
+                continue
+            try:
+                if isinstance(raw, datetime):
+                    dt = raw if raw.tzinfo else raw.replace(tzinfo=timezone.utc)
+                else:
+                    dt = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+                    if dt.tzinfo is None:
+                        dt = dt.replace(tzinfo=timezone.utc)
+                return dt.timestamp()
+            except Exception:
+                continue
+        latest = cand.get("latest_exec_at")
+        if isinstance(latest, (int, float)):
+            return float(latest)
+        return None
+
+    def _prune_terminal_candidates(self, now_ts: Optional[int] = None) -> int:
+        """Drop EXECUTED/EXPIRED/CANCELLED candidates older than 24h.
+
+        Called on every scan/queue so the in-memory store cannot grow without bound.
+        Live PENDING/READY candidates are never pruned here.
+        """
+        now = int(now_ts if now_ts is not None else time.time())
+        removed = 0
+        for cid, cand in list(self.candidates.items()):
+            if cand.get("status") not in TERMINAL_CANDIDATE_STATUSES:
+                continue
+            epoch = self._candidate_epoch(cand)
+            if epoch is None:
+                continue
+            if now - epoch >= CANDIDATE_TTL_SECONDS:
+                del self.candidates[cid]
+                removed += 1
+        if removed:
+            logger.info("Pruned %s terminal signal candidates older than 24h", removed)
+        return removed
+
     MIN_FEATURE_BARS = 20
     # Entries trigger on the signal timeframe, but stops are sized from a
     # slower one. M5 ATR on a quiet pair produced 2 pip stops that the broker
@@ -367,17 +422,51 @@ class SignalCandidateEngine:
             }
         return None
 
+    def _resolve_equity(self, broker: str) -> float:
+        """Live account equity for risk sizing. $10k is a logged fallback only."""
+        cached = self._equity_cache.get(broker)
+        if cached is not None:
+            return cached
+        fallback = float(
+            self.timing_config.get("account_equity_override", EQUITY_FALLBACK_USD)
+            or EQUITY_FALLBACK_USD
+        )
+        equity = 0.0
+        try:
+            if broker == "ctrader":
+                bal = ctrader_service.get_balance() or {}
+            else:
+                bal = binance_futures_broker.get_balance() or {}
+            equity = float(bal.get("equity") or bal.get("balance") or 0.0)
+        except Exception as err:
+            logger.warning(
+                "Live equity lookup failed for %s (%s); falling back to $%.0f",
+                broker, err, fallback,
+            )
+            self._equity_cache[broker] = fallback
+            return fallback
+        if equity > 0:
+            self._equity_cache[broker] = equity
+            return equity
+        logger.warning(
+            "Live equity unavailable for %s (got %s); falling back to $%.0f",
+            broker, equity, fallback,
+        )
+        self._equity_cache[broker] = fallback
+        return fallback
+
     # ── Sizing Calculator ───────────────────────────────────────────────────
     def _calculate_size(self, symbol: str, entry_price: float, stop_loss: float, broker: str) -> Dict[str, Any]:
-        """Compute exact lot / quantity sizing using pip-margin models."""
-        equity = self.timing_config.get("account_equity_override", 10000.0)
+        """Compute exact lot / quantity sizing from live equity and the candidate stop."""
+        equity = self._resolve_equity(broker)
         risk_pct = self.timing_config.get("default_risk_pct", 0.5)
         risk_amount = (equity * risk_pct) / 100.0
+        stop_distance = abs(float(entry_price) - float(stop_loss or 0.0))
 
         if broker == "ctrader":
             spec = ctrader_service.get_symbol_specification(symbol)
             pip_size = spec.get("pip_size", 0.0001)
-            stop_pips = max(abs(entry_price - stop_loss) / pip_size, 5.0)
+            stop_pips = max(stop_distance / pip_size, 5.0)
 
             # pip_value for 1.0 standard lot
             calc_1lot = ctrader_service.calculate_pip_margin(symbol, 1.0, entry_price, 100.0, "USD")
@@ -397,9 +486,9 @@ class SignalCandidateEngine:
                 "pip_value": calc_final.get("pip_value", 0.0),
             }
         else:
-            # Crypto sizing
-            price_dist = max(abs(entry_price - stop_loss), entry_price * 0.005)
-            qty = round(risk_amount / price_dist, 4) if price_dist > 0 else 0.001
+            # Size from the candidate's own stop. Tiny epsilon only to avoid divide-by-zero.
+            price_dist = stop_distance if stop_distance > 0 else max(abs(entry_price) * 1e-6, 1e-9)
+            qty = round(risk_amount / price_dist, 4)
             qty = max(0.001, min(qty, 100.0))
             return {
                 "lots": qty,
@@ -424,6 +513,9 @@ class SignalCandidateEngine:
                 # Crypto
                 "BTCUSDT", "ETHUSDT", "SOLUSDT",
             ]
+
+        self._equity_cache.clear()
+        self._prune_terminal_candidates()
 
         candidates_generated = []
         now_ts = int(time.time())
@@ -518,6 +610,9 @@ class SignalCandidateEngine:
         """Correlate economic events and news sentiment to propose news-triggered trade setups."""
         from backend.routes.news import get_economic_calendar, get_news_feed, get_market_sentiment
 
+        self._equity_cache.clear()
+        self._prune_terminal_candidates()
+
         news_candidates = []
         try:
             cal_res = await get_economic_calendar()
@@ -598,6 +693,7 @@ class SignalCandidateEngine:
         """Return signals whose timing window is currently open and valid."""
         if not current_ts:
             current_ts = int(time.time())
+        self._prune_terminal_candidates(current_ts)
 
         ready = []
         for cid, cand in list(self.candidates.items()):
