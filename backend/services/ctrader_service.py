@@ -457,6 +457,21 @@ class CTraderService(BrokerService):
     MIN_VOLUME_CENTS = 100_000  # 0.01 lot
     STEP_VOLUME_CENTS = 1_000
     CONTRACT_UNITS_PER_LOT = 100_000
+    # Contract size per 1.00 lot. FX is 100,000 units; metals are ounces.
+    # Using 100k for XAGUSD marked a 2-cent silver move as -$187 on 0.01 lots.
+    UNITS_PER_LOT: Dict[str, float] = {
+        "XAUUSD": 100.0,
+        "XAGUSD": 5_000.0,
+        "GOLD": 100.0,
+        "SILVER": 5_000.0,
+    }
+
+    @classmethod
+    def units_per_lot(cls, symbol: str) -> float:
+        """Base-asset units in one standard lot for mark-to-market P&L."""
+        name = cls.normalize_symbol_name(symbol) if symbol else ""
+        return float(cls.UNITS_PER_LOT.get(name, cls.CONTRACT_UNITS_PER_LOT))
+
     # Bid/ask/trendbar integers are always 1/100000 of a price unit (not 10^digits).
     SPOTWARE_PRICE_SCALE = 100_000
     MAX_FX_STOP_PIPS = 120
@@ -1006,7 +1021,7 @@ class CTraderService(BrokerService):
             entry = float(enriched.get("entry_price") or 0)
             lots = float(enriched.get("quantity") or 0)
             if mark and entry and lots:
-                units = lots * self.CONTRACT_UNITS_PER_LOT
+                units = lots * self.units_per_lot(symbol)
                 direction = 1 if str(enriched.get("side", "")).upper() == "BUY" else -1
                 quote_pnl = (mark - entry) * units * direction
                 enriched["current_price"] = mark
@@ -1269,7 +1284,7 @@ class CTraderService(BrokerService):
             "pip_position": pip_pos,
             "pip_size": pip_size,
             "tick_size": tick_size,
-            "lot_size": 100_000,
+            "lot_size": self.units_per_lot(ct_symbol),
             "min_volume": 100_000,
             "max_volume": 100_000_000,
             "step_volume": 1_000,
@@ -1295,7 +1310,10 @@ class CTraderService(BrokerService):
         pip_size = float(spec["pip_size"])
         tick_size = float(spec["tick_size"])
         lot_size = float(spec["lot_size"])
-        volume_units = max(1000, int(round(lots * lot_size)))
+        # Floor is 0.01 lot in that instrument's units (FX=1000, gold=1, silver=50).
+        # The old max(1000, ...) treated 0.01 gold as 10 lots and inflated metal margin.
+        min_units = max(1, int(round(0.01 * lot_size)))
+        volume_units = max(min_units, int(round(float(lots) * lot_size)))
 
         # Pip Value calculation based on quote asset vs deposit asset
         if spec["quote_asset"] == deposit_asset:

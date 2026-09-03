@@ -283,10 +283,11 @@ async def get_portfolio():
                 mark = ctrader_broker.get_mark_price(sym, direction)
                 cur_price = _coalesce_mark_price(mark, t.entry_price) or 0.0
                 lots = float(t.quantity or 0)
-                notional = lots * ctrader_broker.CONTRACT_UNITS_PER_LOT * (t.entry_price or 0.0)
+                units_per_lot = ctrader_broker.units_per_lot(sym)
+                notional = lots * units_per_lot * (t.entry_price or 0.0)
                 total_notional += notional
                 if mark and t.entry_price and lots:
-                    units = lots * ctrader_broker.CONTRACT_UNITS_PER_LOT
+                    units = lots * units_per_lot
                     direction_mult = 1 if direction == "BUY" else -1
                     quote_pnl = (mark - float(t.entry_price)) * units * direction_mult
                     rate = ctrader_broker.quote_to_usd_rate(sym, mark)
@@ -850,7 +851,7 @@ async def get_positions():
                 current_price = _coalesce_mark_price(mark, t.entry_price)
                 lots = float(t.quantity or 0)
                 if mark and t.entry_price and lots:
-                    units = lots * ctrader_broker.CONTRACT_UNITS_PER_LOT
+                    units = lots * ctrader_broker.units_per_lot(sym)
                     direction_mult = 1 if direction == "BUY" else -1
                     quote_pnl = (mark - float(t.entry_price)) * units * direction_mult
                     rate = ctrader_broker.quote_to_usd_rate(sym, mark)
@@ -1669,7 +1670,7 @@ async def close_position(position_id: int):
             elif exit_price and trade.entry_price:
                 # trade.quantity is lots for cTrader; P&L needs contract units,
                 # and lands in the quote currency until converted.
-                units = float(trade.quantity or 0) * ctrader_broker.CONTRACT_UNITS_PER_LOT
+                units = float(trade.quantity or 0) * ctrader_broker.units_per_lot(trade.symbol)
                 direction = 1 if trade.direction == "BUY" else -1
                 quote_pnl = (exit_price - trade.entry_price) * units * direction
                 rate = ctrader_broker.quote_to_usd_rate(trade.symbol, exit_price)

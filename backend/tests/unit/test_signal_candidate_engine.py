@@ -357,31 +357,40 @@ async def test_execute_candidate_skips_market_closed_without_blocking_queue():
 
 def test_get_ready_signals_forex_only_excludes_crypto():
     now_ts = int(time.time())
-    signal_candidate_engine.candidates["fx-ready"] = {
-        "id": "fx-ready",
-        "symbol": "EURUSD",
-        "broker": "ctrader",
-        "status": CandidateStatus.READY,
-        "confidence": 0.9,
-        "earliest_exec_at": now_ts - 5,
-        "latest_exec_at": now_ts + 600,
-    }
-    signal_candidate_engine.candidates["cr-ready"] = {
-        "id": "cr-ready",
-        "symbol": "BTCUSDT",
-        "broker": "binance_futures",
-        "status": CandidateStatus.READY,
-        "confidence": 0.99,
-        "earliest_exec_at": now_ts - 5,
-        "latest_exec_at": now_ts + 600,
-    }
+    previous = dict(signal_candidate_engine.candidates)
+    signal_candidate_engine.candidates.clear()
+    try:
+        signal_candidate_engine.candidates["fx-ready"] = {
+            "id": "fx-ready",
+            "symbol": "EURUSD",
+            "broker": "ctrader",
+            "status": CandidateStatus.READY,
+            "confidence": 0.9,
+            "earliest_exec_at": now_ts - 5,
+            "latest_exec_at": now_ts + 600,
+        }
+        signal_candidate_engine.candidates["cr-ready"] = {
+            "id": "cr-ready",
+            "symbol": "BTCUSDT",
+            "broker": "binance_futures",
+            "status": CandidateStatus.READY,
+            "confidence": 0.99,
+            "earliest_exec_at": now_ts - 5,
+            "latest_exec_at": now_ts + 600,
+        }
 
-    with patch.object(signal_candidate_engine, "_open_ctrader_position_count", return_value=0):
-        ready = signal_candidate_engine.get_ready_signals(now_ts, forex_only=True, limit=5)
+        with patch.object(
+            signal_candidate_engine, "_open_ctrader_position_count", return_value=0
+        ), patch.object(
+            signal_candidate_engine, "_open_ctrader_symbols", return_value=set()
+        ):
+            ready = signal_candidate_engine.get_ready_signals(now_ts, forex_only=True, limit=5)
 
-    ids = {c["id"] for c in ready}
-    assert "fx-ready" in ids
-    assert "cr-ready" not in ids
+        ids = {c["id"] for c in ready}
+        assert "fx-ready" in ids
+        assert "cr-ready" not in ids
+    finally:
+        signal_candidate_engine.candidates = previous
 
 
 def test_get_ready_signals_forex_only_excludes_metals_by_default():
@@ -496,7 +505,12 @@ def test_get_ready_signals_fills_up_to_ten_open_slots():
 
         with patch.dict(
             signal_candidate_engine.execution_config,
-            {"max_open_ctrader_positions": 10, "max_ready_per_poll": 10, "one_position_per_symbol": True},
+            {
+                "max_open_ctrader_positions": 10,
+                "max_ready_per_poll": 10,
+                "one_position_per_symbol": True,
+                "max_same_base": 0,
+            },
         ), patch.object(
             signal_candidate_engine, "_open_ctrader_position_count", return_value=0
         ), patch.object(

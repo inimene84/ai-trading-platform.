@@ -227,7 +227,12 @@ def reconcile_ctrader_positions(
         if pnl is None and exit_px and row.entry_price and row.quantity and broker is not None:
             try:
                 lots = float(row.quantity or 0)
-                units = lots * getattr(broker, "CONTRACT_UNITS_PER_LOT", 100_000)
+                units_fn = getattr(broker, "units_per_lot", None)
+                units = lots * (
+                    float(units_fn(row.symbol))
+                    if callable(units_fn)
+                    else float(getattr(broker, "CONTRACT_UNITS_PER_LOT", 100_000))
+                )
                 direction_mult = 1 if str(row.direction or "BUY").upper() in ("BUY", "LONG") else -1
                 quote_pnl = (exit_px - float(row.entry_price)) * units * direction_mult
                 rate = broker.quote_to_usd_rate(row.symbol, exit_px)

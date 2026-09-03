@@ -65,8 +65,23 @@ class SignalCandidateEngine:
             ),
             "max_ready_per_poll": int(os.getenv("CTRADER_MAX_READY_PER_POLL", "10")),
             "max_ctrader_lots": float(os.getenv("CTRADER_MAX_LOTS", "0.10")),
+            "max_metal_lots": float(os.getenv("CTRADER_MAX_METAL_LOTS", "0.01")),
             "one_position_per_symbol": os.getenv("CTRADER_ONE_POSITION_PER_SYMBOL", "true").lower() == "true",
-            "include_metals": os.getenv("CTRADER_INCLUDE_METALS", "true").lower() == "true",
+            "include_metals": os.getenv("CTRADER_INCLUDE_METALS", "false").lower() == "true",
+            "max_same_base": int(os.getenv("CTRADER_MAX_SAME_BASE", "2")),
+            "max_candidates": int(os.getenv("CTRADER_MAX_CANDIDATES", "200")),
+        }
+        # High-impact calendar currencies map to the liquid FX pair, never gold.
+        # NZD OCR / AUD GDP used to become XAUUSD SELL and n8n retried forever.
+        self.MACRO_CURRENCY_PAIRS: Dict[str, str] = {
+            "USD": "EURUSD",
+            "EUR": "EURUSD",
+            "GBP": "GBPUSD",
+            "JPY": "USDJPY",
+            "AUD": "AUDUSD",
+            "NZD": "NZDUSD",
+            "CAD": "USDCAD",
+            "CHF": "USDCHF",
         }
 
     def _is_ctrader_forex_candidate(self, cand: Dict[str, Any]) -> bool:
@@ -99,6 +114,63 @@ class SignalCandidateEngine:
         except Exception as err:
             logger.warning(f"Could not read cTrader open symbols: {err}")
             return set()
+
+    @staticmethod
+    def _symbol_base(symbol: str) -> str:
+        sym = str(symbol or "").upper()
+        return sym[:3] if len(sym) >= 6 else sym
+
+    def _open_ctrader_base_counts(self) -> Dict[str, int]:
+        counts: Dict[str, int] = {}
+        for sym in self._open_ctrader_symbols():
+            base = self._symbol_base(sym)
+            if base:
+                counts[base] = counts.get(base, 0) + 1
+        return counts
+
+    def _same_base_slots_available(self, symbol: str) -> bool:
+        cap = int(self.execution_config.get("max_same_base") or 0)
+        if cap <= 0:
+            return True
+        base = self._symbol_base(symbol)
+        return self._open_ctrader_base_counts().get(base, 0) < cap
+
+    def _account_equity(self) -> float:
+        """Live cTrader equity when connected; otherwise the paper override."""
+        try:
+            equity = float(getattr(ctrader_service, "equity", 0) or 0)
+            if equity > 0:
+                return equity
+        except Exception:
+            pass
+        return float(self.timing_config.get("account_equity_override") or 10_000.0)
+
+    def prune_candidates(self, now_ts: Optional[int] = None) -> int:
+        """Drop expired/cancelled rows so the in-memory queue cannot grow without bound."""
+        now_ts = now_ts or int(time.time())
+        kept: Dict[str, Dict[str, Any]] = {}
+        removed = 0
+        for cid, cand in self.candidates.items():
+            status = cand.get("status")
+            latest = int(cand.get("latest_exec_at") or 0)
+            if status in (CandidateStatus.EXPIRED, CandidateStatus.CANCELLED):
+                removed += 1
+                continue
+            if latest and now_ts > latest and status != CandidateStatus.EXECUTED:
+                removed += 1
+                continue
+            kept[cid] = cand
+        max_keep = int(self.execution_config.get("max_candidates") or 200)
+        if len(kept) > max_keep:
+            ordered = sorted(
+                kept.values(),
+                key=lambda c: str(c.get("created_at") or ""),
+                reverse=True,
+            )
+            kept = {c["id"]: c for c in ordered[:max_keep]}
+            removed += len(self.candidates) - len(kept) - removed
+        self.candidates = kept
+        return removed
 
     def _ctrader_execution_slots_remaining(self) -> int:
         cap = int(self.execution_config.get("max_open_ctrader_positions", 10))
@@ -370,7 +442,7 @@ class SignalCandidateEngine:
     # ── Sizing Calculator ───────────────────────────────────────────────────
     def _calculate_size(self, symbol: str, entry_price: float, stop_loss: float, broker: str) -> Dict[str, Any]:
         """Compute exact lot / quantity sizing using pip-margin models."""
-        equity = self.timing_config.get("account_equity_override", 10000.0)
+        equity = self._account_equity()
         risk_pct = self.timing_config.get("default_risk_pct", 0.5)
         risk_amount = (equity * risk_pct) / 100.0
 
@@ -385,7 +457,10 @@ class SignalCandidateEngine:
 
             # lots = risk_amount / (stop_pips * pip_val_1lot)
             lots = round(risk_amount / max(stop_pips * pip_val_1lot, 0.1), 2)
-            lots = max(0.01, min(lots, 10.0))
+            max_lots = float(self.execution_config.get("max_ctrader_lots") or 0.10)
+            if classify_symbol(symbol) == "metal":
+                max_lots = min(max_lots, float(self.execution_config.get("max_metal_lots") or 0.01))
+            lots = max(0.01, min(lots, max_lots if max_lots > 0 else lots, 10.0))
 
             calc_final = ctrader_service.calculate_pip_margin(symbol, lots, entry_price, 100.0, "USD")
             return {
@@ -427,10 +502,15 @@ class SignalCandidateEngine:
 
         candidates_generated = []
         now_ts = int(time.time())
+        self.prune_candidates(now_ts)
 
         for sym in universe:
             try:
                 asset_class = classify_symbol(sym)
+                if asset_class == "metal" and not self.execution_config.get("include_metals"):
+                    continue
+                if self.execution_config.get("forex_only") and asset_class == "crypto":
+                    continue
                 broker = "binance_futures" if asset_class == "crypto" else "ctrader"
 
                 # Ingest bars
@@ -527,10 +607,29 @@ class SignalCandidateEngine:
             events = cal_res.get("events", [])
             high_impact = [e for e in events if e.get("impact") == "high"]
 
-            # Check for USD / EUR / GBP catalysts
+            # Check for major-currency catalysts. Unmapped currencies are skipped
+            # instead of becoming a gold trade.
+            self.prune_candidates()
             for ev in high_impact[:3]:
-                curr = ev.get("currency", "USD")
-                matched_sym = "EURUSD" if curr in ["USD", "EUR"] else "GBPUSD" if curr == "GBP" else "XAUUSD"
+                curr = str(ev.get("currency") or "USD").upper()
+                matched_sym = self.MACRO_CURRENCY_PAIRS.get(curr)
+                if not matched_sym:
+                    logger.info(
+                        "Skipping macro event %s (%s): no FX pair mapping",
+                        ev.get("event"),
+                        curr,
+                    )
+                    continue
+                event_key = f"{curr}:{(ev.get('event') or '').strip().lower()}"
+                already = any(
+                    c.get("strategy") == "MACRO_EVENT_POST_REACTION"
+                    and c.get("symbol") == matched_sym
+                    and (c.get("reason") or "").find(str(ev.get("event") or "")) >= 0
+                    and c.get("status") in (CandidateStatus.PENDING, CandidateStatus.READY)
+                    for c in self.candidates.values()
+                )
+                if already:
+                    continue
 
                 bars = ctrader_service.get_trendbars(matched_sym, "M5", count=30)
                 features = self._compute_features(bars)
@@ -614,10 +713,23 @@ class SignalCandidateEngine:
                 if cand["status"] == CandidateStatus.READY:
                     ready.append(cand)
 
+        self.prune_candidates(current_ts)
         if broker:
             ready = [c for c in ready if c.get("broker") == broker.lower()]
         if forex_only or self.execution_config.get("forex_only"):
             ready = [c for c in ready if self._is_ctrader_forex_candidate(c)]
+        cap = int(self.execution_config.get("max_same_base") or 0)
+        if cap > 0:
+            base_counts = self._open_ctrader_base_counts()
+            limited: List[Dict[str, Any]] = []
+            for cand in ready:
+                base = self._symbol_base(str(cand.get("symbol") or ""))
+                used = base_counts.get(base, 0)
+                if used >= cap:
+                    continue
+                limited.append(cand)
+                base_counts[base] = used + 1
+            ready = limited
 
         ready.sort(key=lambda c: float(c.get("confidence") or 0), reverse=True)
 
@@ -712,14 +824,28 @@ class SignalCandidateEngine:
                 if sym in self._open_ctrader_symbols():
                     return {
                         "success": False,
+                        "skipped": True,
                         "error": f"Already have an open cTrader position in {sym}.",
                     }
+            if not self._same_base_slots_available(str(cand.get("symbol") or "")):
+                base = self._symbol_base(str(cand.get("symbol") or ""))
+                return {
+                    "success": False,
+                    "skipped": True,
+                    "error": (
+                        f"Same-base cap reached for {base} "
+                        f"({self.execution_config.get('max_same_base', 2)} open)."
+                    ),
+                }
 
         # Route through appropriate broker engine
         try:
             qty = cand["sizing"]["lots"] if cand["broker"] == "ctrader" else cand["sizing"]["quantity"]
             if cand["broker"] == "ctrader":
                 max_lots = float(self.execution_config.get("max_ctrader_lots") or 0)
+                if classify_symbol(str(cand.get("symbol") or "")) == "metal":
+                    metal_cap = float(self.execution_config.get("max_metal_lots") or 0.01)
+                    max_lots = min(max_lots or metal_cap, metal_cap)
                 if max_lots > 0:
                     qty = min(float(qty), max_lots)
             side = cand["direction"].upper()
