@@ -144,8 +144,32 @@ class CTraderProtocol:
                         )
                     self._creds["account_id"] = chosen
                     self._service._account_id = chosen
-                    logger.info("cTrader account list: %s; authenticating %s", rows, chosen)
-                    self._send_account_auth()
+                    chosen_row = next((r for r in rows if r["id"] == chosen), {})
+                    account_live = bool(chosen_row.get("is_live"))
+                    current_live = "live.ctraderapi.com" in str(self._creds.get("host") or "")
+                    if account_live != current_live:
+                        correct = "live.ctraderapi.com" if account_live else "demo.ctraderapi.com"
+                        logger.warning(
+                            "cTrader account %s is_live=%s but host is %s — switching to %s",
+                            chosen,
+                            account_live,
+                            self._creds.get("host"),
+                            correct,
+                        )
+                        self._service._host_override = correct
+                        self._service._retry_correct_host = True
+                        self._service._last_protocol_error = (
+                            f"HOST_MISMATCH — account is {'live' if account_live else 'demo'}"
+                        )
+                        self._service._auth_event.set()
+                        if self.transport:
+                            try:
+                                self.transport.loseConnection()
+                            except Exception:
+                                pass
+                    else:
+                        logger.info("cTrader account list: %s; authenticating %s", rows, chosen)
+                        self._send_account_auth()
 
             elif ptype == 2103:  # ProtoOAAccountAuthRes
                 logger.info(f"cTrader Account {self._creds.get('account_id')} authenticated! Ready to trade.")
@@ -502,6 +526,8 @@ class CTraderService(BrokerService):
         self._next_connect_ok_at: float = 0.0
         self._reconnect_delay: float = 5.0
         self._last_protocol_error: Optional[str] = None
+        self._host_override: Optional[str] = None
+        self._retry_correct_host: bool = False
         self._last_order_error: Optional[str] = None
         self._order_ack_event = threading.Event()
         self._trendbar_last_req: Dict[str, float] = {}
@@ -833,8 +859,10 @@ class CTraderService(BrokerService):
         )
         live_confirm = os.getenv("CTRADER_LIVE_CONFIRM", os.getenv("CTRADE_LIVE_CONFIRM", "")).strip()
         is_live = (not paper_mode) and (live_confirm == "I_UNDERSTAND")
-        host = "live.ctraderapi.com" if is_live else "demo.ctraderapi.com"
+        host = self._host_override or ("live.ctraderapi.com" if is_live else "demo.ctraderapi.com")
         port = 5035
+        if self._host_override:
+            logger.info("cTrader using host override %s", host)
 
         self._auth_event.clear()
         self._authenticated = False
@@ -913,8 +941,14 @@ class CTraderService(BrokerService):
                 self._reconnect_delay = 5.0
                 self._next_connect_ok_at = 0.0
                 self._last_protocol_error = None
+                self._retry_correct_host = False
                 logger.info("cTrader connected and authenticated successfully!")
                 return True
+            if self._retry_correct_host and self._host_override:
+                self._retry_correct_host = False
+                self._next_connect_ok_at = 0.0
+                logger.info("cTrader retrying on %s after account-list host mismatch", self._host_override)
+                return self._connect_unlocked()
             self._mark_connect_failure("authentication timed out")
             return False
 
@@ -1651,6 +1685,8 @@ class CTraderService(BrokerService):
             "margin": self.margin,
             "last_error": self._last_protocol_error,
             "connect_cooldown_s": max(0, int(self._next_connect_ok_at - time.time())),
+            "host": self._host_override,
+            "account_id_live": self._account_id,
         }
 
 

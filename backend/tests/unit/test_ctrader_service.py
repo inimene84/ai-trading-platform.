@@ -434,6 +434,11 @@ def test_pick_trader_account_prefers_configured_id():
     assert CTraderService.pick_trader_account_id(rows, 46756268, True) == 46756268
 
 
+def test_demo_account_is_not_selected_as_live():
+    rows = [{"id": 46756268, "is_live": False, "login": 9937385}]
+    assert CTraderService.pick_trader_account_id(rows, 46756268, True) == 46756268
+
+
 def test_pick_trader_account_falls_back_to_live_flag():
     rows = [
         {"id": 11, "is_live": False},
