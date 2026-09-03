@@ -107,11 +107,45 @@ class CTraderProtocol:
             from ctrader_open_api.messages.OpenApiCommonMessages_pb2 import ProtoHeartbeatEvent
 
             if ptype == 2101:  # ProtoOAApplicationAuthRes
-                logger.info("cTrader App authenticated — sending Account Auth (2102)")
-                req = msgs.ProtoOAAccountAuthReq()
-                req.ctidTraderAccountId = self._creds.get("account_id", 0)
-                req.accessToken = self._creds.get("access_token", "")
-                self._send(req, 2102)
+                # Discover accounts for this token first. Authing a stale/wrong
+                # ctidTraderAccountId is a common CANT_ROUTE_REQUEST cause.
+                if hasattr(msgs, "ProtoOAGetAccountListByAccessTokenReq"):
+                    logger.info("cTrader App authenticated — requesting account list (2149)")
+                    req = msgs.ProtoOAGetAccountListByAccessTokenReq()
+                    req.accessToken = self._creds.get("access_token", "")
+                    self._send(req, 2149)
+                else:
+                    self._send_account_auth()
+
+            elif ptype == 2150:  # ProtoOAGetAccountListByAccessTokenRes
+                res = msgs.ProtoOAGetAccountListByAccessTokenRes()
+                res.ParseFromString(msg.payload)
+                rows = []
+                for acc in getattr(res, "ctidTraderAccount", []) or []:
+                    rows.append({
+                        "id": int(getattr(acc, "ctidTraderAccountId", 0) or 0),
+                        "is_live": bool(getattr(acc, "isLive", False)),
+                        "login": int(getattr(acc, "traderLogin", 0) or 0),
+                    })
+                prefer_live = "live.ctraderapi.com" in str(self._creds.get("host") or "")
+                wanted = int(self._creds.get("account_id") or 0)
+                chosen = CTraderService.pick_trader_account_id(rows, wanted, prefer_live)
+                if not chosen:
+                    logger.error("cTrader token has no trader accounts")
+                    self._service._last_protocol_error = "NO_ACCOUNTS"
+                    self._service._auth_event.set()
+                else:
+                    if chosen != wanted:
+                        logger.warning(
+                            "cTrader configured account %s not in token list %s; using %s",
+                            wanted,
+                            [r["id"] for r in rows],
+                            chosen,
+                        )
+                    self._creds["account_id"] = chosen
+                    self._service._account_id = chosen
+                    logger.info("cTrader account list: %s; authenticating %s", rows, chosen)
+                    self._send_account_auth()
 
             elif ptype == 2103:  # ProtoOAAccountAuthRes
                 logger.info(f"cTrader Account {self._creds.get('account_id')} authenticated! Ready to trade.")
@@ -326,18 +360,38 @@ class CTraderProtocol:
             elif ptype == 2142:  # ProtoOAErrorRes
                 err = msgs.ProtoOAErrorRes()
                 err.ParseFromString(msg.payload)
-                logger.error(f"cTrader Protocol Error: {err.errorCode} — {err.description}")
+                code = str(getattr(err, "errorCode", "") or "")
+                desc = str(getattr(err, "description", "") or "")
+                logger.error(f"cTrader Protocol Error: {code} — {desc}")
+                self._service._last_protocol_error = f"{code} — {desc}".strip(" —")
                 self._service._auth_event.set()
+                if self.transport:
+                    try:
+                        self.transport.loseConnection()
+                    except Exception:
+                        pass
 
         except Exception as e:
             logger.error(f"cTrader protocol handle error (ptype={ptype}): {e}")
 
+    def _send_account_auth(self) -> None:
+        from ctrader_open_api.messages import OpenApiMessages_pb2 as msgs
+
+        req = msgs.ProtoOAAccountAuthReq()
+        req.ctidTraderAccountId = self._creds.get("account_id", 0)
+        req.accessToken = self._creds.get("access_token", "")
+        logger.info("cTrader sending Account Auth (2102) for %s", req.ctidTraderAccountId)
+        self._send(req, 2102)
+
     def connectionLost(self, reason):
         logger.warning(f"cTrader connection lost: {reason}")
+        was_authenticated = self._service._authenticated
         self._service._connected = False
         self._service._authenticated = False
         self._service._protocol = None
-        if not self._service._dry_run:
+        # Only retry after a live session drops. Retrying failed account-auth
+        # stacks TCP sessions and Spotware answers CANT_ROUTE_REQUEST.
+        if was_authenticated and not self._service._intentional_disconnect:
             self._service._schedule_reconnect()
 
 
@@ -443,7 +497,11 @@ class CTraderService(BrokerService):
         self._trader_login: int = 0
         self._reconnect_pending = False
         self._reconnect_lock = threading.Lock()
+        self._connect_lock = threading.Lock()
         self._intentional_disconnect = False
+        self._next_connect_ok_at: float = 0.0
+        self._reconnect_delay: float = 5.0
+        self._last_protocol_error: Optional[str] = None
         self._last_order_error: Optional[str] = None
         self._order_ack_event = threading.Event()
         self._trendbar_last_req: Dict[str, float] = {}
@@ -706,6 +764,24 @@ class CTraderService(BrokerService):
         )
         return bool(client_id and access_token)
 
+    @staticmethod
+    def pick_trader_account_id(
+        accounts: List[Dict[str, Any]],
+        wanted: int,
+        prefer_live: bool,
+    ) -> Optional[int]:
+        """Choose a ctidTraderAccountId from ProtoOAGetAccountListByAccessTokenRes."""
+        valid = [a for a in accounts if int(a.get("id") or 0) > 0]
+        if not valid:
+            return None
+        ids = {int(a["id"]) for a in valid}
+        if wanted in ids:
+            return int(wanted)
+        for acc in valid:
+            if bool(acc.get("is_live")) == prefer_live:
+                return int(acc["id"])
+        return int(valid[0]["id"])
+
     def ensure_connected(self) -> bool:
         """Connect to cTrader when credentials exist.
 
@@ -716,6 +792,8 @@ class CTraderService(BrokerService):
             return True
         if not self.has_credentials():
             return False
+        if time.time() < self._next_connect_ok_at:
+            return False
         self._intentional_disconnect = False
         return self.connect()
 
@@ -725,9 +803,24 @@ class CTraderService(BrokerService):
 
     def connect(self) -> bool:
         """Authenticate and connect to cTrader Open API."""
+        with self._connect_lock:
+            if self.is_connected and not self._dry_run:
+                return True
+            if time.time() < self._next_connect_ok_at:
+                remaining = self._next_connect_ok_at - time.time()
+                logger.warning("cTrader connect cooling down for %.0fs", remaining)
+                return False
+            return self._connect_unlocked()
+
+    def _connect_unlocked(self) -> bool:
         tokens = token_store.get_tokens()
         client_id = tokens.get("client_id") or os.getenv("CTRADER_CLIENT_ID", "")
-        access_token = token_store.refresh_if_needed() or tokens.get("access_token") or os.getenv("CTRADER_ACCESS_TOKEN", "")
+        force_refresh = "CANT_ROUTE" in str(self._last_protocol_error or "")
+        access_token = (
+            token_store.refresh_if_needed(force=force_refresh)
+            or tokens.get("access_token")
+            or os.getenv("CTRADER_ACCESS_TOKEN", "")
+        )
         account_id = tokens.get("account_id") or int(os.getenv("CTRADER_ACCOUNT_ID", "0") or 0)
 
         if not client_id or not access_token:
@@ -817,12 +910,13 @@ class CTraderService(BrokerService):
 
             if self._authenticated:
                 self._reconnect_pending = False
+                self._reconnect_delay = 5.0
+                self._next_connect_ok_at = 0.0
+                self._last_protocol_error = None
                 logger.info("cTrader connected and authenticated successfully!")
                 return True
-            else:
-                logger.warning("cTrader authentication timed out — falling back to paper/dry-run")
-                self._dry_run = True
-                return False
+            self._mark_connect_failure("authentication timed out")
+            return False
 
         except ImportError:
             logger.info("Twisted networking stack not installed locally. Operating in simulated paper mode.")
@@ -830,8 +924,19 @@ class CTraderService(BrokerService):
             return True
         except Exception as e:
             logger.error(f"cTrader connect error: {e}")
-            self._dry_run = True
+            self._mark_connect_failure(str(e))
             return False
+
+    def _mark_connect_failure(self, reason: str) -> None:
+        self._dry_run = True
+        delay = 60.0 if "CANT_ROUTE" in str(self._last_protocol_error or reason) else self._reconnect_delay
+        self._next_connect_ok_at = time.time() + delay
+        self._reconnect_delay = min(max(delay, self._reconnect_delay) * 2.0, 180.0)
+        logger.warning(
+            "cTrader authentication failed (%s) — paper/dry-run; retry in %.0fs",
+            reason or self._last_protocol_error or "unknown",
+            delay,
+        )
 
     def _schedule_reconnect(self):
         """Auto-reconnect with exponential backoff on unexpected disconnect."""
@@ -1544,6 +1649,8 @@ class CTraderService(BrokerService):
             "balance": self.balance,
             "equity": self.equity,
             "margin": self.margin,
+            "last_error": self._last_protocol_error,
+            "connect_cooldown_s": max(0, int(self._next_connect_ok_at - time.time())),
         }
 
 

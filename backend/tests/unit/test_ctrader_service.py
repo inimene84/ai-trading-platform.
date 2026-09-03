@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from backend.brokers.base import BrokerService
-from backend.services.ctrader_service import CTraderService, ctrader_broker
+from backend.services.ctrader_service import CTraderProtocol, CTraderService, ctrader_broker
 from backend.services.ctrader_tokens import CTraderTokenStore
 
 
@@ -424,3 +424,43 @@ def test_get_trendbars_live_missing_symbol_id_returns_empty():
 
     bars = svc.get_trendbars("EURUSD", "H1", count=40)
     assert bars == []
+
+
+def test_pick_trader_account_prefers_configured_id():
+    rows = [
+        {"id": 111, "is_live": True},
+        {"id": 46756268, "is_live": True},
+    ]
+    assert CTraderService.pick_trader_account_id(rows, 46756268, True) == 46756268
+
+
+def test_pick_trader_account_falls_back_to_live_flag():
+    rows = [
+        {"id": 11, "is_live": False},
+        {"id": 22, "is_live": True},
+    ]
+    assert CTraderService.pick_trader_account_id(rows, 999, True) == 22
+    assert CTraderService.pick_trader_account_id(rows, 999, False) == 11
+
+
+def test_failed_auth_connection_lost_does_not_reconnect():
+    svc = CTraderService()
+    svc._authenticated = False
+    svc._dry_run = False
+    svc._intentional_disconnect = False
+    svc._schedule_reconnect = MagicMock()
+    proto = CTraderProtocol.__new__(CTraderProtocol)
+    proto._service = svc
+    proto.connectionLost("auth failed")
+    svc._schedule_reconnect.assert_not_called()
+
+
+def test_authenticated_drop_does_reconnect():
+    svc = CTraderService()
+    svc._authenticated = True
+    svc._intentional_disconnect = False
+    svc._schedule_reconnect = MagicMock()
+    proto = CTraderProtocol.__new__(CTraderProtocol)
+    proto._service = svc
+    proto.connectionLost("socket closed")
+    svc._schedule_reconnect.assert_called_once()
