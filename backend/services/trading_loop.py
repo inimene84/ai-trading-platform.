@@ -96,6 +96,12 @@ class TradingLoopService:
         self._cycle_count = 0
         # Market regime detector — one instance shared across all cycles/symbols
         self._regime_detector = MarketRegimeDetector()
+        # Per-symbol regime detectors injected into each cycle's DecisionEngine.
+        # The detector's 5-bar transition smoothing depends on _history
+        # persisting across calls; a fresh DecisionEngine per cycle used to
+        # wipe it, making smoothing dead code. Keyed by symbol so histories
+        # don't mix across instruments.
+        self._regime_detectors: dict = {}
         self._unified_trading = None  # Will be set to singleton in start()
         self._pyramid_layers = {}
         self._execution_lock = asyncio.Lock()
@@ -1044,6 +1050,13 @@ class TradingLoopService:
 
             # 4. Evaluate using Decision Engine
             decision_engine = DecisionEngine(self.risk_config)
+            # Inject the persistent per-symbol regime detector so the detector's
+            # transition smoothing survives across cycles (see __init__ note).
+            detector = self._regime_detectors.get(symbol)
+            if detector is None:
+                detector = MarketRegimeDetector()
+                self._regime_detectors[symbol] = detector
+            decision_engine.regime_detector = detector
             decision_engine.account_equity = getattr(self, "_cycle_equity", 0.0)
             decision = await decision_engine.evaluate_symbol(
                 symbol=symbol,

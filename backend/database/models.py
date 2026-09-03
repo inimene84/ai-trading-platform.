@@ -282,3 +282,39 @@ class StrategySkill(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     last_mined_at = Column(DateTime(timezone=True), nullable=True)
+
+
+# ═══ P1: Shadow PnL outcomes (gate effectiveness measurement) ═══
+
+class ShadowOutcome(Base):
+    """Hypothetical outcome of a BLOCKED/vetoed signal.
+
+    One row per TradingSignal that a gate refused (Kronos veto, RANGING block,
+    funding gate, min-edge gate, ...). The tracker walks 1h bars forward from
+    the signal and records what WOULD have happened. Aggregated per gate this
+    answers: is the gate saving money (blocked losers) or costing money
+    (blocked winners)?
+    """
+    __tablename__ = "shadow_outcomes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    signal_id = Column(Integer, unique=True, nullable=False, index=True)  # TradingSignal.id (score-once)
+    symbol = Column(String(20), nullable=False, index=True)
+    direction = Column(String(10), nullable=False)       # BUY | SELL
+    gate = Column(String(40), nullable=False, index=True)  # classify_gate() output
+    signal_time = Column(DateTime(timezone=True), nullable=False, index=True)
+    confidence = Column(Float, nullable=False, default=0.0)
+
+    entry_price = Column(Float, nullable=False)
+    stop_loss = Column(Float, nullable=False)
+    take_profit = Column(Float, nullable=False)
+    exit_price = Column(Float, nullable=False)
+    exit_reason = Column(String(10), nullable=False)     # sl | tp | timeout
+
+    pnl_pct = Column(Float, nullable=False)              # signed % captured, direction-aware
+    pnl_r = Column(Float, nullable=False)                # PnL in R multiples (risk = entry→SL)
+    mfe_r = Column(Float, nullable=False, default=0.0)   # max favorable excursion (R)
+    mae_r = Column(Float, nullable=False, default=0.0)   # max adverse excursion (R, negative)
+    bars_elapsed = Column(Integer, nullable=False, default=0)
+
+    scored_at = Column(DateTime(timezone=True), server_default=func.now())
