@@ -80,10 +80,9 @@ def test_status_uses_broker_balance():
         "equity": 91.5,
         "margin_used": 47.0,
     }
-    # status() reads paper portfolio unless trading mode is LIVE. Patch the
-    # module used by the late import in _get_effective_balance.
+    # status() reads paper portfolio unless trading mode is LIVE.
     with patch(
-        "backend.services.trading_mode.get_trading_mode",
+        "backend.services.trading_loop.get_trading_mode",
         return_value=TradingMode.LIVE,
     ), patch(
         "backend.services.trading_loop.get_active_broker",
@@ -104,13 +103,13 @@ def test_status_uses_paper_portfolio_in_paper_mode():
         "margin_used": 47.0,
     }
     with patch(
-        "backend.services.trading_mode.get_trading_mode",
+        "backend.services.trading_loop.get_trading_mode",
         return_value=TradingMode.PAPER,
     ), patch(
         "backend.services.trading_loop.get_active_broker",
         return_value=mock_broker,
     ), patch(
-        "backend.services.unified_trading.trading_router.get_paper_portfolio",
+        "backend.services.unified_trading.UnifiedTrading.get_paper_portfolio",
         return_value={"cash": 12.0, "equity": 15.0, "margin_used": 3.0},
     ):
         st = loop.status
