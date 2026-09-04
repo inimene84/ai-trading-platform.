@@ -7,6 +7,7 @@ import {
 import { cn } from '../lib/utils';
 import { useToast } from './Toast';
 import { apiService } from '../services/apiService';
+import type { FeedQuote } from '../services/apiService';
 import { fetchBinance } from '../services/binanceProxy';
 
 interface MarketItem {
@@ -20,14 +21,66 @@ interface MarketItem {
   up: boolean;
   broker: 'binance_futures' | 'ctrader';
   assetClass: 'crypto' | 'forex' | 'metals' | 'indices';
+  stale?: boolean;
+  source?: string;
 }
+
+const METAL_NAMES: Record<string, string> = {
+  XAUUSD: 'Gold',
+  XAGUSD: 'Silver',
+  XPTUSD: 'Platinum',
+  XPDUSD: 'Palladium',
+};
+
+function quoteToMarketItem(q: FeedQuote): MarketItem {
+  const isMetal = q.asset_class === 'metal';
+  const isForex = q.asset_class === 'forex';
+  const price = q.price ?? 0;
+  const changePct = q.change_pct ?? 0;
+  const baseAsset =
+    METAL_NAMES[q.symbol] ||
+    ((isMetal || isForex) && q.symbol.length === 6 ? q.symbol.slice(0, 3) : q.symbol);
+  return {
+    symbol: q.symbol,
+    baseAsset,
+    quoteAsset: 'USD',
+    price:
+      price > 0
+        ? price.toLocaleString(undefined, {
+            minimumFractionDigits: isForex ? 4 : 2,
+            maximumFractionDigits: isForex ? 4 : 2,
+          })
+        : '—',
+    numericPrice: price,
+    change: `${changePct >= 0 ? '+' : ''}${changePct.toFixed(2)}%`,
+    volume: q.volume != null && q.volume > 0 ? `$${(q.volume / 1e6).toFixed(1)}M` : '—',
+    up: changePct >= 0,
+    broker: 'ctrader' as const,
+    assetClass: isMetal ? ('metals' as const) : isForex ? ('forex' as const) : ('indices' as const),
+    stale: q.stale || price <= 0,
+    source: q.source,
+  };
+}
+
+const FALLBACK_MARKETS: MarketItem[] = [
+  { symbol: 'EURUSD', baseAsset: 'EUR', quoteAsset: 'USD', price: '1.0854', numericPrice: 1.0854, change: '+0.18%', volume: '$1.2B', up: true, broker: 'ctrader', assetClass: 'forex', stale: true, source: 'placeholder' },
+  { symbol: 'GBPUSD', baseAsset: 'GBP', quoteAsset: 'USD', price: '1.2942', numericPrice: 1.2942, change: '-0.12%', volume: '$1.2B', up: false, broker: 'ctrader', assetClass: 'forex', stale: true, source: 'placeholder' },
+  { symbol: 'USDJPY', baseAsset: 'USD', quoteAsset: 'JPY', price: '154.22', numericPrice: 154.22, change: '+0.45%', volume: '$1.2B', up: true, broker: 'ctrader', assetClass: 'forex', stale: true, source: 'placeholder' },
+  { symbol: 'AUDUSD', baseAsset: 'AUD', quoteAsset: 'USD', price: '0.6534', numericPrice: 0.6534, change: '-0.24%', volume: '$1.2B', up: false, broker: 'ctrader', assetClass: 'forex', stale: true, source: 'placeholder' },
+  { symbol: 'USDCAD', baseAsset: 'USD', quoteAsset: 'CAD', price: '1.3812', numericPrice: 1.3812, change: '+0.08%', volume: '$1.2B', up: true, broker: 'ctrader', assetClass: 'forex', stale: true, source: 'placeholder' },
+  { symbol: 'USDCHF', baseAsset: 'USD', quoteAsset: 'CHF', price: '0.8845', numericPrice: 0.8845, change: '-0.05%', volume: '$1.2B', up: false, broker: 'ctrader', assetClass: 'forex', stale: true, source: 'placeholder' },
+  { symbol: 'NZDUSD', baseAsset: 'NZD', quoteAsset: 'USD', price: '0.5982', numericPrice: 0.5982, change: '-0.31%', volume: '$1.2B', up: false, broker: 'ctrader', assetClass: 'forex', stale: true, source: 'placeholder' },
+  { symbol: 'XAUUSD', baseAsset: 'Gold', quoteAsset: 'USD', price: '2,735.60', numericPrice: 2735.6, change: '+0.82%', volume: '$185M', up: true, broker: 'ctrader', assetClass: 'metals', stale: true, source: 'placeholder' },
+  { symbol: 'XAGUSD', baseAsset: 'Silver', quoteAsset: 'USD', price: '32.45', numericPrice: 32.45, change: '+1.45%', volume: '$185M', up: true, broker: 'ctrader', assetClass: 'metals', stale: true, source: 'placeholder' },
+];
 
 export const MarketsView: React.FC = () => {
   const { showToast } = useToast();
-  const [activeTab, setActiveTab] = useState<'all' | 'crypto' | 'forex' | 'metals' | 'watchlist'>('all');
+  const [activeTab, setActiveTab] = useState<'all' | 'crypto' | 'forex' | 'metals' | 'indices' | 'watchlist'>('all');
   const [search, setSearch] = useState('');
   const [markets, setMarkets] = useState<MarketItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [feedStale, setFeedStale] = useState(false);
   const [watchlist, setWatchlist] = useState<Set<string>>(new Set(['BTCUSDT', 'EURUSD', 'XAUUSD', 'ETHUSDT']));
 
   // Order Ticket Modal State
@@ -67,33 +120,26 @@ export const MarketsView: React.FC = () => {
         console.warn('Binance crypto fetch fallback:', err);
       }
 
-      // 2. Fetch Forex & Metals from cTrader backend catalog
-      const forexBase = [
-        { symbol: 'EURUSD', base: 'EUR', quote: 'USD', price: 1.0854, change: '+0.18%', up: true, class: 'forex' as const },
-        { symbol: 'GBPUSD', base: 'GBP', quote: 'USD', price: 1.2942, change: '-0.12%', up: false, class: 'forex' as const },
-        { symbol: 'USDJPY', base: 'USD', quote: 'JPY', price: 154.22, change: '+0.45%', up: true, class: 'forex' as const },
-        { symbol: 'AUDUSD', base: 'AUD', quote: 'USD', price: 0.6534, change: '-0.24%', up: false, class: 'forex' as const },
-        { symbol: 'USDCAD', base: 'USD', quote: 'CAD', price: 1.3812, change: '+0.08%', up: true, class: 'forex' as const },
-        { symbol: 'USDCHF', base: 'USD', quote: 'CHF', price: 0.8845, change: '-0.05%', up: false, class: 'forex' as const },
-        { symbol: 'NZDUSD', base: 'NZD', quote: 'USD', price: 0.5982, change: '-0.31%', up: false, class: 'forex' as const },
-        { symbol: 'XAUUSD', base: 'Gold', quote: 'USD', price: 2735.60, change: '+0.82%', up: true, class: 'metals' as const },
-        { symbol: 'XAGUSD', base: 'Silver', quote: 'USD', price: 32.45, change: '+1.45%', up: true, class: 'metals' as const },
-      ];
-
-      forexBase.forEach(f => {
-        items.push({
-          symbol: f.symbol,
-          baseAsset: f.base,
-          quoteAsset: f.quote,
-          price: f.price.toLocaleString(undefined, { minimumFractionDigits: f.class === 'forex' ? 4 : 2 }),
-          numericPrice: f.price,
-          change: f.change,
-          volume: f.class === 'metals' ? '$185M' : '$1.2B',
-          up: f.up,
-          broker: 'ctrader' as const,
-          assetClass: f.class,
-        });
-      });
+      // 2. Fetch Equities, Forex & Metals from the unified feed
+      try {
+        const overview = await apiService.getFeedOverview();
+        const feedQuotes: FeedQuote[] = [
+          ...(overview.equities || []),
+          ...(overview.metals || []),
+        ];
+        try {
+          const fx = await apiService.getFeedQuotes(undefined, 'forex');
+          feedQuotes.push(...(fx.quotes || []));
+        } catch (fxErr) {
+          console.warn('Forex quotes fetch fallback:', fxErr);
+        }
+        items.push(...feedQuotes.map(quoteToMarketItem));
+        setFeedStale(false);
+      } catch (err) {
+        console.warn('Unified feed overview unavailable, using stale placeholders:', err);
+        setFeedStale(true);
+        items.push(...FALLBACK_MARKETS);
+      }
 
       setMarkets(items);
     } catch (e) {
@@ -219,6 +265,7 @@ export const MarketsView: React.FC = () => {
           { id: 'crypto', label: 'Crypto Perpetuals', count: markets.filter(m => m.assetClass === 'crypto').length, icon: Zap },
           { id: 'forex', label: 'Forex (cTrader)', count: markets.filter(m => m.assetClass === 'forex').length, icon: Globe },
           { id: 'metals', label: 'Metals & CFDs', count: markets.filter(m => m.assetClass === 'metals').length, icon: Sparkles },
+          { id: 'indices', label: 'Equities & Indices', count: markets.filter(m => m.assetClass === 'indices').length, icon: TrendingUp },
           { id: 'watchlist', label: 'Watchlist', count: watchlist.size, icon: Star },
         ].map((tab) => {
           const Icon = tab.icon;
@@ -242,6 +289,13 @@ export const MarketsView: React.FC = () => {
           );
         })}
       </div>
+
+      {feedStale && (
+        <div className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-400 text-xs font-bold">
+          <AlertCircle size={14} />
+          Unified feed unavailable — showing placeholder data marked STALE. Retrying every 30s.
+        </div>
+      )}
 
       {/* Main Markets Table */}
       <div className="flex-1 bg-[#141416]/90 backdrop-blur-md border border-zinc-800 rounded-2xl overflow-hidden shadow-xl flex flex-col">
@@ -291,8 +345,20 @@ export const MarketsView: React.FC = () => {
                         {m.baseAsset.substring(0, 3)}
                       </div>
                       <div>
-                        <span className="font-bold text-zinc-100 block leading-tight">{m.baseAsset}</span>
-                        <span className="text-[10px] text-zinc-500 font-mono uppercase">{m.baseAsset}/{m.quoteAsset}</span>
+                        <span className="font-bold text-zinc-100 block leading-tight">
+                          {m.baseAsset}
+                          {m.stale && (
+                            <span className="ml-1.5 px-1 py-0.5 rounded text-[8px] font-black uppercase bg-amber-500/15 text-amber-400 border border-amber-500/30 align-middle">
+                              Stale
+                            </span>
+                          )}
+                        </span>
+                        <span className="text-[10px] text-zinc-500 font-mono uppercase">
+                          {m.baseAsset}/{m.quoteAsset}
+                          {m.source && m.source !== 'placeholder' && (
+                            <span className="ml-1 text-zinc-600 normal-case">· {m.source}</span>
+                          )}
+                        </span>
                       </div>
                     </div>
                   </td>
