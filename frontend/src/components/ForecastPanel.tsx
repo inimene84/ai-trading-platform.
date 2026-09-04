@@ -136,17 +136,25 @@ function ForecastChart({
   useEffect(() => {
     if (!histSeriesRef.current || !fcSeriesRef.current) return;
 
-    const histData = bars
-      .map(b => ({ time: toChartTime(b.time) as any, value: b.close }))
-      .filter(p => p.time > 0)
-      .sort((a, b) => a.time - b.time);
+    const histByTime = new Map<number, number>();
+    for (const b of bars) {
+      const t = toChartTime(b.time);
+      if (t > 0) histByTime.set(t, b.close);
+    }
+    const histData = Array.from(histByTime.entries())
+      .sort((a, b) => a[0] - b[0])
+      .map(([time, value]) => ({ time: time as any, value }));
     histSeriesRef.current.setData(histData);
 
     const path = forecastPath || [];
-    const fcData = path
-      .map(p => ({ time: toChartTime(p.date) as any, value: p.close }))
-      .filter(p => p.time > 0)
-      .sort((a, b) => a.time - b.time);
+    const fcByTime = new Map<number, number>();
+    for (const p of path) {
+      const t = toChartTime(p.date);
+      if (t > 0) fcByTime.set(t, p.close);
+    }
+    const fcData = Array.from(fcByTime.entries())
+      .sort((a, b) => a[0] - b[0])
+      .map(([time, value]) => ({ time: time as any, value }));
     // Bridge the gap: start the dashed forecast line at the last historical close
     if (fcData.length > 0 && histData.length > 0) {
       const lastHist = histData[histData.length - 1];
