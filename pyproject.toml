@@ -71,6 +71,7 @@ colorama = ">=0.4.6"
 questionary = ">=2.1.0"
 rich = ">=13.9.0"
 structlog = ">=24.1.0"
+croniter = ">=2.0.0"
 # --- Auth / security ---
 pyjwt = ">=2.12.1"
 passlib = ">=1.7.4"
