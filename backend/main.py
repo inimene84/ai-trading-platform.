@@ -258,6 +258,15 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("ℹ Market alerts disabled (MARKET_ALERTS_ENABLED=false)")
 
+    # 8. Unified feed / Kronos cron scheduler
+    if os.getenv("FEED_SCHEDULER_ENABLED", "true").lower() == "true":
+        from backend.services.feed_scheduler import feed_scheduler
+        task = asyncio.create_task(run_supervised_task("Feed Scheduler", feed_scheduler.start))
+        background_tasks.append(task)
+        logger.info("✓ Feed scheduler auto-started under supervisor")
+    else:
+        logger.info("ℹ Feed scheduler disabled (FEED_SCHEDULER_ENABLED=false)")
+
     yield
 
     # 2. Shutdown Logic

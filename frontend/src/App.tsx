@@ -65,6 +65,9 @@ const WalletView = lazy(() =>
 const MarketsView = lazy(() =>
   import('./components/MarketsView').then((m) => ({ default: m.MarketsView })),
 );
+const ForecastPanel = lazy(() =>
+  import('./components/ForecastPanel').then((m) => ({ default: m.ForecastPanel })),
+);
 const SignalsView = lazy(() =>
   import('./components/SignalsView').then((m) => ({ default: m.SignalsView })),
 );
@@ -102,7 +105,7 @@ import { apiService } from './services/apiService';
 import { workflowEngine } from './services/workflowEngine';
 
 // --- Types ---
-type AppMode = 'manual' | 'ai' | 'backtest' | 'settings' | 'markets' | 'portfolio' | 'wallet' | 'signals' | 'status' | 'opinion' | 'operations' | 'paper' | 'timing-control' | 'charts' | 'openapi-lab';
+type AppMode = 'manual' | 'ai' | 'backtest' | 'settings' | 'markets' | 'portfolio' | 'wallet' | 'signals' | 'status' | 'opinion' | 'operations' | 'paper' | 'timing-control' | 'charts' | 'openapi-lab' | 'forecast';
 
 
 // --- Mock Data ---
@@ -1030,6 +1033,7 @@ export default function App() {
           <NavItem icon={<LineChartIcon size={20} />} label="OpenAPI Charts" active={mode === 'charts'} onClick={() => setMode('charts')} />
           <NavItem icon={<FlaskConical size={20} />} label="OpenAPI Lab" active={mode === 'openapi-lab'} onClick={() => setMode('openapi-lab')} />
           <NavItem icon={<Activity size={20} />} label="Markets" active={mode === 'markets'} onClick={() => setMode('markets')} />
+          <NavItem icon={<BarChart3 size={20} />} label="Forecast" active={mode === 'forecast'} onClick={() => setMode('forecast')} />
           <NavItem icon={<Cpu size={20} />} label="Agent Builder" active={mode === 'ai'} onClick={() => setMode('ai')} />
           <NavItem icon={<Zap size={20} />} label="Signals" active={mode === 'signals'} badge={loopRunning ? 'LIVE' : undefined} onClick={() => setMode('signals')} />
           <NavItem icon={<BrainCircuit size={20} />} label="Opinion Layer" active={mode === 'opinion'} onClick={() => setMode('opinion')} />
@@ -1079,6 +1083,7 @@ export default function App() {
                           mode === 'backtest' ? 'Backtesting Engine' :
                             mode === 'settings' ? 'System Settings' :
                               mode === 'markets' ? 'Markets Overview' :
+                                mode === 'forecast' ? 'Kronos Forecasts' :
                                 mode === 'portfolio' ? 'Portfolio Performance' :
                                   mode === 'wallet' ? 'Wallet & Transfers' :
                                     mode === 'signals' ? 'AI Trading Signals' :
@@ -1650,6 +1655,8 @@ export default function App() {
             <WalletView key="wallet" />
           ) : mode === 'markets' ? (
             <MarketsView key="markets" />
+          ) : mode === 'forecast' ? (
+            <ForecastPanel key="forecast" />
           ) : mode === 'signals' ? (
             <SignalsView />
           ) : mode === 'opinion' ? (
