@@ -37,6 +37,39 @@ def test_get_markets_endpoint(client):
     assert "XAUUSD" in symbols
 
 
+@pytest.mark.asyncio
+async def test_get_forex_markets_uses_unified_feed(monkeypatch):
+    """GET /trading/markets/forex is backed by unified_feed quotes."""
+    from backend.services.unified_feed import Quote
+
+    async def fake_quotes(symbols=None, asset_class=None):
+        if asset_class == "forex":
+            return [Quote(
+                symbol="EURUSD", asset_class="forex", price=1.0854,
+                change_abs=0.002, change_pct=0.18, high=1.09, low=1.08,
+                volume=None, source="yfinance", as_of="2026-01-01T00:00:00+00:00",
+                stale=False, error=None,
+            )]
+        if asset_class == "metal":
+            return [Quote(
+                symbol="XAUUSD", asset_class="metal", price=2735.6,
+                change_abs=22.0, change_pct=0.82, high=2740.0, low=2700.0,
+                volume=None, source="yfinance", as_of="2026-01-01T00:00:00+00:00",
+                stale=False, error=None,
+            )]
+        return []
+
+    monkeypatch.setattr("backend.routes.trading.unified_feed.get_quotes", fake_quotes)
+    from backend.routes.trading import get_forex_markets
+    payload = await get_forex_markets()
+    symbols = [row["symbol"] for row in payload["data"]]
+    assert "EUR/USD" in symbols
+    assert "XAU/USD" in symbols
+    eur = next(r for r in payload["data"] if r["symbol"] == "EUR/USD")
+    assert eur["price"] == pytest.approx(1.0854)
+    assert eur["up"] is True
+
+
 def test_smart_order_crypto_routing(client, auth_headers):
     """Verify crypto orders are automatically routed to Binance Futures in paper mode."""
     response = client.post(
