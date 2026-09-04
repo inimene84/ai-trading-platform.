@@ -9,6 +9,8 @@ import logging
 import os
 from datetime import datetime, timezone
 
+from backend.services.trading_mode import live_binance_orders_allowed
+
 logger = logging.getLogger(__name__)
 
 _task = None
@@ -51,7 +53,7 @@ async def _poll_loop():
         try:
             # Only run when Binance Futures is the active broker
             broker_name = os.getenv("ACTIVE_BROKER", "ctrader")
-            if broker_name == "binance_futures":
+            if broker_name == "binance_futures" and live_binance_orders_allowed():
                 await _sync_open_orders(svc)
                 await _cancel_orphaned_orders(svc)
         except Exception as e:

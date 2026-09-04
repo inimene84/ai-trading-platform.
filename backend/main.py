@@ -101,7 +101,7 @@ async def run_supervised_task(task_name: str, coro_func, *args, **kwargs):
 async def lifespan(app: FastAPI):
     """Lifespan context manager for startup and shutdown events."""
     validate_live_startup_security()
-    from backend.services.trading_mode import TradingMode, get_trading_mode
+    from backend.services.trading_mode import TradingMode, get_trading_mode, paper_starting_balance
     resolved_mode = get_trading_mode()
     mode = "live" if resolved_mode == TradingMode.LIVE else "paper"
     paper_trading = mode == "paper"
@@ -150,7 +150,7 @@ async def lifespan(app: FastAPI):
             "leverage": 1.0,
         }
         if paper_trading:
-            init_kwargs["paper_balance"] = 100_000.0
+            init_kwargs["paper_balance"] = paper_starting_balance()
         ut.init_session(**init_kwargs)
         logger.info(f"✓ Unified Trading Router initialized ({mode.upper()} MODE)")
     except Exception as e:

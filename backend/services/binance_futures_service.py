@@ -15,6 +15,8 @@ from datetime import datetime, timezone, timedelta
 
 from dotenv import load_dotenv
 
+from backend.services.trading_mode import live_binance_orders_allowed
+
 load_dotenv(Path(__file__).resolve().parents[2] / '.env', override=True)
 
 logger = logging.getLogger(__name__)
@@ -482,6 +484,9 @@ class BinanceFuturesService:
 
     def cancel_all_orders(self, symbol: str) -> None:
         """Cancel ALL open orders for a symbol — regular AND conditional/algo."""
+        if not live_binance_orders_allowed():
+            logger.info("[SAFETY] skip cancel_all_orders: TRADING_MODE is not live")
+            return
         client = self._get_client()
         fsym = self._to_futures_symbol(symbol)
         if not fsym:
@@ -508,6 +513,9 @@ class BinanceFuturesService:
 
     def cancel_non_protective_orders(self, symbol: str) -> int:
         """Cancel entry/limit orders only — preserve live SL/TP/trailing protection."""
+        if not live_binance_orders_allowed():
+            logger.info("[SAFETY] skip cancel_non_protective_orders: TRADING_MODE is not live")
+            return 0
         fsym = self._to_futures_symbol(symbol)
         if not fsym:
             return 0
@@ -603,6 +611,9 @@ class BinanceFuturesService:
             return {'status': 'skipped', 'reason': f'{symbol} unsupported'}
         if self.dry_run:
             return {'status': 'simulated', 'symbol': futures_sym}
+        if not live_binance_orders_allowed():
+            logger.info("[SAFETY] skip ensure_protective_orders: TRADING_MODE is not live")
+            return {'status': 'skipped', 'reason': 'live Binance orders disabled unless TRADING_MODE=live'}
 
         position_side = 'LONG' if direction.upper() == 'BUY' else 'SHORT'
         try:
@@ -727,6 +738,18 @@ class BinanceFuturesService:
             logger.info(f"[Binance Futures DRY-RUN] {action.upper()} {direction} {futures_sym}")
             return {'status': 'simulated', 'broker': 'binance_futures_dry',
                     'symbol': futures_sym, 'direction': direction, 'action': action}
+
+        if not live_binance_orders_allowed():
+            logger.error(
+                "[SAFETY] Refusing Binance futures order: TRADING_MODE is not live "
+                "(paper/backtest uses the local PaperTradingEngine, not the exchange)"
+            )
+            return {
+                'status': 'error',
+                'broker': 'binance_futures',
+                'reason': 'live Binance orders disabled unless TRADING_MODE=live',
+                'order_id': '',
+            }
 
         try:
             client = self._get_client()
@@ -1348,6 +1371,9 @@ class BinanceFuturesService:
         if self.dry_run:
             logger.info(f"[Binance Futures DRY-RUN] would move SL {futures_sym} -> {new_stop_price}")
             return {'status': 'simulated', 'symbol': futures_sym, 'new_stop': new_stop_price}
+        if not live_binance_orders_allowed():
+            logger.info("[SAFETY] skip replace_stop_loss: TRADING_MODE is not live")
+            return {'status': 'skipped', 'reason': 'live Binance orders disabled unless TRADING_MODE=live'}
         if not new_stop_price or new_stop_price <= 0:
             return {'status': 'skipped', 'reason': 'invalid new_stop_price'}
 
@@ -1540,6 +1566,9 @@ class BinanceFuturesService:
             return {'status': 'skipped', 'reason': f'{symbol} unsupported'}
         if self.dry_run:
             return {'status': 'simulated', 'symbol': futures_sym, 'new_take_profit': new_take_profit}
+        if not live_binance_orders_allowed():
+            logger.info("[SAFETY] skip replace_take_profit: TRADING_MODE is not live")
+            return {'status': 'skipped', 'reason': 'live Binance orders disabled unless TRADING_MODE=live'}
         if not new_take_profit or new_take_profit <= 0:
             return {'status': 'skipped', 'reason': 'invalid new_take_profit'}
 
@@ -1680,6 +1709,9 @@ class BinanceFuturesService:
         return self.place_order(symbol=symbol, direction=held, action="close", quantity=None)
 
     def cancel_order(self, order_id: str, symbol: Optional[str] = None) -> dict:
+        if not live_binance_orders_allowed():
+            logger.info("[SAFETY] skip cancel_order: TRADING_MODE is not live")
+            return {'success': False, 'message': 'live Binance orders disabled unless TRADING_MODE=live'}
         try:
             client = self._get_client()
             if symbol:

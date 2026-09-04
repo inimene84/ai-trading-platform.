@@ -554,9 +554,15 @@ class PaperTradingEngine:
     @staticmethod
     def _clone_pf(pf: dict) -> dict:
         """Shallow clone for external reads."""
+        cash = float(pf.get("cash", 0.0) or 0.0)
+        margin_used = float(pf.get("margin_used", 0.0) or 0.0)
+        # Paper equity is cash plus remaining margin (positions are already
+        # reserved as margin_used). Kill switch / sizing read this field.
+        equity = cash + margin_used
         return {
-            "cash": pf["cash"],
-            "margin_used": pf.get("margin_used", 0.0),
+            "cash": cash,
+            "equity": equity,
+            "margin_used": margin_used,
             "positions": {k: dict(v) for k, v in pf.get("positions", {}).items()},
             "meta": dict(pf["_meta"]),
             "order_count": len(pf.get("orders", [])),

@@ -13,7 +13,7 @@ import yfinance as yf
 from dotenv import load_dotenv
 
 from backend.database.connection import SessionLocal
-from backend.database.models import TradingSignal, Trade, PortfolioSnapshot
+from backend.database.models import TradingSignal, Trade, PortfolioSnapshot, PaperPortfolio
 from backend.services.ctrader_service import ctrader_broker
 from backend.services.binance_futures_service import binance_futures_broker
 from backend.services.influxdb_writer import influx
@@ -25,6 +25,7 @@ from backend.strategies.market_regime import MarketRegimeDetector
 from backend.services.unified_trading import UnifiedTrading, UnifiedOrder, OrderSide, OrderType
 from backend.services.position_manager import get_position_manager
 from backend.services.sentry_state import get_trading_status, is_trading_allowed
+from backend.services.trading_mode import TradingMode, get_trading_mode, paper_starting_balance
 from backend.services.trading_loop_helpers import (
     EmergencyExitManager,
     BrokerPositionSyncService,
@@ -178,44 +179,106 @@ class TradingLoopService:
 
     @staticmethod
     def _is_live_binance() -> bool:
-        from backend.services.trading_mode import get_trading_mode, TradingMode
         return (
             os.getenv("ACTIVE_BROKER", "ctrader") == "binance_futures"
             and get_trading_mode() == TradingMode.LIVE
         )
 
-    def _get_effective_balance(self) -> dict:
-        """Fetch balance from paper portfolio in paper mode, or live broker in live mode."""
-        from backend.services.trading_mode import TradingMode, get_trading_mode
-        if get_trading_mode() == TradingMode.PAPER:
+    @staticmethod
+    def _paper_balance_payload(cash: float, equity: float, margin_used: float = 0.0) -> dict:
+        return {
+            "balance": cash,
+            "available": cash,
+            "equity": equity,
+            "margin_used": margin_used,
+            "broker": "paper_trading",
+        }
+
+    def _last_paper_book_from_db(self) -> dict | None:
+        """Most recent persisted paper book, if it still has cash."""
+        try:
+            db = SessionLocal()
             try:
-                from backend.services.unified_trading import trading_router
-                pf = trading_router.get_paper_portfolio()
+                row = db.query(PaperPortfolio).order_by(PaperPortfolio.id.desc()).first()
+                if row is None:
+                    return None
+                cash = float(row.cash or 0.0)
+                if cash <= 0:
+                    return None
+                margin = float(row.margin_used or 0.0)
+                return self._paper_balance_payload(cash, cash + margin, margin)
+            finally:
+                db.close()
+        except Exception as e:
+            logger.warning(f"Could not load last paper book: {e}")
+            return None
+
+    def _get_effective_balance(self) -> dict:
+        """Paper book in paper mode; live broker only when TRADING_MODE=live.
+
+        Never reads the live Binance futures wallet in paper mode — a $0
+        live account must not trip the kill switch. Prefer the in-memory
+        paper portfolio, then the last DB paper book, then PAPER_BALANCE.
+        """
+        if get_trading_mode() != TradingMode.LIVE:
+            try:
+                pf = UnifiedTrading().get_paper_portfolio()
                 if pf:
-                    cash = float(pf.get("cash", 100000.0))
-                    equity = float(pf.get("equity", cash))
-                    return {
-                        "balance": cash,
-                        "available": cash,
-                        "equity": equity,
-                        "margin_used": float(pf.get("margin_used", 0.0)),
-                        "broker": "paper_trading",
-                    }
+                    cash = float(pf.get("cash", 0.0) or 0.0)
+                    margin = float(pf.get("margin_used", 0.0) or 0.0)
+                    equity = float(pf.get("equity", cash + margin) or 0.0)
+                    if equity > 0:
+                        return self._paper_balance_payload(cash, equity, margin)
             except Exception as e:
                 logger.warning(f"Could not fetch paper portfolio balance: {e}")
-            return {
-                "balance": 100000.0,
-                "available": 100000.0,
-                "equity": 100000.0,
-                "margin_used": 0.0,
-                "broker": "paper_trading",
-            }
+            last_book = self._last_paper_book_from_db()
+            if last_book:
+                return last_book
+            starting = paper_starting_balance()
+            return self._paper_balance_payload(starting, starting, 0.0)
         broker = get_active_broker()
         return (
             broker.get_balance()
             if hasattr(broker, "get_balance")
             else {"balance": 0.0, "available": 0.0, "equity": 0.0, "margin_used": 0.0}
         )
+
+    def _kill_switch_action(self, equity: float, balance: dict) -> str:
+        """Return 'halt', 'block_entries', or 'ok'.
+
+        Paper/backtest never halt the loop: simulated cash is not a live
+        funding failure, and live Binance $0 must not stop paper trading.
+        """
+        if get_trading_mode() != TradingMode.LIVE:
+            return "ok"
+        if equity <= 0 and "equity" not in balance and "balance" not in balance:
+            return "block_entries"
+        if equity <= float(self.risk_config.kill_floor_usdt):
+            return "halt"
+        return "ok"
+
+    def _paper_cycle_positions(self) -> list:
+        """Map the local paper book to the loop's exchange-position shape."""
+        try:
+            positions = UnifiedTrading().get_paper_positions()
+            out = []
+            for p in positions:
+                qty = float(getattr(p, "quantity", 0) or 0)
+                if qty <= 0:
+                    continue
+                side = (getattr(p, "side", "") or "").lower()
+                out.append({
+                    "symbol": p.symbol,
+                    "side": "BUY" if side in ("long", "buy") else "SELL",
+                    "quantity": qty,
+                    "entry_price": float(getattr(p, "avg_price", 0) or 0),
+                    "unrealized_pnl": float(getattr(p, "unrealized_pnl", 0) or 0),
+                    "mark_price": float(getattr(p, "current_price", 0) or 0),
+                })
+            return out
+        except Exception as e:
+            logger.warning(f"Could not cache paper positions: {e}")
+            return []
 
     @property
     def status(self) -> dict:
@@ -262,8 +325,7 @@ class TradingLoopService:
         self._state = "running"
         self._error = None
         self._unified_trading = UnifiedTrading()  # Set singleton instance
-        
-        from backend.services.trading_mode import get_trading_mode
+
         mode = get_trading_mode()
         logger.info(f"TradingLoopService starting in mode={mode.value.upper()}")
         
@@ -352,14 +414,16 @@ class TradingLoopService:
         """Sync DB trades with actual broker positions.
         Uses the module-level binance_futures_broker singleton — avoids creating
         a new BinanceFuturesService() (which calls futures_exchange_info() in __init__).
+        Paper mode never reconciles against the live Binance book.
         """
-        await BrokerPositionSyncService.sync_positions(
-            db=db,
-            broker=binance_futures_broker,
-            pyramid_layers=self._pyramid_layers,
-            sl_cooldown=self._sl_cooldown,
-            broker_name="binance_futures",
-        )
+        if self._is_live_binance():
+            await BrokerPositionSyncService.sync_positions(
+                db=db,
+                broker=binance_futures_broker,
+                pyramid_layers=self._pyramid_layers,
+                sl_cooldown=self._sl_cooldown,
+                broker_name="binance_futures",
+            )
         try:
             from backend.services.ctrader_service import ctrader_broker
             if ctrader_broker.has_credentials():
@@ -527,12 +591,13 @@ class TradingLoopService:
             try:
                 _kill_floor = self.risk_config.kill_floor_usdt
                 _equity = self._cycle_equity
-                if _equity <= 0 and "equity" not in _bal and "balance" not in _bal:
+                _ks_action = self._kill_switch_action(_equity, _bal)
+                if _ks_action == "block_entries":
                     kill_switch_verified = False
                     logger.error(
                         "[KILL SWITCH] Equity unavailable; new entries will be blocked"
                     )
-                elif _equity <= _kill_floor:
+                elif _ks_action == "halt":
                     logger.critical(
                         f"[KILL SWITCH] Equity ${_equity:.2f} <= floor ${_kill_floor:.2f} — LOOP STOPPED. "
                         f"\u26a0\ufe0f Manual restart required after depositing funds above ${_kill_floor:.0f}."
@@ -557,21 +622,22 @@ class TradingLoopService:
         # ─────────────────────────────────────────────────────────────────────
 
         # ── STEP 0: Emergency Position Manager BEFORE broker sync ──────────
-        # We check DB open trades against LIVE Binance prices BEFORE the sync
-        # so positions that are still open on Binance get the drawdown check.
+        # Live only: paper fills are not on Binance, so a live snapshot would
+        # be empty/$0 and must not drive closes or API traffic.
         _exits_triggered = 0
-        db_pre = SessionLocal()
-        try:
-            _exits_triggered = await EmergencyExitManager.run_emergency_exits(
-                db=db_pre,
-                broker=binance_futures_broker,
-                pyramid_layers=self._pyramid_layers,
-                sl_cooldown=self._sl_cooldown,
-            )
-        except Exception as e:
-            logger.error(f"Pre-sync PM outer error: {e}")
-        finally:
-            db_pre.close()
+        if self._is_live_binance():
+            db_pre = SessionLocal()
+            try:
+                _exits_triggered = await EmergencyExitManager.run_emergency_exits(
+                    db=db_pre,
+                    broker=binance_futures_broker,
+                    pyramid_layers=self._pyramid_layers,
+                    sl_cooldown=self._sl_cooldown,
+                )
+            except Exception as e:
+                logger.error(f"Pre-sync PM outer error: {e}")
+            finally:
+                db_pre.close()
         self._error = None
 
         logger.info(
@@ -645,11 +711,15 @@ class TradingLoopService:
         # ── Cache all exchange positions ONCE per cycle ──────────────────
         # get_positions() returns ALL symbols; caching here avoids redundant
         # per-symbol API calls in _process_symbol() (was the #1 rate-limit cause).
-        try:
-            self._cycle_positions = binance_futures_broker.get_positions(raise_on_error=True)
-        except Exception as _pos_e:
-            logger.warning(f"Could not cache exchange positions: {_pos_e}")
-            self._cycle_positions = []
+        # Paper mode reads the local book — never the live futures wallet.
+        if self._is_live_binance():
+            try:
+                self._cycle_positions = binance_futures_broker.get_positions(raise_on_error=True)
+            except Exception as _pos_e:
+                logger.warning(f"Could not cache exchange positions: {_pos_e}")
+                self._cycle_positions = []
+        else:
+            self._cycle_positions = self._paper_cycle_positions()
 
         # ── STEP 1A: Position Manager — Review ALL open positions for exits ──
         _exits_triggered = 0
@@ -1330,28 +1400,14 @@ class TradingLoopService:
             # Get open trades from DB
             open_trades = db.query(Trade).filter(Trade.status.in_(["open", "filled"])).all()
             
-            # Get balance - use paper portfolio if in paper mode, otherwise live broker
-            from backend.services.trading_mode import TradingMode, get_trading_mode
-            paper_mode = get_trading_mode() == TradingMode.PAPER
-            
-            if paper_mode:
-                # Get balance from paper portfolio
-                ut = UnifiedTrading()
-                paper_pf = ut.get_paper_portfolio()
-                if paper_pf:
-                    real_cash = paper_pf.get("cash", 0.0)
-                    real_equity = real_cash  # Simplified for paper trading
-                    logger.info(f"  Paper portfolio balance: ${real_cash:,.2f}")
-                else:
-                    real_cash = 0.0
-                    real_equity = 0.0
-                    logger.warning("  No paper portfolio found, balance = $0")
-            else:
-                # Get real balance from active broker
-                broker = get_active_broker()
-                balance_info = broker.get_balance() if hasattr(broker, 'get_balance') else {"balance": 0.0}
-                real_cash = balance_info.get("balance", 0.0)
-                real_equity = balance_info.get("equity", 0.0)
+            # Get balance - paper book in paper mode, live broker in live mode.
+            # Never fall back to $0 in paper (that previously poisoned snapshots
+            # and the next cycle's kill switch).
+            balance_info = self._get_effective_balance()
+            real_cash = float(balance_info.get("available", balance_info.get("balance", 0.0)) or 0.0)
+            real_equity = float(balance_info.get("equity", real_cash) or 0.0)
+            if balance_info.get("broker") == "paper_trading":
+                logger.info(f"  Paper portfolio balance: ${real_cash:,.2f}")
             
             # Compute realized P&L from all closed trades
             from sqlalchemy import func as _func
