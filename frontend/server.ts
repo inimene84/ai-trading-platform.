@@ -154,6 +154,40 @@ app.use('/api/market-data', async (req, res) => {
   }
 });
 
+// --- Unified Feed API Proxy → FastAPI backend /api/feed/* ---
+app.use('/api/feed', async (req, res) => {
+  const targetUrl = `${BACKEND_URL}/api/feed${req.url || '/'}`;
+  try {
+    const fetchOpts: RequestInit = { method: req.method, headers: { 'Content-Type': 'application/json' } };
+    if (req.method !== 'GET' && req.method !== 'HEAD' && req.body) {
+      fetchOpts.body = JSON.stringify(req.body);
+    }
+    const backendRes = await fetch(targetUrl, fetchOpts);
+    res.status(backendRes.status).set('Content-Type', backendRes.headers.get('content-type') || 'application/json');
+    res.send(await backendRes.text());
+  } catch (error: any) {
+    console.error(`Feed proxy error: ${targetUrl}`, error.message);
+    res.status(502).json({ error: 'Feed backend unavailable', detail: error.message });
+  }
+});
+
+// --- Forecast API Proxy → FastAPI backend /api/forecast/* ---
+app.use('/api/forecast', async (req, res) => {
+  const targetUrl = `${BACKEND_URL}/api/forecast${req.url || '/'}`;
+  try {
+    const fetchOpts: RequestInit = { method: req.method, headers: { 'Content-Type': 'application/json' } };
+    if (req.method !== 'GET' && req.method !== 'HEAD' && req.body) {
+      fetchOpts.body = JSON.stringify(req.body);
+    }
+    const backendRes = await fetch(targetUrl, fetchOpts);
+    res.status(backendRes.status).set('Content-Type', backendRes.headers.get('content-type') || 'application/json');
+    res.send(await backendRes.text());
+  } catch (error: any) {
+    console.error(`Forecast proxy error: ${targetUrl}`, error.message);
+    res.status(502).json({ error: 'Forecast backend unavailable', detail: error.message });
+  }
+});
+
 
 app.use('/api/backend', async (req, res) => {
   const targetPath = req.url || '/';

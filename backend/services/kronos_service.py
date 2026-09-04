@@ -11,6 +11,7 @@ Set KRONOS_ALLOW_LOCAL_STUB=true only for offline unit tests / local dev.
 import logging
 import os
 import time
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 import httpx
@@ -38,14 +39,38 @@ def _make_neutral(error: Optional[str] = None) -> Dict[str, Any]:
         "path_volatility": 0.0,
         "max_adverse_excursion_pct": 0.0,
         "reversal_risk": False,
+        "forecast_path": None,
         "error": error,
     }
 
 
-async def predict(bars: Any, symbol: str, interval: str = "1h") -> Dict[str, Any]:
+def _bar_date_str(bar: Dict[str, Any]) -> str:
+    """Best-effort ISO-8601 date for a bar dict.
+
+    Bars may carry `date` (ISO str), `timestamp`, or `time` (ISO str or
+    epoch seconds, e.g. yfinance rows from multi_asset_bars).
+    """
+    raw = bar.get("date") or bar.get("timestamp") or bar.get("time") or ""
+    if isinstance(raw, (int, float)) and raw > 0:
+        try:
+            return datetime.fromtimestamp(float(raw), tz=timezone.utc).isoformat()
+        except Exception:
+            return ""
+    return str(raw)
+
+
+async def predict(
+    bars: Any,
+    symbol: str,
+    interval: str = "1h",
+    include_path: bool = False,
+    pred_len: int = 10,
+) -> Dict[str, Any]:
     """
     Query Kronos sidecar for 5/10-bar trajectory prediction and path metrics.
-    Deduplicated by (symbol, interval, last_bar_date).
+    Deduplicated by (symbol, interval, last_bar_date, include_path, pred_len).
+    When include_path=True the sidecar also returns forecast_path
+    ([{date, close}, ...]) for chart overlays.
     """
     if bars is None:
         return _make_neutral("No bars provided")
@@ -61,8 +86,11 @@ async def predict(bars: Any, symbol: str, interval: str = "1h") -> Dict[str, Any
         return _make_neutral("Insufficient bar count (minimum 5 required)")
 
     last_bar = bar_list[-1]
-    last_bar_date = str(last_bar.get("date", last_bar.get("timestamp", "")))
-    cache_key = f"{symbol.upper()}:{interval}:{last_bar_date}"
+    last_bar_date = _bar_date_str(last_bar)
+    cache_key = (
+        f"{symbol.upper()}:{interval}:{last_bar_date}"
+        f":path={int(include_path)}:n={int(pred_len)}"
+    )
 
     if cache_key in _prediction_cache:
         ts, cached_res = _prediction_cache[cache_key]
@@ -74,7 +102,7 @@ async def predict(bars: Any, symbol: str, interval: str = "1h") -> Dict[str, Any
         "symbol": symbol.upper(),
         "bars": [
             {
-                "date": str(b.get("date", "")),
+                "date": _bar_date_str(b),
                 "open": float(b["open"]),
                 "high": float(b["high"]),
                 "low": float(b["low"]),
@@ -84,7 +112,8 @@ async def predict(bars: Any, symbol: str, interval: str = "1h") -> Dict[str, Any
             }
             for b in bar_list[-400:]
         ],
-        "pred_len": 10,
+        "pred_len": int(pred_len),
+        "include_path": bool(include_path),
     }
 
     urls_to_try = [f"{KRONOS_SIDECAR_URL.rstrip('/')}/predict"]
@@ -142,6 +171,7 @@ async def predict(bars: Any, symbol: str, interval: str = "1h") -> Dict[str, Any
             "path_volatility": 0.01,
             "max_adverse_excursion_pct": round(min(cum_5, 0.0), 4),
             "reversal_risk": False,
+            "forecast_path": None,
             "error": "Local stub used (KRONOS_ALLOW_LOCAL_STUB=true)",
         }
         _prediction_cache[cache_key] = (time.time(), fallback_res)
