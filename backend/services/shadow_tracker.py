@@ -31,7 +31,7 @@ CLI: scripts/run_shadow_tracker.py
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 from typing import Any, Callable, Dict, List, Optional
 
@@ -48,37 +48,51 @@ ATR_PERIOD = 14
 BLOCKED_STATUSES = {"rejected", "skipped", "evaluated"}
 
 
+def is_crypto_symbol(symbol: str) -> bool:
+    """Binance perp-style quotes only.
+
+    startswith('BTC'/'ETH'/'SOL') would send cTrader BTCUSD/ETHUSD to Binance.
+    """
+    return (symbol or "").upper().endswith(("USDT", "USDC", "BUSD"))
+
+
+# Needles match reasons actually written by decision_engine / trading_loop /
+# kronos_gate on THIS branch (see _record_eval and signal_reason concatenations).
+# Order matters: more specific strings first so e.g. "below threshold ... in
+# RANGING regime" is confidence_gate, not ranging_block, and "vetoed by risk
+# reviewer" is not swallowed by a generic "vetoed:" Kronos match.
+_GATE_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("llm_risk_reviewer", ("vetoed by risk reviewer", "risk reviewer")),
+    ("kronos_veto", (
+        "preexecutiongate", "shadow_vetoed", "kronos",
+        "heuristic timing", "vision llm",
+    )),
+    ("confidence_gate", ("confidence below threshold", "below threshold")),
+    ("ranging_block", ("ranging regime", "ranging:")),
+    ("min_edge_gate", ("min-edge", "min edge", "min_edge")),
+    ("funding_gate", ("funding rate", "blocked by funding")),
+    ("expectancy_gate", ("expectancy",)),
+    ("correlation_cap", (
+        "same-direction", "same direction", "correlated", "direction notional",
+    )),
+    ("exposure_cap", ("exposure cap", "notional cap")),
+    ("max_positions", ("max positions",)),
+    ("symbol_quality_gate", ("blacklist", "illiquid", "quote volume")),
+    ("ai_opinion_gate", ("ai opinion too weak",)),
+    ("cooldown", ("cooldown",)),
+    ("margin_gate", ("insufficient margin", "entries blocked", "kill switch")),
+    ("duplicate_block", ("already have", "position already open", "duplicate blocked")),
+)
+
+
 # ── Gate classification ─────────────────────────────────────────────────────
-def classify_gate(reasoning: str, status: str) -> str:
+def classify_gate(reasoning: str, status: str = "") -> str:
     """Map a signal's reasoning text to the gate that blocked it."""
     r = (reasoning or "").lower()
-    if "kronos" in r and ("veto" in r or "flip" in r):
-        return "kronos_veto"
-    if "vetoed by risk reviewer" in r or "risk reviewer" in r:
-        return "llm_risk_reviewer"
-    if "ranging" in r:
-        return "ranging_block"
-    if "min-edge" in r or "min edge" in r:
-        return "min_edge_gate"
-    if "funding" in r:
-        return "funding_gate"
-    if "expectancy" in r:
-        return "expectancy_gate"
-    if "same-direction" in r or "correlated" in r:
-        return "correlation_cap"
-    if "exposure cap" in r or "notional cap" in r:
-        return "exposure_cap"
-    if "max positions" in r:
-        return "max_positions"
-    if "blacklist" in r or "illiquid" in r:
-        return "symbol_quality_gate"
-    if "confidence below threshold" in r or "below threshold" in r:
-        return "confidence_gate"
-    if "ai opinion too weak" in r:
-        return "ai_opinion_gate"
-    if "cooldown" in r:
-        return "cooldown"
-    if status == "skipped":
+    for gate, needles in _GATE_RULES:
+        if any(n in r for n in needles):
+            return gate
+    if (status or "").lower() == "skipped":
         return "order_failed"
     return "other"
 
@@ -145,13 +159,21 @@ def score_hypothetical(
 
     mfe = 0.0
     mae = 0.0
+    is_buy = direction == "BUY"
     for i, bar in enumerate(bars_after[:horizon], start=1):
-        high, low, close = bar["high"], bar["low"], bar["close"]
-        mfe = max(mfe, sign * (high - entry) / risk)
-        mae = min(mae, sign * (low - entry) / risk)
+        high, low = bar["high"], bar["low"]
+        # Direction-aware excursion: shorts move favorably on the low, not the high.
+        if is_buy:
+            mfe = max(mfe, (high - entry) / risk)
+            mae = min(mae, (low - entry) / risk)
+            sl_hit = low <= sl
+            tp_hit = high >= tp
+        else:
+            mfe = max(mfe, (entry - low) / risk)
+            mae = min(mae, (entry - high) / risk)
+            sl_hit = high >= sl
+            tp_hit = low <= tp
 
-        sl_hit = low <= sl if direction == "BUY" else high >= sl
-        tp_hit = high >= tp if direction == "BUY" else low <= tp
         if sl_hit:  # checked first on purpose (conservative)
             return ShadowScore(sl, "sl", sign * (sl - entry) / entry * 100,
                                sign * (sl - entry) / risk, mfe, mae, i)

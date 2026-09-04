@@ -23,8 +23,9 @@ logger = logging.getLogger("shadow_tracker_cli")
 
 
 def _is_crypto(symbol: str) -> bool:
-    s = symbol.upper()
-    return s.endswith(("USDT", "USDC", "BUSD")) or s.startswith(("BTC", "ETH", "SOL"))
+    """Binance perp-style quotes only. startswith BTC/ETH/SOL would send
+    cTrader BTCUSD/ETHUSD to Binance klines."""
+    return (symbol or "").upper().endswith(("USDT", "USDC", "BUSD"))
 
 
 async def make_bars_fetcher():
