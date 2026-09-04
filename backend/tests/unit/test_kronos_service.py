@@ -34,6 +34,7 @@ async def test_kronos_service_fail_closed(monkeypatch):
     assert res is not None
     assert res["signal"] == "NEUTRAL"
     assert res["confidence"] == 0.0
+    assert res["forecast_path"] is None
     assert "fail-closed" in (res.get("error") or "").lower() or "unreachable" in (
         res.get("error") or ""
     ).lower()
