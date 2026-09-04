@@ -146,7 +146,7 @@ def test_binance_service_refuses_live_order_in_explicit_paper(monkeypatch):
     monkeypatch.setenv("TRADING_MODE", "paper")
     svc = _binance_svc()
     client = MagicMock()
-    with patch.object(svc, "_get_client", return_value=client):
+    with patch.object(svc, "_get_client", return_value=client) as get_client:
         result = svc.place_order(
             symbol="BTCUSDT",
             direction="BUY",
@@ -154,10 +154,10 @@ def test_binance_service_refuses_live_order_in_explicit_paper(monkeypatch):
             quantity=0.01,
             price=50_000.0,
         )
+        get_client.assert_not_called()
     assert result["status"] == "error"
     assert "TRADING_MODE=live" in result["reason"]
     client.futures_create_order.assert_not_called()
-    svc._get_client.assert_not_called()
 
 
 def test_binance_service_allows_mocked_live_order_when_mode_live(monkeypatch):
@@ -167,7 +167,7 @@ def test_binance_service_allows_mocked_live_order_when_mode_live(monkeypatch):
     svc = _binance_svc()
     client = MagicMock()
     client.futures_account.return_value = {"availableBalance": "10000"}
-    with patch.object(svc, "_get_client", return_value=client), \
+    with patch.object(svc, "_get_client", return_value=client) as get_client, \
          patch.object(svc, "_setup_symbol"), \
          patch.object(svc, "_round_price", side_effect=lambda s, p: p), \
          patch.object(svc, "get_positions", return_value=[]), \
@@ -180,8 +180,8 @@ def test_binance_service_allows_mocked_live_order_when_mode_live(monkeypatch):
             quantity=0.01,
             price=50_000.0,
         )
+        get_client.assert_called()
     assert result.get("reason") != "live Binance orders disabled unless TRADING_MODE=live"
-    svc._get_client.assert_called()
 
 
 def test_sync_and_emergency_skipped_when_not_live_binance(monkeypatch):
