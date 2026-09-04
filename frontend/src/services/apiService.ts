@@ -48,6 +48,27 @@ async function request<T = any>(path: string, options?: RequestInit): Promise<T>
   return res.json();
 }
 
+/**
+ * Direct GET against backend routes mounted at the app root under `/api/*`
+ * (e.g. `/api/market-data`, `/api/feed`, `/api/forecast`). These routers carry
+ * their own `/api/...` prefix, so they are NOT reachable via the `/api/backend`
+ * rewrite — this mirrors how `getMultiAssetBars` calls `/api/market-data/bars`.
+ */
+async function directGet<T = any>(path: string): Promise<T> {
+  const adminKey = getAdminApiKey();
+  const res = await fetch(path, {
+    headers: {
+      'Content-Type': 'application/json',
+      ...(adminKey ? { 'X-API-Key': adminKey } : {}),
+    },
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => res.statusText);
+    throw new Error(`API ${res.status}: ${text}`);
+  }
+  return res.json();
+}
+
 // ── Types ────────────────────────────────────────────────────────────────────
 
 export interface SystemStatus {
@@ -73,6 +94,90 @@ export interface SystemStatus {
   uptime: string;
   last_cycle: string | null;
   trading_loop: Record<string, any>;
+}
+
+/** Quote shape returned by the unified feed (`/api/feed/*`). */
+export interface FeedQuote {
+  symbol: string;
+  asset_class: string;
+  price: number | null;
+  change_abs: number | null;
+  change_pct: number | null;
+  high: number | null;
+  low: number | null;
+  volume: number | null;
+  source: string;
+  as_of: string;
+  stale: boolean;
+  error: string | null;
+}
+
+export interface FeedOverview {
+  as_of: string;
+  crypto: FeedQuote[];
+  equities: FeedQuote[];
+  metals: FeedQuote[];
+}
+
+export interface FeedQuotesResponse {
+  as_of: string;
+  quotes: FeedQuote[];
+}
+
+export interface FeedBar {
+  time: string | number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+}
+
+export interface FeedBarsResponse {
+  symbol: string;
+  asset_class: string;
+  source: string;
+  data: FeedBar[];
+}
+
+export interface ForecastPoint {
+  date: string;
+  close: number;
+}
+
+export interface ForecastResult {
+  symbol: string;
+  interval: string;
+  as_of: string;
+  signal: string;
+  confidence: number | null;
+  predicted_close: number | null;
+  predicted_change_pct: number | null;
+  cum_change_5_pct: number | null;
+  cum_change_10_pct: number | null;
+  reversal_risk: boolean | null;
+  model_backend: string | null;
+  forecast_path: ForecastPoint[] | null;
+  error: string | null;
+}
+
+export interface BatchForecastsResponse {
+  as_of: string | null;
+  results: ForecastResult[];
+}
+
+export interface SchedulerJob {
+  name: string;
+  cron_expr: string;
+  enabled: boolean;
+  last_run: string | null;
+  next_run: string | null;
+  last_error: string | null;
+}
+
+export interface FeedSchedulerStatus {
+  enabled: boolean;
+  jobs: SchedulerJob[];
 }
 
 export interface Position {
@@ -627,6 +732,43 @@ export const apiService = {
       throw new Error(`Market data error: ${text}`);
     }
     return res.json();
+  },
+
+  async getFeedOverview(): Promise<FeedOverview> {
+    return directGet('/api/feed/overview');
+  },
+
+  async getFeedQuotes(symbols?: string[], assetClass?: string): Promise<FeedQuotesResponse> {
+    const params = new URLSearchParams();
+    if (symbols && symbols.length > 0) params.set('symbols', symbols.join(','));
+    if (assetClass) params.set('asset_class', assetClass);
+    const qs = params.toString();
+    return directGet(`/api/feed/quotes${qs ? '?' + qs : ''}`);
+  },
+
+  async getFeedBars(symbol: string, timeframe = '1h', limit = 100): Promise<FeedBarsResponse> {
+    const params = new URLSearchParams({ symbol, timeframe, limit: String(limit) });
+    return directGet(`/api/feed/bars?${params.toString()}`);
+  },
+
+  async getFeedSchedulerStatus(): Promise<FeedSchedulerStatus> {
+    return directGet('/api/feed/scheduler/status');
+  },
+
+  async getForecast(
+    symbol: string,
+    opts?: { interval?: string; pred_len?: number; include_path?: boolean },
+  ): Promise<ForecastResult> {
+    const params = new URLSearchParams();
+    if (opts?.interval) params.set('interval', opts.interval);
+    if (opts?.pred_len !== undefined) params.set('pred_len', String(opts.pred_len));
+    if (opts?.include_path !== undefined) params.set('include_path', String(opts.include_path));
+    const qs = params.toString();
+    return directGet(`/api/forecast/${encodeURIComponent(symbol)}${qs ? '?' + qs : ''}`);
+  },
+
+  async getBatchForecasts(): Promise<BatchForecastsResponse> {
+    return directGet('/api/forecast/batch/latest');
   },
   // ── SSE ────────────────────────────────────────────────────────────────────────────────────
   connectEventStream(topics: string[], onMessage: (msg: any) => void) {

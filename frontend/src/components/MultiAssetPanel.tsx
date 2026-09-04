@@ -328,20 +328,26 @@ export function MultiAssetPanel({ currentSymbol, onSelectSymbol, onQuickTrade }:
       const resp = await fetch('/api/backend/trading/markets/forex');
       if (resp.ok) {
         const data = await resp.json();
-        // Backend returns { data: [{symbol: "EUR/USD", price, change24h, up}, ...] }
-        const arr: any[] = Array.isArray(data) ? data : (data.data || []);
-        // Build lookup by display symbol, e.g. "EUR/USD"
+        // Unified-feed shape: { as_of, quotes: [{symbol: "EURUSD", ...}] }
+        // Legacy shape: { data: [{symbol: "EUR/USD", price, change24h, up}] } or bare array
+        const arr: any[] = Array.isArray(data) ? data : (data.quotes || data.data || []);
         const byDisplay: Record<string, any> = {};
-        for (const item of arr) byDisplay[item.symbol] = item;
+        for (const item of arr) {
+          if (!item || typeof item.symbol !== 'string') continue;
+          byDisplay[item.symbol] = item;
+          if (item.symbol.length === 6 && !item.symbol.includes('/')) {
+            byDisplay[`${item.symbol.slice(0, 3)}/${item.symbol.slice(3)}`] = item;
+            byDisplay[`${item.symbol}=X`] = item;
+          }
+        }
 
         for (const sym of forexSymbols) {
-          // sym is "EURUSD=X" format; display is "EUR/USD"
           const base = sym.replace('=X', '');
           const displayKey = base.length === 6 ? `${base.slice(0, 3)}/${base.slice(3)}` : base;
-          const rateData = byDisplay[displayKey] || byDisplay[sym];
+          const rateData = byDisplay[sym] || byDisplay[displayKey] || byDisplay[base];
           if (rateData) {
-            const price = rateData.price || 0;
-            const change = rateData.change24h || 0;
+            const price = rateData.price ?? 0;
+            const change = rateData.change_pct ?? rateData.change24h ?? 0;
             const hist = priceHistoryRef.current[sym] || [];
             if (price > 0) {
               hist.push(price);
