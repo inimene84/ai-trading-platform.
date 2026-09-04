@@ -282,6 +282,34 @@ class InfluxDBWriter:
         }
         await self._write(self.BUCKET_NEWS, "market_alert", tags, fields)
 
+    async def write_feed_snapshot(self, snapshot: dict) -> None:
+        """Write unified-feed dashboard snapshot summary to trading-system bucket.
+
+        Expects the /api/feed/overview payload ({as_of, crypto, equities,
+        metals}); records per-class quote counts and stale counts. No-ops
+        when InfluxDB is disabled (handled by _write).
+        """
+        def _quotes(key: str) -> list:
+            return list(snapshot.get(key) or [])
+
+        def _live(quotes: list) -> int:
+            return sum(1 for q in quotes if q.get("price") is not None and not q.get("stale"))
+
+        def _stale(quotes: list) -> int:
+            return sum(1 for q in quotes if q.get("stale"))
+
+        crypto, equities, metals = _quotes("crypto"), _quotes("equities"), _quotes("metals")
+        fields: dict[str, Any] = {
+            "crypto_count": int(_live(crypto)),
+            "equities_count": int(_live(equities)),
+            "metals_count": int(_live(metals)),
+            "stale_count": int(_stale(crypto) + _stale(equities) + _stale(metals)),
+        }
+        await self._write(
+            self.BUCKET_SYSTEM, "feed_snapshot",
+            {"source": "feed_scheduler"}, fields,
+        )
+
     # ─────────────────────────── internals ────────────────────────────── #
 
     @staticmethod

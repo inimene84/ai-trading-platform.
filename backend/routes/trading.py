@@ -26,6 +26,7 @@ from backend.services.trading_loop_helpers import (
     is_ctrader_symbol as _is_ctrader_symbol,
     is_ctrader_trade as _is_ctrader_trade,
 )
+from backend.services.unified_feed import unified_feed
 from backend.services.unified_trading import (
     UnifiedTrading, UnifiedOrder, OrderSide, OrderType,
 )
@@ -675,6 +676,38 @@ async def get_stocks():
     return {"data": data}
 
 
+@router.get("/markets/forex")
+async def get_forex_markets():
+    """Live forex majors + metals quotes for the dashboard multi-asset panel.
+
+    Response shape matches what MultiAssetPanel.fetchForexPrices parses:
+    items keyed by display symbol ("EUR/USD") with price/change24h/up.
+    """
+    as_of = datetime.now(timezone.utc).isoformat()
+    try:
+        forex, metals = await asyncio.gather(
+            unified_feed.get_quotes(asset_class="forex"),
+            unified_feed.get_quotes(asset_class="metal"),
+        )
+    except Exception as e:
+        logger.error("Forex markets error: %s", e)
+        return {"data": [], "as_of": as_of, "error": str(e)}
+
+    data = []
+    for q in list(forex) + list(metals):
+        sym = q["symbol"]
+        display = f"{sym[:3]}/{sym[3:]}" if len(sym) == 6 and str(sym).isalpha() else sym
+        price = q["price"] or 0.0
+        change = q["change_pct"] or 0.0
+        data.append({
+            "symbol": display,
+            "price": float(price),
+            "change24h": round(float(change), 4),
+            "up": bool(change >= 0),
+            "source": q["source"],
+            "stale": q["stale"],
+        })
+    return {"data": data, "as_of": as_of, "quotes": list(forex) + list(metals)}
 
 
 # Binance public spot endpoints the frontend is allowed to proxy through us.

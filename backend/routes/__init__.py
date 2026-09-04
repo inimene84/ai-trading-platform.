@@ -11,6 +11,8 @@ from backend.routes.api_keys import router as api_keys_router
 from backend.routes.trading import router as trading_router
 from backend.routes.news import router as news_router
 from backend.routes.market_data import router as market_data_router
+from backend.routes.feed import router as feed_router
+from backend.routes.forecast import router as forecast_router
 from backend.routes.historical import router as historical_router
 from backend.routes.telemetry import router as telemetry_router
 from backend.routes.backtest import router as backtest_router
@@ -38,6 +40,8 @@ api_router.include_router(trading_router, tags=["trading"])
 api_router.include_router(trading_router, prefix="/api", tags=["trading-api"])
 api_router.include_router(news_router, tags=["news"])
 api_router.include_router(market_data_router, tags=["market-data"])
+api_router.include_router(feed_router, tags=["feed"])
+api_router.include_router(forecast_router, tags=["forecast"])
 api_router.include_router(historical_router)
 api_router.include_router(telemetry_router)
 api_router.include_router(backtest_router, prefix="/api/backtest", tags=["backtest"])

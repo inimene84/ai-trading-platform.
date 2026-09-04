@@ -53,6 +53,12 @@ class PredictRequest(BaseModel):
     symbol: str
     bars: List[BarInput]
     pred_len: int = Field(default=5, ge=1, le=20)
+    include_path: bool = False
+
+
+class ForecastPoint(BaseModel):
+    date: str  # ISO-8601 UTC
+    close: float
 
 
 class PredictResponse(BaseModel):
@@ -68,6 +74,7 @@ class PredictResponse(BaseModel):
     inference_time_ms: float
     model_backend: str
     error: Optional[str] = None
+    forecast_path: Optional[List[ForecastPoint]] = None
 
 
 class AnalyticalKronosPredictor:
@@ -135,6 +142,19 @@ async def health_check():
     }
 
 
+def _infer_bar_freq(x_ts) -> pd.Timedelta:
+    """Infer the input bar frequency from consecutive timestamps (default 1h)."""
+    try:
+        if len(x_ts) >= 2:
+            deltas = pd.Series(x_ts).diff().dropna()
+            deltas = deltas[deltas > pd.Timedelta(0)]
+            if len(deltas) > 0:
+                return pd.Timedelta(deltas.median())
+    except Exception:
+        pass
+    return pd.Timedelta(hours=1)
+
+
 def _build_timestamps(df: pd.DataFrame, lookback: int, pred_len: int):
     if "date" in df.columns and df["date"].notna().any():
         try:
@@ -144,7 +164,8 @@ def _build_timestamps(df: pd.DataFrame, lookback: int, pred_len: int):
     else:
         x_ts = pd.date_range(end=pd.Timestamp.utcnow(), periods=lookback, freq="1h")
     last_ts = x_ts.iloc[-1] if hasattr(x_ts, "iloc") else x_ts[-1]
-    y_ts = pd.date_range(start=last_ts, periods=pred_len + 1, freq="1h")[1:]
+    freq = _infer_bar_freq(x_ts)
+    y_ts = pd.date_range(start=last_ts, periods=pred_len + 1, freq=freq)[1:]
     return pd.Series(x_ts), pd.Series(y_ts)
 
 
@@ -219,6 +240,20 @@ async def predict_trajectory(req: PredictRequest):
     confidence = min(abs(cum_5) / 4.0, 1.0)
     elapsed_ms = (time.time() - start_ts) * 1000.0
 
+    forecast_path: Optional[List[ForecastPoint]] = None
+    if req.include_path:
+        try:
+            forecast_path = [
+                ForecastPoint(
+                    date=pd.Timestamp(ts).isoformat(),
+                    close=round(float(c), 6),
+                )
+                for ts, c in zip(y_ts, pred_closes)
+            ]
+        except Exception as e:
+            logger.warning("Failed to build forecast_path for %s: %s", req.symbol, e)
+            forecast_path = None
+
     return PredictResponse(
         signal=signal,
         confidence=round(confidence, 4),
@@ -232,4 +267,5 @@ async def predict_trajectory(req: PredictRequest):
         inference_time_ms=round(elapsed_ms, 2),
         model_backend=_model_backend,
         error=None if _model_backend == "neoquasar" else "analytical_fallback",
+        forecast_path=forecast_path,
     )
