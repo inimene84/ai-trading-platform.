@@ -29,7 +29,7 @@ def _bar(h, l, c, date=None):
 def test_classify_gate_from_deploy_branch_reason_strings():
     assert classify_gate(
         "RANGING regime: blocked early (saves Kronos/LLM cost)"
-    ) == "ranging_block"
+    ) == "ranging_block"  # must not match kronos_veto via the word Kronos
     assert classify_gate(
         "vetoed: PreExecutionGate VETO [ETHUSDT]: Kronos forecasts opposing drop"
     ) == "kronos_veto"

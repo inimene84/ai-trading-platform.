@@ -59,16 +59,17 @@ def is_crypto_symbol(symbol: str) -> bool:
 # Needles match reasons actually written by decision_engine / trading_loop /
 # kronos_gate on THIS branch (see _record_eval and signal_reason concatenations).
 # Order matters: more specific strings first so e.g. "below threshold ... in
-# RANGING regime" is confidence_gate, not ranging_block, and "vetoed by risk
-# reviewer" is not swallowed by a generic "vetoed:" Kronos match.
+# RANGING regime" is confidence_gate, not ranging_block; the early ranging
+# reason mentions "Kronos/LLM cost" so ranging must beat the Kronos needle;
+# and "vetoed by risk reviewer" must not be swallowed by a Kronos match.
 _GATE_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("llm_risk_reviewer", ("vetoed by risk reviewer", "risk reviewer")),
+    ("confidence_gate", ("confidence below threshold", "below threshold")),
+    ("ranging_block", ("ranging regime", "ranging:")),
     ("kronos_veto", (
         "preexecutiongate", "shadow_vetoed", "kronos",
         "heuristic timing", "vision llm",
     )),
-    ("confidence_gate", ("confidence below threshold", "below threshold")),
-    ("ranging_block", ("ranging regime", "ranging:")),
     ("min_edge_gate", ("min-edge", "min edge", "min_edge")),
     ("funding_gate", ("funding rate", "blocked by funding")),
     ("expectancy_gate", ("expectancy",)),
