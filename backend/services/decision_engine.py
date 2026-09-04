@@ -313,7 +313,8 @@ class DecisionEngine:
         fr_cap = getattr(self.config, "funding_rate_cap", 0.0)
         if signal.signal == "BUY" and fr_cap > 0 and current_funding_rate > fr_cap:
             logger.info(f"[{symbol}] BUY signal blocked by Funding Rate Gate ({current_funding_rate*100:.3f}% > {fr_cap*100:.3f}%)")
-            self._record_eval(symbol, "HOLD", signal.confidence, "blocked by funding rate")
+            # Keep BUY so the shadow tracker can score the blocked long.
+            self._record_eval(symbol, signal.signal, signal.confidence, "blocked by funding rate")
             return None
 
         # 4. Multi-model Pre-Execution Gating (Kronos Sidecar + Heuristic Timing Guard)
@@ -350,7 +351,8 @@ class DecisionEngine:
         if gate_result.action == "veto":
             if gate_result.final_signal == "NEUTRAL":
                 logger.info(f"[{symbol}] PreExecutionGate ACTIVE VETO: {gate_result.reasoning}")
-                self._record_eval(symbol, "HOLD", signal.confidence, f"vetoed: {gate_result.reasoning}")
+                # Keep the intended BUY/SELL — HOLD made Kronos vetoes unscorable.
+                self._record_eval(symbol, signal.signal, signal.confidence, f"vetoed: {gate_result.reasoning}")
                 return None
             logger.info(f"[{symbol}] PreExecutionGate SHADOW VETO (allowed): {gate_result.reasoning}")
             self._record_eval(
@@ -401,7 +403,7 @@ class DecisionEngine:
                         logger.info(
                             f"[{symbol}] AI opinion too weak (conf={opinion.confidence:.2f} < {self.config.ai_analysis_threshold}), skipping"
                         )
-                        self._record_eval(symbol, opinion.direction, opinion.confidence,
+                        self._record_eval(symbol, signal.signal, opinion.confidence,
                                           f"AI opinion too weak (<{self.config.ai_analysis_threshold})")
                         return None
             except Exception as e:
@@ -500,6 +502,11 @@ class DecisionEngine:
 
         # Min-edge / fee-churn gate: reject trades whose *captured* move can't clear cost.
         if not self._passes_min_edge(symbol, entry_price, tp, quantity, bars):
+            self._record_eval(
+                symbol, direction, getattr(signal, "confidence", 0.0),
+                "SKIP (min-edge): expected capture below round-trip cost",
+                entry=entry_price, sl=sl, tp=tp,
+            )
             return None
 
         return Decision(

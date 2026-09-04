@@ -237,3 +237,45 @@ async def test_ranging_regime_sizing_and_gate(risk_config):
     
     assert decision_trending is not None
     assert decision_ranging is None
+
+
+@pytest.mark.asyncio
+async def test_funding_gate_records_buy_not_hold(risk_config):
+    """HOLD direction made funding blocks invisible to the shadow tracker."""
+    engine = DecisionEngine(risk_config)
+    engine.enable_kronos = False
+    engine.config.enable_personas = False
+    engine.config.use_risk_reviewer_llm = False
+    engine.config.funding_rate_cap = 0.0001
+    bars = _make_bars(200)
+    signal = StrategySignal(
+        symbol="ETHUSDT", signal="BUY", confidence=0.70,
+        entry_price=bars[-1]["close"], strategy="trend_following",
+    )
+    engine.strategy.generate_signal = MagicMock(return_value=signal)
+    engine.regime_detector.detect = MagicMock(return_value=MagicMock(
+        regime="TRENDING", weights=MagicMock(return_value={})
+    ))
+    result = await engine.evaluate_symbol(
+        "ETHUSDT", bars, None, 0, [], False, current_funding_rate=0.001
+    )
+    assert result is None
+    assert engine.last_evaluation["direction"] == "BUY"
+    assert "funding" in engine.last_evaluation["reason"]
+
+
+def test_min_edge_reject_records_reason(risk_config):
+    engine = DecisionEngine(risk_config)
+    engine._passes_min_edge = lambda *a, **k: False
+    bars = _make_bars(50)
+    signal = StrategySignal(
+        symbol="ETHUSDT", signal="BUY", confidence=0.70,
+        entry_price=100.0, strategy="trend_following",
+    )
+    decision = engine._create_entry_decision(
+        "ETHUSDT", bars, signal, "BUY", is_pyramid=False, regime="TRENDING"
+    )
+    assert decision is None
+    assert engine.last_evaluation.get("direction") == "BUY"
+    assert "min-edge" in engine.last_evaluation.get("reason", "")
+

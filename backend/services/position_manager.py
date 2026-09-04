@@ -80,6 +80,23 @@ class PositionManager:
             logger.warning(f"  [EXIT] {symbol}: EMERGENCY DRAWDOWN ({pnl_pct:.1f}%)")
             return result
 
+        # 1b. MINIMUM HOLD — no AI/technical exits on fresh positions.
+        # min_position_hold_min existed in RiskConfig but was never enforced
+        # anywhere; LLM "reversal" exits could close positions minutes after
+        # entry. Live data: holds <1h won 37.5% vs 78.8% for >24h holds.
+        # Only the emergency drawdown exit (above) is exempt.
+        min_hold_min = getattr(self.config, "min_position_hold_min", 0) or 0
+        # duration_hours stays 0 when opened_at is missing/unparseable — do not
+        # treat "unknown age" as "just opened" or time/AI exits are blocked forever.
+        if min_hold_min > 0 and duration_hours > 0 and duration_hours * 60 < min_hold_min:
+            result.exit = False
+            result.direction = "HOLD"
+            result.reasoning = (
+                f"HOLD: within min hold ({duration_hours * 60:.0f}m < {min_hold_min}m). "
+                f"PnL={pnl_pct:.1f}%."
+            )
+            return result
+
         # 2. TIME-BASED EXIT (negative only)
         if duration_hours >= max_hold_hours and pnl_pct < 0:
             result.exit = True

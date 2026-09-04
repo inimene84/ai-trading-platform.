@@ -94,8 +94,12 @@ class TradingLoopService:
         self._last_cycle: Optional[str] = None
         self._next_cycle: Optional[str] = None
         self._cycle_count = 0
-        # Market regime detector — one instance shared across all cycles/symbols
-        self._regime_detector = MarketRegimeDetector()
+        # Per-symbol regime detectors injected into each cycle's DecisionEngine.
+        # The detector's 5-bar transition smoothing depends on _history
+        # persisting across calls; a fresh DecisionEngine per cycle used to
+        # wipe it, making smoothing dead code. Keyed by symbol so histories
+        # don't mix across instruments.
+        self._regime_detectors: dict = {}
         self._unified_trading = None  # Will be set to singleton in start()
         self._pyramid_layers = {}
         self._execution_lock = asyncio.Lock()
@@ -142,6 +146,14 @@ class TradingLoopService:
             return (datetime.now(timezone.utc) - dt).total_seconds()
         except Exception:
             return None
+
+    def _detector_for(self, symbol: str) -> MarketRegimeDetector:
+        """Return the persistent per-symbol regime detector (creates on first use)."""
+        detector = self._regime_detectors.get(symbol)
+        if detector is None:
+            detector = MarketRegimeDetector()
+            self._regime_detectors[symbol] = detector
+        return detector
 
     def _should_evaluate_bar(self, symbol: str, bars: list[dict]) -> bool:
         """Entry pipeline runs at most once per bar (exits still run every cycle).
@@ -1044,6 +1056,9 @@ class TradingLoopService:
 
             # 4. Evaluate using Decision Engine
             decision_engine = DecisionEngine(self.risk_config)
+            # Inject the persistent per-symbol regime detector so the detector's
+            # transition smoothing survives across cycles (see __init__ note).
+            decision_engine.regime_detector = self._detector_for(symbol)
             decision_engine.account_equity = getattr(self, "_cycle_equity", 0.0)
             decision = await decision_engine.evaluate_symbol(
                 symbol=symbol,
