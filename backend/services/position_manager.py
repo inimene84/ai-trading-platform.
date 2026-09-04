@@ -86,7 +86,9 @@ class PositionManager:
         # entry. Live data: holds <1h won 37.5% vs 78.8% for >24h holds.
         # Only the emergency drawdown exit (above) is exempt.
         min_hold_min = getattr(self.config, "min_position_hold_min", 0) or 0
-        if min_hold_min > 0 and duration_hours * 60 < min_hold_min:
+        # duration_hours stays 0 when opened_at is missing/unparseable — do not
+        # treat "unknown age" as "just opened" or time/AI exits are blocked forever.
+        if min_hold_min > 0 and duration_hours > 0 and duration_hours * 60 < min_hold_min:
             result.exit = False
             result.direction = "HOLD"
             result.reasoning = (
