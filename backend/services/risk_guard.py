@@ -8,6 +8,19 @@ from backend.services.risk_config import RiskConfig
 from backend.services.trading_mode import TradingMode, get_trading_mode
 from backend.database.models import Trade, PortfolioSnapshot
 
+
+def _snapshot_risk_equity(snapshot: PortfolioSnapshot) -> float:
+    """Equity the drawdown / daily-loss gates should see.
+
+    In paper mode, ``total_value`` was historically cash + margin_used.
+    That is reserved buying power, not NAV, so peak/current must use cash.
+    """
+    if get_trading_mode() == TradingMode.PAPER:
+        cash = float(getattr(snapshot, "cash", 0.0) or 0.0)
+        if cash > 0:
+            return cash
+    return float(getattr(snapshot, "total_value", 0.0) or 0.0)
+
 logger = logging.getLogger(__name__)
 
 # Drawdown peak is computed over a rolling window, NOT all-time. An all-time
@@ -103,8 +116,10 @@ def enforce_risk_limits(
     effective_exposure_cap = cfg.max_directional_exposure_usdt
     if getattr(cfg, "equity_sizing_enabled", False):
         equity = 0.0
-        if latest_snapshot and latest_snapshot.total_value > 0:
-            equity = float(latest_snapshot.total_value)
+        if latest_snapshot and (
+            latest_snapshot.total_value > 0 or float(getattr(latest_snapshot, "cash", 0) or 0) > 0
+        ):
+            equity = _snapshot_risk_equity(latest_snapshot)
         else:
             if get_trading_mode() == TradingMode.PAPER:
                 equity = 100000.0
@@ -115,13 +130,19 @@ def enforce_risk_limits(
     if effective_exposure_cap > 0:
         exposure = _directional_exposure_usdt(open_trades)
         if exposure > effective_exposure_cap:
-            raise RiskBreach(
+            msg = (
                 f"Max directional exposure exceeded: ${exposure:.2f} > "
                 f"${effective_exposure_cap:.2f}"
             )
+            # Paper oversized fills must not freeze SL/TP management. Live still
+            # fail-closes the cycle.
+            if get_trading_mode() == TradingMode.PAPER:
+                logger.warning("[RISK GUARD] %s — paper mode continues so exits still run", msg)
+            else:
+                raise RiskBreach(msg)
 
     if latest_snapshot:
-        current_value = latest_snapshot.total_value
+        current_value = _snapshot_risk_equity(latest_snapshot)
 
         # 3. Max portfolio drawdown — peak over a ROLLING window (see module note).
         #    Disable entirely by setting max_portfolio_drawdown_pct >= 100
@@ -130,15 +151,31 @@ def enforce_risk_limits(
         #    exceed it", so we skip the query work and never raise.
         if cfg.max_portfolio_drawdown_pct < 100:
             window_start = datetime.now(timezone.utc) - timedelta(hours=PEAK_LOOKBACK_HOURS)
-            peak_value = (
-                db.query(func.max(PortfolioSnapshot.total_value))
-                .filter(PortfolioSnapshot.timestamp >= window_start)
-                .scalar()
-            )
-            # Fallback if the window is empty (fresh DB / sparse history): use the
-            # all-time peak so we still have *some* drawdown anchor rather than none.
-            if peak_value is None:
-                peak_value = db.query(func.max(PortfolioSnapshot.total_value)).scalar() or current_value
+            if get_trading_mode() == TradingMode.PAPER:
+                peak_value = (
+                    db.query(func.max(PortfolioSnapshot.cash))
+                    .filter(
+                        PortfolioSnapshot.timestamp >= window_start,
+                        PortfolioSnapshot.cash > 0,
+                    )
+                    .scalar()
+                )
+                if peak_value is None:
+                    peak_value = (
+                        db.query(func.max(PortfolioSnapshot.cash))
+                        .filter(PortfolioSnapshot.cash > 0)
+                        .scalar()
+                    ) or current_value
+            else:
+                peak_value = (
+                    db.query(func.max(PortfolioSnapshot.total_value))
+                    .filter(PortfolioSnapshot.timestamp >= window_start)
+                    .scalar()
+                )
+                # Fallback if the window is empty (fresh DB / sparse history): use the
+                # all-time peak so we still have *some* drawdown anchor rather than none.
+                if peak_value is None:
+                    peak_value = db.query(func.max(PortfolioSnapshot.total_value)).scalar() or current_value
             if current_value < peak_value:
                 drawdown_pct = ((peak_value - current_value) / peak_value) * 100
                 if drawdown_pct > cfg.max_portfolio_drawdown_pct:
@@ -163,7 +200,7 @@ def enforce_risk_limits(
                 .first()
             )
             if first_snapshot_today:
-                start_value = first_snapshot_today.total_value
+                start_value = _snapshot_risk_equity(first_snapshot_today)
             else:
                 # No snapshot recorded yet today: the original code silently skipped
                 # the daily-loss check entirely (fail-open). Instead, fall back to
@@ -175,7 +212,7 @@ def enforce_risk_limits(
                     .order_by(PortfolioSnapshot.timestamp.desc())
                     .first()
                 )
-                start_value = prev.total_value if prev else None
+                start_value = _snapshot_risk_equity(prev) if prev else None
                 if start_value is None:
                     logger.warning(
                         "[RISK GUARD] No baseline snapshot for daily-loss check; skipping (cold start)."

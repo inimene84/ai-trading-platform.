@@ -30,7 +30,7 @@ from typing import Dict, List, Optional
 
 from backend.brokers import IBroker
 from backend.services.portfolio import create_portfolio
-from backend.services.trading_mode import paper_leverage_for_broker
+from backend.services.trading_mode import paper_leverage_for_broker, paper_reported_equity
 
 logger = logging.getLogger(__name__)
 
@@ -656,9 +656,9 @@ class PaperTradingEngine:
         """Shallow clone for external reads."""
         cash = float(pf.get("cash", 0.0) or 0.0)
         margin_used = float(pf.get("margin_used", 0.0) or 0.0)
-        # Paper equity is cash plus remaining margin (positions are already
-        # reserved as margin_used). Kill switch / sizing read this field.
-        equity = cash + margin_used
+        # Margin is reserved buying power. Adding it to cash inflated paper
+        # NAV by open notional (or notional/leverage) and tripped drawdown.
+        equity = paper_reported_equity(cash, margin_used)
         return {
             "cash": cash,
             "equity": equity,

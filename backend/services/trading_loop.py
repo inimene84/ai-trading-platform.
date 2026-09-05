@@ -30,6 +30,7 @@ from backend.services.trading_mode import (
     TradingMode,
     get_trading_mode,
     paper_leverage_for_broker,
+    paper_reported_equity,
     paper_starting_balance,
 )
 from backend.services.trading_loop_helpers import (
@@ -221,7 +222,9 @@ class TradingLoopService:
                 if cash <= 0:
                     return None
                 margin = float(row.margin_used or 0.0)
-                return self._paper_balance_payload(cash, cash + margin, margin)
+                return self._paper_balance_payload(
+                    cash, paper_reported_equity(cash, margin), margin
+                )
             finally:
                 db.close()
         except Exception as e:
@@ -241,7 +244,7 @@ class TradingLoopService:
                 if pf:
                     cash = float(pf.get("cash", 0.0) or 0.0)
                     margin = float(pf.get("margin_used", 0.0) or 0.0)
-                    equity = float(pf.get("equity", cash + margin) or 0.0)
+                    equity = float(pf.get("equity") or paper_reported_equity(cash, margin) or 0.0)
                     if equity > 0:
                         return self._paper_balance_payload(cash, equity, margin)
             except Exception as e:

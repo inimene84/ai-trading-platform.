@@ -8,6 +8,7 @@ from backend.services.trading_mode import (
     TradingMode,
     get_trading_mode,
     live_binance_orders_allowed,
+    paper_reported_equity,
     paper_starting_balance,
 )
 from backend.services.unified_trading import (
@@ -44,6 +45,26 @@ def test_paper_starting_balance_from_env(monkeypatch):
 def test_paper_starting_balance_rejects_non_positive(monkeypatch):
     monkeypatch.setenv("PAPER_BALANCE", "0")
     assert paper_starting_balance() == 100_000.0
+
+
+def test_paper_reported_equity_excludes_margin():
+    assert paper_reported_equity(100_000.0, 32_960.60) == 100_000.0
+    assert paper_reported_equity(100_000.0, 98_465.54) == 100_000.0
+
+
+def test_clone_pf_equity_is_cash_not_margin():
+    UnifiedTrading._instance = None
+    engine = UnifiedTrading()._paper
+    pid = engine.create_portfolio("eq-cash", 100_000.0, leverage=10.0)
+    engine.place_order(pid, UnifiedOrder(
+        symbol="ETHUSDT", side=OrderSide.BUY, order_type=OrderType.MARKET,
+        quantity=10.0, price=2451.0,
+    ))
+    pf = engine.get_portfolio(pid)
+    assert pf["cash"] == 100_000.0
+    assert pf["margin_used"] > 0
+    assert pf["equity"] == pf["cash"]
+    UnifiedTrading._instance = None
 
 
 def test_paper_clips_oversize_eth_instead_of_skipping():

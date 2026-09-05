@@ -102,6 +102,42 @@ def test_risk_guard_counts_distinct_symbols_not_dca_layers(db_session):
     enforce_risk_limits(db_session, cfg, trades, None)
 
 
+def test_paper_drawdown_uses_cash_not_inflated_total(db_session, monkeypatch):
+    """Regression: paper equity was cash+margin and halted a flat $100k book.
+
+    Peak $198k (1x LINK/LTC margin added to cash) vs current $133k (10x
+    margin added to cash) is a 33% fake drawdown. Cash stayed $100k.
+    """
+    monkeypatch.setenv("TRADING_MODE", "paper")
+    monkeypatch.setenv("PAPER_TRADING", "true")
+    cfg = RiskConfig(
+        max_portfolio_drawdown_pct=20.0,
+        max_daily_loss_pct=99.0,
+        max_positions=20,
+        max_open_positions=20,
+        max_directional_exposure_usdt=0,
+        equity_sizing_enabled=False,
+    )
+    now = datetime.now(timezone.utc)
+    db_session.add(
+        PortfolioSnapshot(
+            total_value=198465.54,
+            cash=100000.0,
+            positions_value=98474.48,
+            timestamp=now - timedelta(hours=3),
+        )
+    )
+    current = PortfolioSnapshot(
+        total_value=132960.60,
+        cash=100000.0,
+        positions_value=428080.51,
+        timestamp=now,
+    )
+    db_session.add(current)
+    db_session.commit()
+    enforce_risk_limits(db_session, cfg, [], current)
+
+
 def test_risk_guard_blocks_excessive_drawdown(db_session):
     cfg = RiskConfig(
         max_position_risk_pct=1.0,
