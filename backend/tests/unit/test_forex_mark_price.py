@@ -52,7 +52,9 @@ async def test_dashboard_positions_use_ctrader_mark_not_binance():
     ) as broker, patch(
         "backend.routes.trading.upsert_ctrader_live_trades", return_value=0
     ), patch(
-        "backend.routes.trading._fetch_mark_prices_for_symbols", return_value={}
+        "backend.routes.trading._fetch_mark_prices_for_symbols",
+        new_callable=AsyncMock,
+        return_value={},
     ) as fetch_marks:
         broker.has_credentials.return_value = False
         broker.is_connected = MagicMock(return_value=False)

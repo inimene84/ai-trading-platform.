@@ -2,7 +2,7 @@
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -269,7 +269,10 @@ async def test_dashboard_positions_include_ctrader_broker_field():
     ) as broker, patch(
         "backend.routes.trading.upsert_ctrader_live_trades", return_value=1
     ), patch(
-        "backend.routes.trading._fetch_mark_prices_for_symbols", return_value={}
+        "backend.routes.trading._fetch_mark_prices_for_symbols",
+        new_callable=AsyncMock,
+        return_value={},
+    )
     ):
         broker.get_positions.return_value = live
         result = await get_positions()

@@ -21,10 +21,11 @@ def auth_headers():
 
 @pytest.fixture(autouse=True)
 def clean_trading_mode_for_tests(monkeypatch):
-    """Ensure TRADING_MODE from .env does not block unit tests of live order methods.
+    """Default unit tests to live so Binance order-method tests are not blocked.
 
-    Tests that specifically test paper mode (e.g. test_binance_paper_mode.py)
-    will monkeypatch TRADING_MODE to 'paper'.
+    Paper-mode tests (e.g. test_binance_paper_mode.py) monkeypatch TRADING_MODE
+    to 'paper' in the test body, which overrides this fixture.
     """
-    if os.getenv("TRADING_MODE") == "paper":
-        monkeypatch.delenv("TRADING_MODE", raising=False)
+    monkeypatch.setenv("TRADING_MODE", "live")
+    monkeypatch.setenv("PAPER_TRADING", "false")
+    monkeypatch.setenv("DRY_RUN_ALL", "false")

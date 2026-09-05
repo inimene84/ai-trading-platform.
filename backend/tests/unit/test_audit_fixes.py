@@ -155,19 +155,24 @@ def test_binance_close_position_targets_the_held_side():
     svc.get_positions = lambda *a, **k: [
         {"symbol": "ETHUSDT", "side": "LONG", "quantity": 0.5}
     ]
-    with patch.object(svc, "place_order", return_value={"status": "sent"}) as order:
+    with patch.object(svc, "_live_position_qty", return_value=0.5), \
+         patch.object(svc, "place_order", return_value={"status": "sent"}) as order:
         svc.close_position(symbol="ETHUSDT")
 
     assert order.call_args.kwargs["direction"] == "BUY", "closing a long must target the LONG leg"
+    assert order.call_args.kwargs["quantity"] == 0.5
 
-    with patch.object(svc, "place_order", return_value={"status": "sent"}) as order:
+    with patch.object(svc, "_live_position_qty", return_value=0.5), \
+         patch.object(svc, "place_order", return_value={"status": "sent"}) as order:
         svc.close_position(symbol="ETHUSDT", direction="SHORT")
     assert order.call_args.kwargs["direction"] == "SELL"
 
 
 def _emergency_env(monkeypatch):
     monkeypatch.setenv("ACTIVE_BROKER", "binance_futures")
+    monkeypatch.setenv("TRADING_MODE", "live")
     monkeypatch.setenv("PAPER_TRADING", "false")
+    monkeypatch.setenv("DRY_RUN_ALL", "false")
     monkeypatch.setenv("BINANCE_DRY_RUN", "false")
 
 

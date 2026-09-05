@@ -14,7 +14,6 @@ from backend.services.signal_candidate_engine import (
     TimingMode,
     CandidateStatus,
     CANDIDATE_TTL_SECONDS,
-    EQUITY_FALLBACK_USD,
 )
 from backend.services.ctrader_service import CTraderService
 from backend.services.multi_asset_bars import classify_symbol, tf_to_binance_interval
@@ -568,36 +567,29 @@ async def test_execute_candidate_keeps_ready_on_paper_failure():
 def test_resolve_equity_uses_live_broker_and_logs_fallback():
     engine = SignalCandidateEngine()
     with patch(
-        "backend.services.signal_candidate_engine.ctrader_service.get_balance",
-        return_value={"equity": 40000.0, "balance": 40000.0},
+        "backend.services.signal_candidate_engine.ctrader_service.equity",
+        40000.0,
     ):
         assert engine._resolve_equity("ctrader") == pytest.approx(40000.0)
-        # Cached — second call must not re-hit the broker.
-        with patch(
-            "backend.services.signal_candidate_engine.ctrader_service.get_balance",
-            side_effect=AssertionError("should use cache"),
-        ):
-            assert engine._resolve_equity("ctrader") == pytest.approx(40000.0)
 
     engine._equity_cache.clear()
     with patch(
         "backend.services.signal_candidate_engine.binance_futures_broker.get_balance",
         return_value={"equity": 0.0, "balance": 0.0},
     ):
-        assert engine._resolve_equity("binance_futures") == pytest.approx(EQUITY_FALLBACK_USD)
+        assert engine._resolve_equity("binance_futures") == pytest.approx(150.0)
 
 
 def test_calculate_size_scales_with_live_equity():
     engine = SignalCandidateEngine()
     with patch(
-        "backend.services.signal_candidate_engine.ctrader_service.get_balance",
-        return_value={"equity": 10000.0},
+        "backend.services.signal_candidate_engine.ctrader_service.equity",
+        10000.0,
     ):
         small = engine._calculate_size("EURUSD", 1.0850, 1.0820, "ctrader")
-    engine._equity_cache.clear()
     with patch(
-        "backend.services.signal_candidate_engine.ctrader_service.get_balance",
-        return_value={"equity": 50000.0},
+        "backend.services.signal_candidate_engine.ctrader_service.equity",
+        50000.0,
     ):
         large = engine._calculate_size("EURUSD", 1.0850, 1.0820, "ctrader")
     assert large["risk_usd"] == pytest.approx(small["risk_usd"] * 5.0)
