@@ -465,3 +465,63 @@ def test_new_decision_engine_without_inject_does_not_share_history(risk_config):
     b = DecisionEngine(risk_config)
     assert a.regime_detector is not b.regime_detector
     assert isinstance(a.regime_detector, MarketRegimeDetector)
+
+
+def test_affordable_notional_caps_tight_stop_on_1x_paper():
+    from backend.services.decision_engine import affordable_notional
+
+    # 1% risk / 0.93% stop → $107,549 notional on a $100k 1x book.
+    raw = 100_000.0 * 0.01 / (2451.0 - 2428.21) * 2451.0
+    assert raw > 107_000
+    cap = affordable_notional(
+        equity=100_000.0,
+        available=100_000.0,
+        leverage=1.0,
+        max_equity_mult=2.0,
+        max_margin_use_pct=0.95,
+    )
+    assert cap == pytest.approx(95_000.0)
+    assert cap < raw
+
+
+def test_affordable_notional_allows_risk_size_at_10x():
+    from backend.services.decision_engine import affordable_notional
+
+    raw = 100_000.0 * 0.01 / (2451.0 - 2428.21) * 2451.0
+    cap = affordable_notional(
+        equity=100_000.0,
+        available=100_000.0,
+        leverage=10.0,
+        max_equity_mult=2.0,
+        max_margin_use_pct=0.95,
+    )
+    assert cap >= raw
+
+
+def test_eth_tight_stop_does_not_exceed_paper_cash(risk_config):
+    """Dashboard skip: need $107k margin, have $100k at 1x paper leverage."""
+    engine = DecisionEngine(risk_config)
+    engine.account_equity = 100_000.0
+    engine.account_available = 100_000.0
+    engine.account_leverage = 1.0
+    bars = _make_bars(200, base=2451.0)
+    signal = StrategySignal(
+        symbol="ETHUSDT", signal="BUY", confidence=0.65,
+        entry_price=2451.0, stop_loss=2428.21, take_profit=2496.579,
+        strategy="combined",
+    )
+    decision = engine._create_entry_decision(
+        "ETHUSDT", bars, signal, "BUY", is_pyramid=False, regime="TRENDING",
+    )
+    assert decision is not None
+    required = decision.quantity * decision.entry_price / engine.account_leverage
+    assert required <= 100_000.0 * 0.95 + 1e-6
+
+
+def test_paper_leverage_for_binance_defaults_to_ten(monkeypatch):
+    from backend.services.trading_mode import paper_leverage_for_broker
+
+    monkeypatch.delenv("BINANCE_LEVERAGE", raising=False)
+    assert paper_leverage_for_broker("binance_futures") == 10.0
+    monkeypatch.setenv("BINANCE_LEVERAGE", "5")
+    assert paper_leverage_for_broker("binance_futures") == 5.0

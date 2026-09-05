@@ -108,6 +108,13 @@ class RiskConfig(BaseSettings):
         default=2.0,
         validation_alias=AliasChoices("max_trade_notional_equity_mult", "MAX_TRADE_NOTIONAL_EQUITY_MULT"),
     )
+    # Never request more margin than this fraction of available cash/margin.
+    # Stops paper 1x books from skipping a 1% risk entry when the stop is tight
+    # (need $107k on a $100k book).
+    max_trade_margin_use_pct: float = PydanticField(
+        default=0.95,
+        validation_alias=AliasChoices("max_trade_margin_use_pct", "MAX_TRADE_MARGIN_USE_PCT"),
+    )
     kill_floor_usdt: float = PydanticField(
         default=65.0,
         validation_alias=AliasChoices("kill_floor_usdt", "TRADING_KILL_FLOOR_USDT"),

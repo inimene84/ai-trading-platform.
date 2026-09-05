@@ -30,6 +30,7 @@ from typing import Dict, List, Optional
 
 from backend.brokers import IBroker
 from backend.services.portfolio import create_portfolio
+from backend.services.trading_mode import paper_leverage_for_broker
 
 logger = logging.getLogger(__name__)
 
@@ -206,6 +207,7 @@ class PaperTradingEngine:
             for pid, pf in self._portfolios.items():
                 meta = pf.get("_meta") or {}
                 if meta.get("name") == name:
+                    self._sync_portfolio_leverage(pid, pf, leverage)
                     return pid
         db = None
         try:
@@ -241,6 +243,7 @@ class PaperTradingEngine:
                         pf["cash"] = float(row.cash or balance)
                         pf["margin_used"] = float(row.margin_used or 0.0)
                         self._portfolios[pid] = pf
+                    self._sync_portfolio_leverage(pid, self._portfolios[pid], leverage)
                 return pid
         except Exception as e:
             logger.warning(f"Paper portfolio lookup failed: {e}")
@@ -251,6 +254,43 @@ class PaperTradingEngine:
             name=name, balance=balance, currency=currency, leverage=leverage,
             margin_mode=margin_mode, fee_rate=fee_rate, exchange=exchange,
         )
+
+    def _recompute_margin_used(self, pf: dict) -> float:
+        meta = pf.get("_meta") or {}
+        leverage = max(float(meta.get("leverage") or 1.0), 1e-9)
+        used = 0.0
+        for pos in pf.get("positions", {}).values():
+            used += (float(pos.get("long") or 0) * float(pos.get("long_cost_basis") or 0)) / leverage
+            used += (float(pos.get("short") or 0) * float(pos.get("short_cost_basis") or 0)) / leverage
+        pf["margin_used"] = used
+        return used
+
+    def _sync_portfolio_leverage(self, pid: str, pf: dict, leverage: float) -> None:
+        """Keep a reused paper book on the session leverage (e.g. Binance 10x)."""
+        lev = max(float(leverage), 1e-9)
+        meta = pf.setdefault("_meta", {})
+        current = float(meta.get("leverage") or 1.0)
+        if abs(current - lev) < 1e-9:
+            return
+        meta["leverage"] = lev
+        self._recompute_margin_used(pf)
+        db = None
+        try:
+            db = _get_db()
+            from backend.database.models import PaperPortfolio as PP
+            row = db.query(PP).filter(PP.portfolio_id == pid).first()
+            if row:
+                row.leverage = lev
+                row.margin_used = float(pf.get("margin_used") or 0.0)
+                db.commit()
+        except Exception as e:
+            if db is not None:
+                db.rollback()
+            logger.warning(f"Paper leverage persist failed: {e}")
+        finally:
+            if db is not None:
+                db.close()
+        logger.info("Paper portfolio %s leverage %.4gx -> %.4gx", pid, current, lev)
 
     def get_portfolio(self, portfolio_id: str) -> dict:
         with self._lock:
@@ -318,8 +358,21 @@ class PaperTradingEngine:
                                 "paper",
                             )
                         ref = last_fills[-1]
-                    required = net_new * ref / meta["leverage"]
+                    leverage = max(float(meta.get("leverage") or 1.0), 1e-9)
+                    required = net_new * ref / leverage
                     available = float(pf["cash"]) - float(pf.get("margin_used") or 0.0)
+                    if required > available > 0 and ref > 0:
+                        max_qty = opposite_qty + (available * leverage / ref) * 0.99
+                        if max_qty > opposite_qty:
+                            logger.warning(
+                                "Paper order clipped %s qty %.6f -> %.6f "
+                                "(need %.2f have %.2f @ %.4gx)",
+                                order.symbol, order.quantity, max_qty,
+                                required, available, leverage,
+                            )
+                            order.quantity = max_qty
+                            net_new = max(0.0, order.quantity - opposite_qty)
+                            required = net_new * ref / leverage
                     if required > available:
                         return UnifiedOrderResponse(False, oid,
                             f"Insufficient margin: need {required:.2f}, have {available:.2f}", "paper")
@@ -480,12 +533,7 @@ class PaperTradingEngine:
         # 3. Update balance (deduct fee only on closing fills) and margin
         balance_change = pnl - (fee if had_opposite else 0)
         pf["cash"] += balance_change
-        leverage = max(float(meta.get("leverage") or 1.0), 1e-9)
-        used = 0.0
-        for p in pf.get("positions", {}).values():
-            used += (float(p.get("long") or 0) * float(p.get("long_cost_basis") or 0)) / leverage
-            used += (float(p.get("short") or 0) * float(p.get("short_cost_basis") or 0)) / leverage
-        pf["margin_used"] = used
+        self._recompute_margin_used(pf)
 
         # 4. Update order
         new_filled = order["filled_qty"] + qty
@@ -666,11 +714,14 @@ class UnifiedTrading:
                 return existing
             session = TradingSession(broker=broker, mode=mode)
             if mode == "paper":
+                session_leverage = leverage
+                if abs(float(leverage) - 1.0) < 1e-9:
+                    session_leverage = paper_leverage_for_broker(broker)
                 pid = self._paper.find_or_create_portfolio(
                     name=f"{broker} Paper Trading",
                     balance=paper_balance,
                     currency=currency,
-                    leverage=leverage,
+                    leverage=session_leverage,
                     exchange=broker,
                 )
                 session.paper_portfolio_id = pid
