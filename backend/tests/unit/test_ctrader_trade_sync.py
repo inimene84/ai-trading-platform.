@@ -272,7 +272,6 @@ async def test_dashboard_positions_include_ctrader_broker_field():
         "backend.routes.trading._fetch_mark_prices_for_symbols",
         new_callable=AsyncMock,
         return_value={},
-    )
     ):
         broker.get_positions.return_value = live
         result = await get_positions()

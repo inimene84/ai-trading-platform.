@@ -234,7 +234,6 @@ async def test_dashboard_positions_filters_out_ghost_trades():
         "backend.routes.trading._fetch_mark_prices_for_symbols",
         new_callable=AsyncMock,
         return_value={},
-    )
     ):
         result = await get_positions()
 
@@ -300,7 +299,6 @@ async def test_reconcile_14_trades_down_to_9_live_positions():
         "backend.routes.trading._fetch_mark_prices_for_symbols",
         new_callable=AsyncMock,
         return_value={},
-    )
     ):
         positions_res = await get_positions()
         portfolio_res = await get_portfolio()

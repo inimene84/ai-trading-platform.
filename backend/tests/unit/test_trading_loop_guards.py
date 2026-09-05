@@ -300,6 +300,7 @@ def _open_trade(symbol="BTCUSDT", direction="BUY", qty=0.1, entry=100.0,
     t.stop_loss = stop_loss
     t.take_profit = take_profit
     t.notes = ""
+    t.status = "open"
     t.id = trade_id
     return t
 
