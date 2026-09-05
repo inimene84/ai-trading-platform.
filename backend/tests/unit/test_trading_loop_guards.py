@@ -40,6 +40,18 @@ def _loop(risk=None):
     return loop
 
 
+def test_regime_detector_is_reused_per_symbol():
+    loop = _loop()
+    eth_a = loop._regime_detector_for("ETHUSDT")
+    eth_b = loop._regime_detector_for("ETHUSDT")
+    btc = loop._regime_detector_for("BTCUSDT")
+    assert eth_a is eth_b
+    assert eth_a is not btc
+    eth_a._history.append("TRENDING")
+    assert eth_b._history[-1] == "TRENDING"
+    assert btc._history == []
+
+
 # --------------------------------------------------------------------------- #
 # _should_evaluate_bar — entry pipeline runs at most once per bar
 # --------------------------------------------------------------------------- #
@@ -175,6 +187,31 @@ def test_filter_symbols_rejects_illiquid_and_unknown():
         result = _filter_symbols_sync(loop, ["BTCUSDT", "ILLIQUSDT", "GHOSTUSDT"])
 
     assert result == ["BTCUSDT"]
+
+
+def test_filter_symbols_keeps_open_legs_without_binance_ticker():
+    """Open FX / unknown symbols must stay in the manage set even when
+    Binance has no 24h ticker (otherwise SL/TP maintenance is abandoned)."""
+    loop = _loop(_fake_risk_config(min_24h_quote_volume_usdt=10_000_000))
+
+    open_db = MagicMock()
+    oq = MagicMock()
+    oq.filter.return_value.distinct.return_value.all.return_value = [("EURUSD",), ("ILLIQUSDT",)]
+    open_db.query.return_value = oq
+
+    tickers = [
+        {"symbol": "BTCUSDT", "quoteVolume": 5_000_000_000},
+        {"symbol": "ILLIQUSDT", "quoteVolume": 1_000},
+    ]
+    with patch("backend.services.trading_loop.SessionLocal", return_value=open_db), \
+         patch("backend.services.trading_loop.binance_market_data.get_all_tickers_24h",
+               return_value=tickers):
+        result = _filter_symbols_sync(loop, ["BTCUSDT", "ILLIQUSDT", "EURUSD", "GHOSTUSDT"])
+
+    assert "BTCUSDT" in result
+    assert "ILLIQUSDT" in result  # open, even if illiquid
+    assert "EURUSD" in result     # open, even if no Binance ticker
+    assert "GHOSTUSDT" not in result
 
 
 # --------------------------------------------------------------------------- #

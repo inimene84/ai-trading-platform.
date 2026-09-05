@@ -16,6 +16,7 @@ from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 
 from backend.services.trading_mode import live_binance_orders_allowed
+from backend.services.multi_asset_bars import classify_symbol
 
 load_dotenv(Path(__file__).resolve().parents[2] / '.env', override=True)
 
@@ -237,6 +238,8 @@ class BinanceFuturesService:
 
     def _to_futures_symbol(self, symbol: str) -> Optional[str]:
         """Convert internal symbol → Binance Futures format. Returns None if unsupported."""
+        if not symbol:
+            return None
         if symbol in UNSUPPORTED_SYMBOLS:
             return None
         if symbol in SYMBOL_MAP:
@@ -247,6 +250,15 @@ class BinanceFuturesService:
         # form (no explicit stablecoin) defaults to USDT.
         if cleaned.endswith('USDC') or cleaned.endswith('USDT'):
             return cleaned
+        # Crypto yfinance aliases (BTC-USD) must map before FX classify —
+        # ETHUSD is 6 letters and would otherwise look like a forex pair.
+        if cleaned.endswith('-USD'):
+            return cleaned.replace('-USD', 'USDT')
+        # EURUSD / XAUUSD used to become EURUSDUSDT and hit Binance.
+        asset = classify_symbol(cleaned.replace('-', ''))
+        if asset in ('forex', 'metal', 'oil'):
+            logger.info(f"[Binance Futures] Skipping non-crypto symbol: {symbol} ({asset})")
+            return None
         cleaned = cleaned.replace('-USD', 'USDT')
         if not (cleaned.endswith('USDT') or cleaned.endswith('USDC')):
             cleaned += 'USDT'

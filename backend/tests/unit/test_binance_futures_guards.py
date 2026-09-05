@@ -65,6 +65,8 @@ def test_is_existing_close_position_error_other():
     ("BTC-USD", "BTCUSDT"),        # legacy yfinance form -> USDT
     ("FOO", "FOOUSDT"),           # unknown -> appends USDT
     ("EURUSD=X", None),           # unsupported -> None
+    ("EURUSD", None),             # bare FX must not become EURUSDUSDT
+    ("XAUUSD", None),             # metals are cTrader, not Binance
 ])
 def test_to_futures_symbol(symbol, expected):
     assert _broker()._to_futures_symbol(symbol) == expected

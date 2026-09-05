@@ -7,7 +7,7 @@ import asyncio
 import os
 import structlog
 from datetime import datetime, timezone, timedelta
-from typing import Optional
+from typing import Optional, Dict
 
 import yfinance as yf
 from dotenv import load_dotenv
@@ -22,6 +22,7 @@ from backend.services.binance_websocket import binance_ws
 from backend.services.multi_provider_data import multi_provider_data
 
 from backend.strategies.market_regime import MarketRegimeDetector
+from backend.services.decision_engine import DecisionEngine
 from backend.services.unified_trading import UnifiedTrading, UnifiedOrder, OrderSide, OrderType
 from backend.services.position_manager import get_position_manager
 from backend.services.sentry_state import get_trading_status, is_trading_allowed
@@ -35,6 +36,7 @@ from backend.services.trading_loop_helpers import (
     PerformanceMetricsWriter,
     remove_closed_pyramid_layer,
     trades_for_direction_cap,
+    is_ctrader_trade,
 )
 
 load_dotenv()
@@ -100,7 +102,7 @@ class TradingLoopService:
         # persisting across calls; a fresh DecisionEngine per cycle used to
         # wipe it, making smoothing dead code. Keyed by symbol so histories
         # don't mix across instruments.
-        self._regime_detectors: dict = {}
+        self._regime_detectors: Dict[str, MarketRegimeDetector] = {}
         self._unified_trading = None  # Will be set to singleton in start()
         self._pyramid_layers = {}
         self._execution_lock = asyncio.Lock()
@@ -130,6 +132,14 @@ class TradingLoopService:
         # evaluated. The loop cycles every 15 min on 1h bars, so without this
         # the same bar was re-decided up to 4x (churn + redundant LLM cost).
         self._last_eval_bar: dict = {}
+
+    def _regime_detector_for(self, symbol: str) -> MarketRegimeDetector:
+        """Reuse one detector per symbol so regime smoothing can accumulate."""
+        det = self._regime_detectors.get(symbol)
+        if det is None:
+            det = MarketRegimeDetector()
+            self._regime_detectors[symbol] = det
+        return det
 
     @staticmethod
     def _bar_open_age_seconds(bar: dict) -> Optional[float]:
@@ -731,10 +741,20 @@ class TradingLoopService:
                 logger.info(f"  [POSITION MGR] Reviewing {len(open_trades)} open positions for exits...")
                 for trade in open_trades:
                     try:
+                        if is_ctrader_trade(trade):
+                            continue
                         trade_bars = await self._fetch_bars(trade.symbol)
                         if not trade_bars or len(trade_bars) < 10:
                             continue
                         curr_price = trade_bars[-1]["close"]
+                        # Prefer the live mark over a (possibly hours-old) candle close.
+                        fsym = binance_futures_broker._to_futures_symbol(trade.symbol)
+                        for p in self._cycle_positions:
+                            if p.get("symbol") == (fsym or trade.symbol):
+                                mark = float(p.get("mark_price") or 0)
+                                if mark > 0:
+                                    curr_price = mark
+                                break
                         # Fetch funding rate for position exit review
                         try:
                             fr_data = await binance_market_data.get_funding_rate(trade.symbol)
@@ -1023,7 +1043,6 @@ class TradingLoopService:
         """Inner implementation — runs under the symbol semaphore."""
         import structlog
         structlog.contextvars.bind_contextvars(symbol=symbol)
-        from backend.services.decision_engine import DecisionEngine
         from backend.database.connection import SessionLocal
         from backend.database.models import Trade, TradingSignal
         from datetime import datetime, timezone
@@ -1125,10 +1144,10 @@ class TradingLoopService:
                 current_funding_rate = 0.0
 
             # 4. Evaluate using Decision Engine
-            decision_engine = DecisionEngine(self.risk_config)
-            # Inject the persistent per-symbol regime detector so the detector's
-            # transition smoothing survives across cycles (see __init__ note).
-            decision_engine.regime_detector = self._detector_for(symbol)
+            decision_engine = DecisionEngine(
+                self.risk_config,
+                regime_detector=self._regime_detector_for(symbol),
+            )
             decision_engine.account_equity = getattr(self, "_cycle_equity", 0.0)
             decision = await decision_engine.evaluate_symbol(
                 symbol=symbol,
@@ -1296,7 +1315,9 @@ class TradingLoopService:
                         strategy=self._strategy_name,
                         binance_order_id=order_result.order_id,
                         stop_loss=decision.stop_loss, take_profit=decision.take_profit,
-                        notes=f"pyramid_layer_{len(self._pyramid_layers.get(symbol, []))}" if decision.is_pyramid else None
+                        notes=f"pyramid_layer_{len(self._pyramid_layers.get(symbol, []))}" if decision.is_pyramid else None,
+                        broker=get_active_broker_name(),
+                        exchange=get_active_broker_name(),
                     )
                     db.add(trade)
                     db.commit()
@@ -1504,6 +1525,8 @@ class TradingLoopService:
             .all()
         )
         for trade in trades:
+            if is_ctrader_trade(trade):
+                continue
 
             hit = False
             if trade.direction == "BUY":
@@ -1680,12 +1703,19 @@ class TradingLoopService:
 
         passed, rejected = [], []
         for s in candidates:
-            v = vol_by_sym.get(s.upper())
-            # Unknown symbol (delisted / not on futures) → reject as unsafe
+            su = s.upper()
+            v = vol_by_sym.get(su)
+            # Unknown to Binance (delisted / FX / metal): reject new entries,
+            # but never drop an already-open leg from management.
             if v is None:
-                rejected.append((s, "no-ticker"))
+                if su in open_symbols:
+                    passed.append(s)
+                else:
+                    rejected.append((s, "no-ticker"))
                 continue
             if v >= min_vol:
+                passed.append(s)
+            elif su in open_symbols:
                 passed.append(s)
             else:
                 rejected.append((s, f"{v/1e6:.1f}M<{min_vol/1e6:.0f}M"))

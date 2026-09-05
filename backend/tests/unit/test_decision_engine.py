@@ -55,10 +55,13 @@ def test_compute_sl_tp_sell_direction(risk_config):
     assert tp < 100.0
 
 
-def test_compute_sl_tp_honors_zero_signal_sl(risk_config):
+def test_compute_sl_tp_zero_signal_sl_falls_back_to_atr(risk_config):
+    """A 0.0 strategy stop used to survive min() and then get stripped at
+    Binance as 'missing', leaving a naked long. Treat 0 as 'no signal stop'."""
     bars = _make_bars(20, base=100.0)
     sl, tp = compute_sl_tp_levels(bars, "BUY", 100.0, risk_config, signal_sl=0.0, signal_tp=120.0)
-    assert sl == 0.0
+    assert sl > 0
+    assert sl < 100.0
     assert tp == 120.0
 
 
@@ -279,3 +282,186 @@ def test_min_edge_reject_records_reason(risk_config):
     assert engine.last_evaluation.get("direction") == "BUY"
     assert "min-edge" in engine.last_evaluation.get("reason", "")
 
+
+@pytest.mark.asyncio
+async def test_ranging_flag_off_still_blocks_mean_reversion(risk_config):
+    engine = DecisionEngine(risk_config)
+    engine.enable_kronos = False
+    engine.config.enable_personas = False
+    engine.config.use_risk_reviewer_llm = False
+    engine.config.allow_ranging_entries = False
+    bars = _make_bars(200)
+    signal = StrategySignal(
+        symbol="ETHUSDT", signal="BUY", confidence=0.80,
+        entry_price=bars[-1]["close"], strategy="mean_reversion",
+        reasoning="STRONG[RANGING] mean_reversion: BUY(0.80)",
+    )
+    engine.strategy.generate_signal = MagicMock(return_value=signal)
+    engine.regime_detector.detect = MagicMock(return_value=MagicMock(
+        regime="RANGING", weights=MagicMock(return_value={})
+    ))
+    result = await engine.evaluate_symbol("ETHUSDT", bars, None, 0, [], False)
+    assert result is None
+    assert "RANGING" in engine.last_evaluation["reason"]
+
+
+@pytest.mark.asyncio
+async def test_ranging_flag_on_allows_mean_reversion(risk_config, monkeypatch):
+    from backend.services.trading_mode import TradingMode
+
+    monkeypatch.setattr(
+        "backend.services.decision_engine.get_trading_mode",
+        lambda: TradingMode.PAPER,
+    )
+    engine = DecisionEngine(risk_config)
+    engine.enable_kronos = False
+    engine.config.enable_personas = False
+    engine.config.use_risk_reviewer_llm = False
+    engine.config.allow_ranging_entries = True
+    engine.config.allow_ranging_in_live = False
+    bars = _make_bars(200)
+    signal = StrategySignal(
+        symbol="ETHUSDT", signal="BUY", confidence=0.80,
+        entry_price=bars[-1]["close"], strategy="mean_reversion",
+        reasoning="STRONG[RANGING] mean_reversion: BUY(0.80)",
+    )
+    engine.strategy.generate_signal = MagicMock(return_value=signal)
+    engine.regime_detector.detect = MagicMock(return_value=MagicMock(
+        regime="RANGING", weights=MagicMock(return_value={})
+    ))
+    result = await engine.evaluate_symbol("ETHUSDT", bars, None, 0, [], False)
+    assert result is not None
+    assert result.action == "BUY"
+
+
+@pytest.mark.asyncio
+async def test_ranging_flag_on_still_applies_confidence_gate(risk_config, monkeypatch):
+    from backend.services.trading_mode import TradingMode
+
+    monkeypatch.setattr(
+        "backend.services.decision_engine.get_trading_mode",
+        lambda: TradingMode.PAPER,
+    )
+    engine = DecisionEngine(risk_config)
+    engine.enable_kronos = False
+    engine.config.enable_personas = False
+    engine.config.use_risk_reviewer_llm = False
+    engine.config.allow_ranging_entries = True
+    bars = _make_bars(200)
+    # 0.50 < 0.45+0.15 ranging gate
+    signal = StrategySignal(
+        symbol="ETHUSDT", signal="BUY", confidence=0.50,
+        entry_price=bars[-1]["close"], strategy="mean_reversion",
+    )
+    engine.strategy.generate_signal = MagicMock(return_value=signal)
+    engine.regime_detector.detect = MagicMock(return_value=MagicMock(
+        regime="RANGING", weights=MagicMock(return_value={})
+    ))
+    result = await engine.evaluate_symbol("ETHUSDT", bars, None, 0, [], False)
+    assert result is None
+    assert "below threshold" in engine.last_evaluation["reason"]
+
+
+@pytest.mark.asyncio
+async def test_ranging_flag_on_rejects_non_matching_setup(risk_config, monkeypatch):
+    from backend.services.trading_mode import TradingMode
+
+    monkeypatch.setattr(
+        "backend.services.decision_engine.get_trading_mode",
+        lambda: TradingMode.PAPER,
+    )
+    engine = DecisionEngine(risk_config)
+    engine.enable_kronos = False
+    engine.config.enable_personas = False
+    engine.config.use_risk_reviewer_llm = False
+    engine.config.allow_ranging_entries = True
+    bars = _make_bars(200)
+    signal = StrategySignal(
+        symbol="ETHUSDT", signal="BUY", confidence=0.80,
+        entry_price=bars[-1]["close"], strategy="trend_following",
+        reasoning="STRONG[RANGING] trend_following: BUY(0.80)",
+    )
+    engine.strategy.generate_signal = MagicMock(return_value=signal)
+    engine.regime_detector.detect = MagicMock(return_value=MagicMock(
+        regime="RANGING", weights=MagicMock(return_value={})
+    ))
+    engine._ranging_skill_match = MagicMock(return_value=False)
+    result = await engine.evaluate_symbol("ETHUSDT", bars, None, 0, [], False)
+    assert result is None
+    assert "RANGING" in engine.last_evaluation["reason"]
+
+
+def test_ranging_live_stays_blocked_without_live_flag(risk_config, monkeypatch):
+    from backend.services.trading_mode import TradingMode
+
+    monkeypatch.setattr(
+        "backend.services.decision_engine.get_trading_mode",
+        lambda: TradingMode.LIVE,
+    )
+    engine = DecisionEngine(risk_config)
+    engine.config.allow_ranging_entries = True
+    engine.config.allow_ranging_in_live = False
+    bars = _make_bars(200)
+    signal = StrategySignal(
+        symbol="ETHUSDT", signal="BUY", confidence=0.80,
+        entry_price=bars[-1]["close"], strategy="mean_reversion",
+    )
+    decision = engine._create_entry_decision(
+        "ETHUSDT", bars, signal, "BUY", is_pyramid=False, regime="RANGING",
+    )
+    assert decision is None
+
+
+def test_ranging_skill_match_allows_positive_edge_ranging_skill(risk_config, monkeypatch):
+    from backend.services.trading_mode import TradingMode
+
+    monkeypatch.setattr(
+        "backend.services.decision_engine.get_trading_mode",
+        lambda: TradingMode.PAPER,
+    )
+    engine = DecisionEngine(risk_config)
+    engine.config.allow_ranging_entries = True
+    monkeypatch.setattr(
+        "backend.services.decision_engine.skill_miner.match_skill",
+        lambda ctx: {
+            "name": "Ranging → Bullish",
+            "direction": "bullish",
+            "edge_score": 0.4,
+            "avg_pnl": 1.2,
+        },
+    )
+    bars = _make_bars(200)
+    signal = StrategySignal(
+        symbol="ETHUSDT", signal="BUY", confidence=0.80,
+        entry_price=bars[-1]["close"], strategy="combined",
+        reasoning="CONSENSUS[RANGING] trend:BUY",
+    )
+    decision = engine._create_entry_decision(
+        "ETHUSDT", bars, signal, "BUY", is_pyramid=False, regime="RANGING",
+    )
+    assert decision is not None
+
+
+def test_regime_detector_injection_reuses_history(risk_config):
+    """A fresh detector per cycle would never accumulate 5-bar smoothing history."""
+    from backend.strategies.market_regime import MarketRegimeDetector
+
+    shared = MarketRegimeDetector()
+    engine_a = DecisionEngine(risk_config, regime_detector=shared)
+    engine_b = DecisionEngine(risk_config, regime_detector=shared)
+    assert engine_a.regime_detector is shared
+    assert engine_b.regime_detector is shared
+
+    bars = _make_bars(250)
+    engine_a.regime_detector.detect(bars)
+    engine_b.regime_detector.detect(bars)
+    assert len(shared._history) >= 2
+
+
+def test_new_decision_engine_without_inject_does_not_share_history(risk_config):
+    from backend.strategies.market_regime import MarketRegimeDetector
+
+    a = DecisionEngine(risk_config)
+    b = DecisionEngine(risk_config)
+    assert a.regime_detector is not b.regime_detector
+    assert isinstance(a.regime_detector, MarketRegimeDetector)

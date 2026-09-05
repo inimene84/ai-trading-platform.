@@ -22,6 +22,10 @@ from backend.services.ctrader_trade_sync import (
     reconcile_ctrader_positions,
     upsert_ctrader_live_trades,
 )
+from backend.services.trading_loop_helpers import (
+    is_ctrader_symbol as _is_ctrader_symbol,
+    is_ctrader_trade as _is_ctrader_trade,
+)
 from backend.services.unified_feed import unified_feed
 from backend.services.unified_trading import (
     UnifiedTrading, UnifiedOrder, OrderSide, OrderType,
@@ -95,24 +99,6 @@ def _to_yfinance_symbol(symbol: str) -> str:
     if s.endswith('BUSD'):
         return s[:-4] + '-USD'
     return s  # already yfinance format or unknown
-
-
-def _is_ctrader_symbol(symbol: str) -> bool:
-    """True for bare FX/metal pairs routed through cTrader, not Binance."""
-    sym = str(symbol or "").upper().strip()
-    if sym in ("XAUUSD", "XAGUSD", "GOLD", "SILVER"):
-        return True
-    return len(sym) == 6 and sym.isalpha() and not sym.endswith("USDT")
-
-
-def _is_ctrader_trade(trade: Any) -> bool:
-    """Detect cTrader dashboard rows even when broker was not persisted."""
-    broker = (getattr(trade, "broker", None) or getattr(trade, "exchange", None) or "").lower()
-    if broker == "ctrader":
-        return True
-    if getattr(trade, "broker_position_id", None):
-        return True
-    return _is_ctrader_symbol(getattr(trade, "symbol", ""))
 
 
 def _coalesce_mark_price(mark: Optional[float], entry: Optional[float]) -> float:

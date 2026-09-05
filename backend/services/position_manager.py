@@ -2,6 +2,8 @@ from datetime import datetime, timezone
 from dataclasses import dataclass
 import logging
 
+from dateutil import parser as dateutil_parser
+
 from backend.services.risk_config import refresh_risk_config
 
 logger = logging.getLogger("position_manager")
@@ -57,7 +59,6 @@ class PositionManager:
 
         duration_hours = 0
         if opened_at:
-            from dateutil import parser as dateutil_parser
             try:
                 if isinstance(opened_at, str):
                     opened_at = dateutil_parser.parse(opened_at)
@@ -68,8 +69,9 @@ class PositionManager:
                 pass
 
         result = ExitOpinion(symbol=symbol, pnl_pct=pnl_pct, duration_hours=duration_hours)
+        in_min_hold = self._in_min_hold(duration_hours)
 
-        # 1. EMERGENCY DRAWDOWN
+        # 1. EMERGENCY DRAWDOWN — exempt from min-hold.
         if pnl_pct <= self.emergency_drawdown_pct:
             result.exit = True
             result.direction = "EXIT"
@@ -122,27 +124,40 @@ class PositionManager:
                 )
                 if hasattr(ai_opinion, 'direction') and ai_opinion.direction == "HOLD":
                     if pnl_pct < -8 and ai_opinion.confidence < 0.5:
-                        result.exit = True
-                        result.direction = "EXIT"
-                        result.confidence = 0.7
-                        result.urgency = "high"
-                        result.suggested_action = "close_now"
-                        result.reasoning = f"AI HOLD weak ({ai_opinion.confidence:.2f}) with deep loss ({pnl_pct:.1f}%)."
-                        logger.warning(f"  [EXIT] {symbol}: AI HOLD weak, deep loss ({pnl_pct:.1f}%)")
-                        return result
+                        if in_min_hold:
+                            logger.info(
+                                f"  [HOLD] {symbol}: AI weak-hold exit deferred — min hold "
+                                f"{self.config.min_position_hold_min}m not elapsed"
+                            )
+                        else:
+                            result.exit = True
+                            result.direction = "EXIT"
+                            result.confidence = 0.7
+                            result.urgency = "high"
+                            result.suggested_action = "close_now"
+                            result.reasoning = f"AI HOLD weak ({ai_opinion.confidence:.2f}) with deep loss ({pnl_pct:.1f}%)."
+                            logger.warning(f"  [EXIT] {symbol}: AI HOLD weak, deep loss ({pnl_pct:.1f}%)")
+                            return result
 
                 elif hasattr(ai_opinion, 'direction') and ai_opinion.direction in ("SELL", "BUY"):
                     ai_dir = ai_opinion.direction
                     is_exit = (direction == "BUY" and ai_dir == "SELL") or (direction == "SELL" and ai_dir == "BUY")
                     if is_exit and ai_opinion.confidence >= exit_opinion_threshold:
-                        result.exit = True
-                        result.direction = "EXIT"
-                        result.confidence = ai_opinion.confidence
-                        result.urgency = "high" if pnl_pct < -5 else "medium"
-                        result.suggested_action = "close_now"
-                        result.reasoning = f"AI REVERSAL: {ai_dir} (conf={ai_opinion.confidence:.2f}) vs our {direction}. PnL={pnl_pct:.1f}%."
-                        logger.warning(f"  [EXIT] {symbol}: AI reversal {ai_dir} (conf={ai_opinion.confidence:.2f}) vs {direction}")
-                        return result
+                        if in_min_hold:
+                            logger.info(
+                                f"  [HOLD] {symbol}: AI reversal deferred — min hold "
+                                f"{self.config.min_position_hold_min}m not elapsed "
+                                f"({duration_hours * 60:.1f}m held)"
+                            )
+                        else:
+                            result.exit = True
+                            result.direction = "EXIT"
+                            result.confidence = ai_opinion.confidence
+                            result.urgency = "high" if pnl_pct < -5 else "medium"
+                            result.suggested_action = "close_now"
+                            result.reasoning = f"AI REVERSAL: {ai_dir} (conf={ai_opinion.confidence:.2f}) vs our {direction}. PnL={pnl_pct:.1f}%."
+                            logger.warning(f"  [EXIT] {symbol}: AI reversal {ai_dir} (conf={ai_opinion.confidence:.2f}) vs {direction}")
+                            return result
                     elif is_exit and ai_opinion.confidence >= 0.45:
                         result.exit = False
                         result.direction = "HOLD"
@@ -162,23 +177,35 @@ class PositionManager:
                 recent_avg = sum(closes[-5:]) / 5
                 prev_avg = sum(closes[-10:-5]) / 5
                 if direction == "BUY" and recent_avg < prev_avg * 0.985 and pnl_pct < -5:
-                    result.exit = True
-                    result.direction = "EXIT"
-                    result.confidence = 0.6
-                    result.urgency = "medium"
-                    result.suggested_action = "close_now"
-                    result.reasoning = f"TECHNICAL EXIT: Downtrend with loss {pnl_pct:.1f}%."
-                    logger.warning(f"  [EXIT] {symbol}: Technical deterioration ({pnl_pct:.1f}%)")
-                    return result
+                    if in_min_hold:
+                        logger.info(
+                            f"  [HOLD] {symbol}: technical exit deferred — min hold "
+                            f"{self.config.min_position_hold_min}m not elapsed"
+                        )
+                    else:
+                        result.exit = True
+                        result.direction = "EXIT"
+                        result.confidence = 0.6
+                        result.urgency = "medium"
+                        result.suggested_action = "close_now"
+                        result.reasoning = f"TECHNICAL EXIT: Downtrend with loss {pnl_pct:.1f}%."
+                        logger.warning(f"  [EXIT] {symbol}: Technical deterioration ({pnl_pct:.1f}%)")
+                        return result
                 elif direction == "SELL" and recent_avg > prev_avg * 1.015 and pnl_pct < -5:
-                    result.exit = True
-                    result.direction = "EXIT"
-                    result.confidence = 0.6
-                    result.urgency = "medium"
-                    result.suggested_action = "close_now"
-                    result.reasoning = f"TECHNICAL EXIT: Uptrend against SHORT with loss {pnl_pct:.1f}%."
-                    logger.warning(f"  [EXIT] {symbol}: Technical deterioration ({pnl_pct:.1f}%)")
-                    return result
+                    if in_min_hold:
+                        logger.info(
+                            f"  [HOLD] {symbol}: technical exit deferred — min hold "
+                            f"{self.config.min_position_hold_min}m not elapsed"
+                        )
+                    else:
+                        result.exit = True
+                        result.direction = "EXIT"
+                        result.confidence = 0.6
+                        result.urgency = "medium"
+                        result.suggested_action = "close_now"
+                        result.reasoning = f"TECHNICAL EXIT: Uptrend against SHORT with loss {pnl_pct:.1f}%."
+                        logger.warning(f"  [EXIT] {symbol}: Technical deterioration ({pnl_pct:.1f}%)")
+                        return result
             except Exception as e:
                 logger.error(f"  Technical analysis error for {symbol}: {e}")
 
@@ -186,6 +213,13 @@ class PositionManager:
         result.direction = "HOLD"
         result.reasoning = f"HOLD: PnL={pnl_pct:.1f}%, {duration_hours:.1f}h held."
         return result
+
+    def _in_min_hold(self, duration_hours: float) -> bool:
+        """True while the position is younger than min_position_hold_min."""
+        min_hold_min = int(getattr(self.config, "min_position_hold_min", 0) or 0)
+        if min_hold_min <= 0:
+            return False
+        return (duration_hours * 60.0) < min_hold_min
 
     async def should_exit(self, symbol: str, trade: dict, bars: list, current_price: float, opinion_layer_fn=None, current_funding_rate: float = 0.0) -> bool:
         opinion = await self.analyze_open_position(symbol, trade, bars, current_price, opinion_layer_fn, current_funding_rate)

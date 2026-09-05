@@ -10,6 +10,7 @@ from backend.strategies.market_regime import MarketRegimeDetector
 from backend.services.opinion_layer import analyze_symbol as opinion_analyze
 from backend.services.kronos_gate import apply_kronos_gate
 from backend.services import kronos_service
+from backend.services.skill_miner import skill_miner
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +51,17 @@ def _reviewer_gate_fail_open() -> bool:
     return get_trading_mode() != TradingMode.LIVE
 
 
+def _positive_price_level(level: Optional[float]) -> Optional[float]:
+    """Treat 0 / negative / unparseable as 'no level' — never a valid stop or target."""
+    if level is None:
+        return None
+    try:
+        value = float(level)
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
 def atr_from_bars(bars: List[Dict[str, Any]], fallback_price: float, periods: int = 14) -> float:
     """True-range ATR using aligned prev-close windows (avoids length mismatch on short series)."""
     if not bars:
@@ -80,6 +92,11 @@ def compute_sl_tp_levels(
     except Exception:
         atr = entry_price * 0.02
 
+    # 0.0 used to be treated as a real stop. min(0, entry - ATR) kept it, then
+    # Binance stripped stop_loss<=0 as "missing" and the long sat naked.
+    signal_sl = _positive_price_level(signal_sl)
+    signal_tp = _positive_price_level(signal_tp)
+
     if direction == "BUY":
         sl = signal_sl if signal_sl is not None else (entry_price - (atr * config.sl_atr_mult))
         tp = signal_tp if signal_tp is not None else (entry_price + (atr * config.tp_atr_mult))
@@ -106,10 +123,15 @@ class Decision:
     is_pyramid: bool = False
 
 class DecisionEngine:
-    def __init__(self, risk_config: RiskConfig):
+    def __init__(
+        self,
+        risk_config: RiskConfig,
+        regime_detector: Optional[MarketRegimeDetector] = None,
+    ):
         self.config = risk_config
         self.strategy = CombinedStrategy()
-        self.regime_detector = MarketRegimeDetector()
+        # Injected by the trading loop so per-symbol history survives cycles.
+        self.regime_detector = regime_detector or MarketRegimeDetector()
         self.enable_kronos = os.getenv("ENABLE_KRONOS", "true").lower() == "true"
         # Snapshot of the most recent evaluation so the loop can persist a
         # signal row for EVERY symbol it scans (not just executed trades).
@@ -129,6 +151,76 @@ class DecisionEngine:
             "take_profit": tp,
             "approved": approved,
         }
+
+    def _ranging_entries_permitted(self) -> bool:
+        """Config + mode gate. Default is fully off — including paper.
+
+        allow_ranging_entries unlocks the ranging *path*. Live still needs
+        allow_ranging_in_live so a paper experiment cannot leak into production.
+        """
+        if not getattr(self.config, "allow_ranging_entries", False):
+            return False
+        if get_trading_mode() == TradingMode.LIVE and not getattr(
+            self.config, "allow_ranging_in_live", False
+        ):
+            return False
+        return True
+
+    def _ranging_setup_matches(self, symbol: str, signal: Any) -> bool:
+        """Allow ranging only for mean-reversion or a matching mined skill.
+
+        Does not invent win-rate constants; uses CombinedStrategy's source
+        name/reasoning and skill_miner.match_skill. Fail-closed on errors.
+        """
+        strat = str(getattr(signal, "strategy", "") or "").lower()
+        reasoning = str(getattr(signal, "reasoning", "") or "").lower()
+        if strat == "mean_reversion":
+            return True
+        if "mean_reversion" in reasoning or "mean_rev" in reasoning:
+            return True
+        return self._ranging_skill_match(symbol, signal)
+
+    def _ranging_skill_match(self, symbol: str, signal: Any) -> bool:
+        """True when skill miner has a positive-edge skill aligned with this setup."""
+        try:
+            direction = str(getattr(signal, "signal", None) or getattr(signal, "direction", "") or "").upper()
+            ctx = {
+                "symbol": symbol,
+                "direction": direction,
+                "regime": "RANGING",
+                "mean_reversion_signal": direction,
+            }
+            skill = skill_miner.match_skill(ctx)
+            if not skill:
+                return False
+            skill_dir = str(skill.get("direction") or "").lower()
+            wanted = "bullish" if direction == "BUY" else "bearish" if direction == "SELL" else ""
+            if wanted and skill_dir not in (wanted, "neutral"):
+                return False
+            name = str(skill.get("name") or "").lower()
+            desc = str(skill.get("description") or "").lower()
+            looks_ranging = any(
+                token in name or token in desc
+                for token in ("rang", "mean-rev", "mean_rev", "mean rev", "chop")
+            )
+            if not looks_ranging:
+                summary = skill.get("feature_summary") or {}
+                if isinstance(summary, dict):
+                    try:
+                        looks_ranging = abs(float(summary.get("regime", 1.0))) <= 0.25
+                    except (TypeError, ValueError):
+                        looks_ranging = "rang" in str(summary.get("regime", "")).lower()
+            if not looks_ranging:
+                return False
+            edge = float(skill.get("edge_score") or 0.0)
+            avg_pnl = float(skill.get("avg_pnl") or 0.0)
+            return edge > 0.0 or avg_pnl > 0.0
+        except Exception as err:
+            logger.warning("[%s] ranging skill match failed (fail-closed): %s", symbol, err)
+            return False
+
+    def _ranging_entry_allowed(self, symbol: str, signal: Any) -> bool:
+        return self._ranging_entries_permitted() and self._ranging_setup_matches(symbol, signal)
 
     async def evaluate_symbol(
         self,
@@ -266,15 +358,20 @@ class DecisionEngine:
             )
             return None
 
-        # 3b. Early RANGING regime block — skip BEFORE paying for Kronos/LLM.
-        # The _create_entry_decision also blocks RANGING, but that runs AFTER
-        # all the expensive AI analysis. Blocking early saves API costs.
+        # 3b. Early RANGING regime block — skip BEFORE paying for Kronos/LLM
+        # unless the config-gated ranging path matches mean-reversion / a mined
+        # skill. Default (flag off) preserves the historical hard block.
         if regime_result.regime == "RANGING":
-            self._record_eval(
-                symbol, signal.signal, signal.confidence,
-                "RANGING regime: blocked early (saves Kronos/LLM cost)",
+            if not self._ranging_entry_allowed(symbol, signal):
+                self._record_eval(
+                    symbol, signal.signal, signal.confidence,
+                    "RANGING regime: blocked early (saves Kronos/LLM cost)",
+                )
+                return None
+            logger.info(
+                f"[{symbol}] RANGING regime: allowing matching setup "
+                f"(strategy={getattr(signal, 'strategy', '')})"
             )
-            return None
 
         # Adjust signal confidence based on the perp funding rate
         # Funding rate units on Binance: 0.0001 = 0.01% per 8h.
@@ -318,65 +415,66 @@ class DecisionEngine:
             return None
 
         # 4. Multi-model Pre-Execution Gating (Kronos Sidecar + Heuristic Timing Guard)
-        kronos_result = {}
-        if self.enable_kronos and bars:
-            try:
-                kronos_result = await kronos_service.predict(bars, symbol)
-            except Exception as e:
-                logger.warning(f"Kronos prediction failed for {symbol}: {e}")
-                kronos_result = {}
+        if self.enable_kronos:
+            kronos_result = {}
+            if bars:
+                try:
+                    kronos_result = await kronos_service.predict(bars, symbol)
+                except Exception as e:
+                    logger.warning(f"Kronos prediction failed for {symbol}: {e}")
+                    kronos_result = {}
 
-        # Optional Vision timing verification if enabled
-        vision_approved = None
-        if bars:
-            try:
-                from backend.services.vision_timing import evaluate_vision_timing_optional
-                vision_approved = await evaluate_vision_timing_optional(
-                    bars=bars,
-                    symbol=symbol,
-                    proposed_signal=signal.signal,
-                )
-            except Exception as e:
-                logger.debug(f"Vision timing check notice for {symbol}: {e}")
+            # Optional Vision timing verification if enabled
+            vision_approved = None
+            if bars:
+                try:
+                    from backend.services.vision_timing import evaluate_vision_timing_optional
+                    vision_approved = await evaluate_vision_timing_optional(
+                        bars=bars,
+                        symbol=symbol,
+                        proposed_signal=signal.signal,
+                    )
+                except Exception as e:
+                    logger.debug(f"Vision timing check notice for {symbol}: {e}")
 
-        # 4b. Apply Pre-Execution Gate (shadow-aware; FLIP removed)
-        gate_result = apply_kronos_gate(
-            strategy_signal=signal.signal,
-            strategy_confidence=signal.confidence,
-            kronos_result=kronos_result,
-            bars=bars,
-            vision_approved=vision_approved,
-            symbol=symbol,
-        )
-        if gate_result.action == "veto":
-            if gate_result.final_signal == "NEUTRAL":
-                logger.info(f"[{symbol}] PreExecutionGate ACTIVE VETO: {gate_result.reasoning}")
-                # Keep the intended BUY/SELL — HOLD made Kronos vetoes unscorable.
-                self._record_eval(symbol, signal.signal, signal.confidence, f"vetoed: {gate_result.reasoning}")
-                return None
-            logger.info(f"[{symbol}] PreExecutionGate SHADOW VETO (allowed): {gate_result.reasoning}")
-            self._record_eval(
-                symbol, "SHADOW_VETO", signal.confidence, f"shadow_vetoed: {gate_result.reasoning}",
+            # 4b. Apply Pre-Execution Gate (shadow-aware; FLIP removed)
+            gate_result = apply_kronos_gate(
+                strategy_signal=signal.signal,
+                strategy_confidence=signal.confidence,
+                kronos_result=kronos_result,
+                bars=bars,
+                vision_approved=vision_approved,
+                symbol=symbol,
             )
-        elif gate_result.action == "boost":
-            logger.info(f"[{symbol}] PreExecutionGate BOOST: {gate_result.reasoning}")
-            signal.confidence = gate_result.confidence
-        elif gate_result.action == "dampen":
-            logger.info(f"[{symbol}] PreExecutionGate DAMPEN: {gate_result.reasoning}")
-            signal.confidence = gate_result.confidence
-        elif gate_result.action == "pass":
-            pass
-        elif gate_result.action == "flip":
-            # Legacy: FLIP removed — treat as active veto.
-            logger.info(f"[{symbol}] PreExecutionGate FLIP→VETO (legacy): {gate_result.reasoning}")
-            return None
-        else:
-            _unreachable: Never = gate_result.action  # type: ignore[assignment]
-            raise AssertionError(f"Unhandled PreExecutionGate action: {_unreachable}")
+            if gate_result.action == "veto":
+                if gate_result.final_signal == "NEUTRAL":
+                    logger.info(f"[{symbol}] PreExecutionGate ACTIVE VETO: {gate_result.reasoning}")
+                    # Keep the intended BUY/SELL — HOLD made Kronos vetoes unscorable.
+                    self._record_eval(symbol, signal.signal, signal.confidence, f"vetoed: {gate_result.reasoning}")
+                    return None
+                logger.info(f"[{symbol}] PreExecutionGate SHADOW VETO (allowed): {gate_result.reasoning}")
+                self._record_eval(
+                    symbol, "SHADOW_VETO", signal.confidence, f"shadow_vetoed: {gate_result.reasoning}",
+                )
+            elif gate_result.action == "boost":
+                logger.info(f"[{symbol}] PreExecutionGate BOOST: {gate_result.reasoning}")
+                signal.confidence = gate_result.confidence
+            elif gate_result.action == "dampen":
+                logger.info(f"[{symbol}] PreExecutionGate DAMPEN: {gate_result.reasoning}")
+                signal.confidence = gate_result.confidence
+            elif gate_result.action == "pass":
+                pass
+            elif gate_result.action == "flip":
+                # Legacy: FLIP removed — treat as active veto.
+                logger.info(f"[{symbol}] PreExecutionGate FLIP→VETO (legacy): {gate_result.reasoning}")
+                return None
+            else:
+                _unreachable: Never = gate_result.action  # type: ignore[assignment]
+                raise AssertionError(f"Unhandled PreExecutionGate action: {_unreachable}")
 
-        # Re-check after gate modification
-        if signal.signal not in ["BUY", "SELL"] or signal.confidence < self.config.min_signal_strength:
-            return None
+            # Re-check after gate modification
+            if signal.signal not in ["BUY", "SELL"] or signal.confidence < self.config.min_signal_strength:
+                return None
 
 
         # 5. AI Opinion Layer — multi-agent weighted consensus
@@ -487,12 +585,13 @@ class DecisionEngine:
                 max_notional = self.account_equity * self.config.max_trade_notional_equity_mult
                 notional = max(trade_usdt, min(notional, max_notional))
         
-        # Block NEW entries in RANGING regime (choppy = no new positions)
-        # Pyramid adds are already separately blocked by the pyramid RANGING check.
-        # Uses the regime passed in from the caller to avoid redundant detection.
+        # Block NEW entries in RANGING regime unless the config-gated ranging
+        # path matched a mean-reversion / mined-skill setup. Pyramid adds stay
+        # blocked in chop regardless of the flag.
         if regime == "RANGING" and not is_pyramid:
-            logger.info(f"[{symbol}] RANGING regime: blocking new entry (flat $25 sizing preserved)")
-            return None
+            if not self._ranging_entry_allowed(symbol, signal):
+                logger.info(f"[{symbol}] RANGING regime: blocking new entry")
+                return None
 
         # Floor at Binance MIN_NOTIONAL ($20 for most symbols, $100 for BTC)
         # BTC uses $100 flat to match Binance min notional requirement.
