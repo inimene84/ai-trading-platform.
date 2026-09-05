@@ -17,3 +17,14 @@ def auth_headers():
         or ""
     ).strip()
     return {"X-API-Key": key} if key else {}
+
+
+@pytest.fixture(autouse=True)
+def clean_trading_mode_for_tests(monkeypatch):
+    """Ensure TRADING_MODE from .env does not block unit tests of live order methods.
+
+    Tests that specifically test paper mode (e.g. test_binance_paper_mode.py)
+    will monkeypatch TRADING_MODE to 'paper'.
+    """
+    if os.getenv("TRADING_MODE") == "paper":
+        monkeypatch.delenv("TRADING_MODE", raising=False)

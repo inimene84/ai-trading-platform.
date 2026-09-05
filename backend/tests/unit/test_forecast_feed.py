@@ -28,6 +28,8 @@ def test_neutral_forecast_includes_path_none():
 @pytest.mark.asyncio
 async def test_predict_include_path_in_cache_key(monkeypatch):
     monkeypatch.setattr(kronos_service, "ALLOW_LOCAL_STUB", False)
+    monkeypatch.setattr(kronos_service, "KRONOS_SIDECAR_URL", "http://127.0.0.1:59999")
+    monkeypatch.setattr(kronos_service, "FALLBACK_LOCAL_URL", "http://127.0.0.1:59999")
     kronos_service._prediction_cache.clear()
     bars = [
         {

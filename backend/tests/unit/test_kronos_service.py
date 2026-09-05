@@ -26,6 +26,8 @@ def create_sample_bars(n=30):
 async def test_kronos_service_fail_closed(monkeypatch):
     """Sidecar down + stub disabled → NEUTRAL (fail-closed)."""
     monkeypatch.setattr(kronos_service, "ALLOW_LOCAL_STUB", False)
+    monkeypatch.setattr(kronos_service, "KRONOS_SIDECAR_URL", "http://127.0.0.1:59999")
+    monkeypatch.setattr(kronos_service, "FALLBACK_LOCAL_URL", "http://127.0.0.1:59999")
     kronos_service._prediction_cache.clear()
 
     bars = create_sample_bars(30)
