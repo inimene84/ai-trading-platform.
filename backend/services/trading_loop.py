@@ -139,6 +139,37 @@ class TradingLoopService:
         # the same bar was re-decided up to 4x (churn + redundant LLM cost).
         self._last_eval_bar: dict = {}
 
+    def _entry_bar_interval(self) -> str:
+        """OHLCV timeframe for the entry pipeline.
+
+        The new-bar gate allows one evaluation per bar. A 5-minute loop on
+        1h candles therefore looks idle for ~60 minutes after the first
+        cycle. Match the bar size to the loop interval so Trading Control
+        actually emits signals on the cadence the operator set.
+        """
+        mins = int(getattr(self, "_interval_minutes", 15) or 15)
+        if mins <= 5:
+            return "5m"
+        if mins <= 15:
+            return "15m"
+        return "1h"
+
+    @staticmethod
+    def _bar_interval_max_age_sec(interval: str) -> float:
+        seconds = {"5m": 300.0, "15m": 900.0, "1h": 3600.0}.get(interval, 3600.0)
+        override = os.getenv("WS_CANDLE_MAX_AGE_SEC")
+        if override:
+            try:
+                return float(override)
+            except (TypeError, ValueError):
+                pass
+        return 2.5 * seconds
+
+    @staticmethod
+    def _ctrader_period_for_interval(interval: str) -> str:
+        mapping = {"5m": "M5", "15m": "M15", "1h": "H1"}
+        return mapping.get(interval, "H1")
+
     def _regime_detector_for(self, symbol: str) -> MarketRegimeDetector:
         """Reuse one detector per symbol so regime smoothing can accumulate."""
         det = self._regime_detectors.get(symbol)
@@ -1154,9 +1185,8 @@ class TradingLoopService:
                 db.commit()
                 return {"signals": 0, "trades": 0}
 
-            # 3c. New-bar gate — the entry pipeline consumes 1h bars; the same
-            # bar must not be re-decided every 15-min cycle. SL/TP, trailing
-            # and protection management still run each cycle.
+            # 3c. New-bar gate — one evaluation per bar. Bar size follows
+            # loop interval (5m/15m/1h). SL/TP still run each cycle.
             if not self._should_evaluate_bar(symbol, bars):
                 self._check_sl_tp(db, symbol, bars)
                 db.commit()
@@ -1818,19 +1848,20 @@ class TradingLoopService:
 
     async def _fetch_bars(self, symbol: str) -> list[dict]:
         """Fetch OHLCV bars. Order: 1. WS Cache (0 REST calls) -> 2. Binance REST -> 3. CCXT Futures (Bybit/OKX/KuCoin) -> 4. yfinance (equities)."""
+        interval = self._entry_bar_interval()
         # 1. Check WebSocket in-memory candle ring buffer (zero network latency / zero REST requests).
         #    Reject stale rings: futures kline WS can connect yet deliver no closed
         #    candles (seen live), which freezes bars[-1] and permanently trips the
         #    new-bar gate after the first evaluation.
         try:
-            ws_bars = binance_ws.get_candle_history(symbol, limit=1500)
+            ws_bars = binance_ws.get_candle_history(symbol, interval=interval, limit=1500)
             if ws_bars and len(ws_bars) >= 50:
                 age = self._bar_open_age_seconds(ws_bars[-1])
-                # 1h pipeline: last bar open should be within ~2.5h (current hour
-                # forming candle, or previous closed hour right after the roll).
-                max_age = float(os.getenv("WS_CANDLE_MAX_AGE_SEC", str(2.5 * 3600)))
+                max_age = self._bar_interval_max_age_sec(interval)
                 if age is None or age <= max_age:
-                    logger.info(f"  [{symbol}] WS candle cache hit: {len(ws_bars)} bars")
+                    logger.info(
+                        f"  [{symbol}] WS candle cache hit: {len(ws_bars)} bars ({interval})"
+                    )
                     return ws_bars
                 logger.warning(
                     f"  [{symbol}] WS candle cache STALE "
@@ -1844,7 +1875,10 @@ class TradingLoopService:
             try:
                 from backend.services.ctrader_service import ctrader_service
                 if ctrader_service.has_credentials():
-                    ct_bars = await asyncio.to_thread(ctrader_service.get_trendbars, symbol, "H1", count=100)
+                    ct_period = self._ctrader_period_for_interval(interval)
+                    ct_bars = await asyncio.to_thread(
+                        ctrader_service.get_trendbars, symbol, ct_period, count=100
+                    )
                     if ct_bars and len(ct_bars) >= 10:
                         logger.info(f"  [{symbol}] cTrader trendbars hit: {len(ct_bars)} bars")
                         return ct_bars
@@ -1854,13 +1888,13 @@ class TradingLoopService:
         # 2. Try Binance Futures REST API (cached with TTL)
         try:
             bars = await binance_market_data.get_klines(
-                symbol, interval='1h', limit=1500
+                symbol, interval=interval, limit=1500
             )
             if bars and len(bars) >= 50:
-                logger.info(f"  [{symbol}] Binance klines: {len(bars)} bars")
+                logger.info(f"  [{symbol}] Binance klines: {len(bars)} bars ({interval})")
                 # Keep the WS ring honest so a recovered stream can resume later.
                 try:
-                    binance_ws.seed_candles(symbol, "1h", bars)
+                    binance_ws.seed_candles(symbol, interval, bars)
                 except Exception:
                     pass
                 return bars
@@ -1869,7 +1903,7 @@ class TradingLoopService:
 
         # 3. Fallback to alternative crypto futures venues (Bybit / OKX / KuCoin)
         try:
-            mp_bars = await multi_provider_data.get_ohlcv(symbol, interval='1h', limit=500)
+            mp_bars = await multi_provider_data.get_ohlcv(symbol, interval=interval, limit=500)
             if mp_bars and len(mp_bars) >= 50:
                 logger.info(f"  [{symbol}] Multi-provider CCXT fallback: {len(mp_bars)} bars")
                 return mp_bars
@@ -1890,7 +1924,9 @@ class TradingLoopService:
         yf_symbol = self._to_yfinance_symbol(symbol)
         logger.info(f"  [{symbol}] fetching yfinance data as '{yf_symbol}'")
         ticker = yf.Ticker(yf_symbol)
-        hist = ticker.history(period="3mo", interval="1h")
+        interval = self._entry_bar_interval()
+        period = "5d" if interval == "5m" else "1mo" if interval == "15m" else "3mo"
+        hist = ticker.history(period=period, interval=interval)
         bars = []
         for i, row in hist.iterrows():
             bars.append({
