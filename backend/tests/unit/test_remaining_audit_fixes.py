@@ -78,8 +78,51 @@ def test_ctrader_amend_and_close_simulate_when_not_live(monkeypatch):
     amend = svc.amend_position_sltp("99", stop_loss=1.09, take_profit=1.12)
     assert amend["status"] == "simulated"
     close = svc.close_position(position_id="99", symbol="EURUSD", volume=0.1)
-    assert close["broker"] == "ctrader:paper"
+    assert close["status"] == "error"
+    assert "TRADING_MODE" in close["error"]
+    assert svc._positions[0]["position_id"] == "99"
+
+
+def test_ctrader_close_paper_cache_when_disconnected(monkeypatch):
+    monkeypatch.setenv("TRADING_MODE", "paper")
+    svc = CTraderService()
+    svc._dry_run = True
+    svc._connected = False
+    svc._protocol = None
+    svc._positions = [{
+        "position_id": "99", "symbol": "EURUSD", "quantity": 0.1, "entry_price": 1.10,
+    }]
+    close = svc.close_position(position_id="99", symbol="EURUSD", volume=0.1)
     assert close["status"] == "closed"
+    assert close["broker"] == "ctrader:paper"
+    assert svc._positions == []
+
+
+def test_ctrader_cancel_order_skips_protocol_when_not_live(monkeypatch):
+    monkeypatch.setenv("TRADING_MODE", "paper")
+    svc = CTraderService()
+    svc._dry_run = False
+    svc._connected = True
+    svc._authenticated = True
+    protocol = MagicMock()
+    svc._protocol = protocol
+    res = svc.cancel_order("ord_456")
+    assert res["success"] is True
+    assert res["simulated"] is True
+    protocol._send.assert_not_called()
+
+
+def test_amend_refuses_stop_without_cached_position(monkeypatch):
+    monkeypatch.setenv("TRADING_MODE", "live")
+    svc = CTraderService()
+    svc._dry_run = False
+    svc._connected = True
+    svc._authenticated = True
+    svc._protocol = object()
+    svc._positions = []
+    res = svc.amend_position_sltp("missing", stop_loss=1.09)
+    assert res["status"] == "error"
+    assert "cached position" in res["error"]
 
 
 def test_cadjpy_db_stop_is_implausible_live_stop_is_not():
@@ -140,6 +183,27 @@ def test_reconcile_copies_live_sl_tp_onto_db_row():
     assert row.status == "open"
     assert row.stop_loss == pytest.approx(113.237)
     assert row.take_profit == pytest.approx(112.637)
+
+
+def test_empty_ctrader_snapshot_entry_fill_does_not_confirm_close():
+    db = _session()
+    db.add(Trade(
+        symbol="EURUSD", direction="BUY", quantity=0.1, entry_price=1.10,
+        status="open", broker="ctrader", broker_position_id="open-1",
+    ))
+    db.commit()
+    broker = MagicMock()
+    broker.get_recent_deal.return_value = {
+        "position_id": "open-1",
+        "symbol": "EURUSD",
+        "execution_price": 1.10,
+        "gross_profit": None,
+        "closed_volume": None,
+        "close_type": "CLOSED",
+    }
+    res = reconcile_ctrader_positions(db, live_positions=[], broker=broker)
+    assert res["closed"] == 0
+    assert db.query(Trade).one().status == "open"
 
 
 def test_empty_ctrader_snapshot_without_deal_refuses_bulk_close():
@@ -217,6 +281,46 @@ async def test_emergency_exit_already_flat_leaves_open_when_live_qty_remains():
         )
     assert closed == 0
     assert trade.status == "open"
+
+
+@pytest.mark.asyncio
+async def test_emergency_exit_already_flat_refetches_after_close():
+    """Pre-close qty must not permanently block an already_flat DB close."""
+    trade = SimpleNamespace(
+        symbol="BTCUSDT",
+        direction="BUY",
+        quantity=1.0,
+        entry_price=100000.0,
+        broker="binance_futures",
+        notes="",
+        status="open",
+    )
+    db = MagicMock()
+    db.query.return_value.filter.return_value.all.return_value = [trade]
+    broker = MagicMock()
+    broker.get_positions.side_effect = [
+        [{"symbol": "BTCUSDT", "mark_price": 50000.0, "entry_price": 100000.0, "quantity": 1.0}],
+        [{"symbol": "BTCUSDT", "mark_price": 50000.0, "entry_price": 100000.0, "quantity": 0.0}],
+    ]
+    ut = MagicMock()
+    ut.place_order.return_value = SimpleNamespace(
+        success=False,
+        filled_price=None,
+        message="already flat",
+        realized_pnl=None,
+        commission=0,
+    )
+    with patch(
+        "backend.services.trading_loop_helpers.UnifiedTrading", return_value=ut
+    ), patch(
+        "backend.services.trading_loop_helpers.get_position_manager"
+    ) as pm_fn:
+        pm_fn.return_value.emergency_drawdown_pct = -1.0
+        closed = await EmergencyExitManager.run_emergency_exits(
+            db, broker, pyramid_layers={}, sl_cooldown={},
+        )
+    assert closed == 1
+    assert trade.status == "closed"
 
 
 @pytest.mark.asyncio
@@ -359,7 +463,8 @@ def test_ensure_protective_orders_refuses_implausible_db_stop():
          patch.object(broker, "_safe_create_order") as safe:
         res = broker.ensure_protective_orders("XRPUSDT", "SELL", stop_loss=0.50)
 
-    assert res["status"] == "skipped"
+    assert res["status"] == "error"
+    assert "implausible" in res["message"]
     safe.assert_not_called()
 
 
