@@ -148,6 +148,7 @@ class EmergencyExitManager:
                             side=close_side,
                             order_type=OrderType.MARKET,
                             quantity=trade.quantity,
+                            price=float(live_px or 0),
                             reduce_only=True,
                         ))
                         if res.success and res.filled_price:
@@ -573,6 +574,7 @@ class PartialTPManager:
                     side=close_side,
                     order_type=OrderType.MARKET,
                     quantity=close_qty,
+                    price=float(current_price or 0),
                     reduce_only=True,
                 ))
 
@@ -673,8 +675,8 @@ class PartialTPManager:
 
             raw_close = live_qty * close_pct
             if hasattr(broker, "_round_qty"):
-                close_qty = broker._round_qty(futures_sym, raw_close)
-                remainder = broker._round_qty(futures_sym, live_qty - close_qty)
+                close_qty = broker._round_qty(futures_sym, raw_close, bump_to_min=False)
+                remainder = broker._round_qty(futures_sym, live_qty - close_qty, bump_to_min=False)
             else:
                 close_qty = raw_close
                 remainder = live_qty - close_qty
@@ -692,6 +694,7 @@ class PartialTPManager:
                 side=close_side,
                 order_type=OrderType.MARKET,
                 quantity=close_qty,
+                price=float(current_price or 0),
                 reduce_only=True,
             ))
             if not res.success:

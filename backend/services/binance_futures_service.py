@@ -18,7 +18,7 @@ from dotenv import load_dotenv
 from backend.services.trading_mode import live_binance_orders_allowed
 from backend.services.multi_asset_bars import classify_symbol
 
-load_dotenv(Path(__file__).resolve().parents[2] / '.env', override=True)
+load_dotenv(Path(__file__).resolve().parents[2] / '.env', override=False)
 
 logger = logging.getLogger(__name__)
 
@@ -184,6 +184,11 @@ class BinanceFuturesService:
                     if filt.get('filterType') == 'LOT_SIZE':
                         self._lot_step[sym] = float(filt['stepSize'])
                         self._lot_min[sym] = float(filt['minQty'])
+                    elif filt.get('filterType') == 'PRICE_FILTER':
+                        try:
+                            TICK_SIZES[sym] = float(filt['tickSize'])
+                        except (TypeError, ValueError, KeyError):
+                            pass
             logger.info(
                 f"Exchange filters loaded for {len(PRICE_PRECISION)} symbols "
                 f"({len(self._lot_step)} lot steps)"
@@ -196,22 +201,35 @@ class BinanceFuturesService:
 
     @classmethod
     def _handle_api_exception(cls, e: Exception) -> None:
-        """Inspect exception for Binance IP ban (HTTP 418/429 / code -1003) and set class-level cooldown."""
+        """Inspect exception for a real Binance IP ban (HTTP 418/429 / code -1003).
+
+        Match status/code attributes, not substrings — a price like 64185.2 or
+        our own "Cooldown remaining: 418.3s" message used to self-inflict a ban.
+        """
         err_msg = str(e)
-        if "banned until" in err_msg or "-1003" in err_msg or "418" in err_msg or "429" in err_msg:
-            import re
-            match = re.search(r"banned until (\d+)", err_msg)
-            if match:
-                try:
-                    ts_ms = int(match.group(1))
-                    cls._banned_until = datetime.fromtimestamp(ts_ms / 1000.0, timezone.utc)
-                    logger.error(f"!!! BINANCE IP BAN DETECTED !!! Local cooldown set until {cls._banned_until} UTC")
-                    return
-                except Exception:
-                    pass
-            # Fallback: ban for 10 minutes
-            cls._banned_until = datetime.now(timezone.utc) + timedelta(minutes=10)
-            logger.error(f"!!! BINANCE IP BAN DETECTED !!! Local fallback cooldown set for 10 minutes (until {cls._banned_until} UTC)")
+        if "IP ban active" in err_msg or "Suppressing API request" in err_msg:
+            return
+        code = getattr(e, "code", None)
+        status_code = getattr(e, "status_code", None)
+        banned = (
+            code in (-1003, "-1003")
+            or status_code in (418, 429, "418", "429")
+            or "banned until" in err_msg.lower()
+        )
+        if not banned:
+            return
+        import re
+        match = re.search(r"banned until (\d+)", err_msg)
+        if match:
+            try:
+                ts_ms = int(match.group(1))
+                cls._banned_until = datetime.fromtimestamp(ts_ms / 1000.0, timezone.utc)
+                logger.error(f"!!! BINANCE IP BAN DETECTED !!! Local cooldown set until {cls._banned_until} UTC")
+                return
+            except Exception:
+                pass
+        cls._banned_until = datetime.now(timezone.utc) + timedelta(minutes=10)
+        logger.error(f"!!! BINANCE IP BAN DETECTED !!! Local fallback cooldown set for 10 minutes (until {cls._banned_until} UTC)")
 
     def _check_ban_status(self) -> None:
         """Raise an exception if the local IP ban cooldown is active."""
@@ -286,7 +304,7 @@ class BinanceFuturesService:
             logger.warning(f"[{sym}] leverage: {e}")
         self._leverage_set.add(sym)
 
-    def _round_qty(self, sym: str, qty: float, round_up: bool = False) -> float:
+    def _round_qty(self, sym: str, qty: float, round_up: bool = False, bump_to_min: bool = True) -> float:
         """Round quantity to Binance LOT_SIZE step (avoids -1111 precision errors).
 
         Defaults to flooring, which is the safe direction for a caller-supplied
@@ -294,6 +312,9 @@ class BinanceFuturesService:
         `qty` is itself a *minimum* required quantity (e.g. derived from
         Binance's MIN_NOTIONAL filter) — flooring a minimum can round it back
         below the threshold it was meant to satisfy and trigger -4164.
+
+        `bump_to_min=False` (use on reduce-only remainders) returns 0 instead of
+        bumping a sub-minQty value up to minQty, which would over-close.
         """
         import math
         step = self._lot_step.get(sym) or MIN_QTY.get(sym, 0.001)
@@ -305,6 +326,8 @@ class BinanceFuturesService:
         else:
             rounded = math.floor(qty / step + 1e-9) * step
         if rounded < min_q:
+            if not bump_to_min:
+                return 0.0
             rounded = math.ceil(min_q / step - 1e-9) * step
         prec = self._qty_precision.get(sym)
         if prec is None:
@@ -314,14 +337,15 @@ class BinanceFuturesService:
         return round(rounded, prec)
 
     def _round_price(self, symbol: str, price: float) -> float:
-        """Round price to exchange-specified precision for the symbol.
-        Falls back to tick-size rounding if exchange info was not loaded."""
-        precision = PRICE_PRECISION.get(symbol)
-        if precision is not None:
-            return round(price, precision)
-        # Fallback: tick-size based (legacy)
+        """Round price to the exchange tick size (not pricePrecision)."""
         import math
-        tick = TICK_SIZES.get(symbol, 0.001)
+        tick = TICK_SIZES.get(symbol)
+        if tick is None or tick <= 0:
+            precision = PRICE_PRECISION.get(symbol)
+            if precision is not None:
+                tick = 10 ** (-int(precision))
+            else:
+                tick = 0.001
         rounded = round(price / tick) * tick
         if tick >= 1:
             decimals = 0
@@ -772,17 +796,39 @@ class BinanceFuturesService:
                 ticker = client.futures_symbol_ticker(symbol=futures_sym)
                 price  = float(ticker['price'])
 
-            # Resolve quantity
-            if not quantity:
-                quantity = self._min_quantity(futures_sym, price)
-            else:
-                quantity = self._round_qty(futures_sym, quantity)
-
-            # ── Notional floor enforcement ──────────────────────────────────────
-            # Even when quantity is supplied externally (e.g. by DecisionEngine),
-            # ensure the order meets Binance's MIN_NOTIONAL filter to avoid -4164.
             passed_reduce_only = bool(kwargs.get('reduce_only', False))
             is_close = action == 'close' or passed_reduce_only
+
+            # Resolve quantity
+            if not quantity:
+                if is_close:
+                    close_side = 'LONG' if direction.upper() in ('BUY', 'LONG') else 'SHORT'
+                    quantity = self._live_position_qty(futures_sym, close_side)
+                    if quantity <= 0:
+                        return {
+                            'status': 'already_flat',
+                            'broker': 'binance_futures',
+                            'already_closed': True,
+                            'order_id': '',
+                            'symbol': futures_sym,
+                            'message': 'no live position to close',
+                        }
+                    quantity = self._round_qty(futures_sym, quantity, bump_to_min=False)
+                    if quantity <= 0:
+                        return {
+                            'status': 'already_flat',
+                            'broker': 'binance_futures',
+                            'already_closed': True,
+                            'order_id': '',
+                            'symbol': futures_sym,
+                            'message': 'live qty below LOT_SIZE min',
+                        }
+                else:
+                    quantity = self._min_quantity(futures_sym, price)
+            else:
+                quantity = self._round_qty(
+                    futures_sym, quantity, bump_to_min=not is_close
+                )
 
             if price > 0 and not is_close:
                 _min_not = MIN_NOTIONAL.get(futures_sym, 20.0)
@@ -1130,12 +1176,41 @@ class BinanceFuturesService:
             }
 
         except Exception as e:
-            # -2022: position already flat (exchange SL fired before this close reached Binance)
+            # -2022 is ANY reduce-only rejection, including over-size closes.
+            # Only treat as already_flat when the exchange book is actually empty.
             if '-2022' in str(e) or 'ReduceOnly Order is rejected' in str(e):
-                logger.info(f'[Binance Futures] {symbol} already flat (-2022) -- marking closed')
-                return {'status': 'already_flat', 'broker': 'binance_futures',
-                        'already_closed': True, 'order_id': '', 'symbol': symbol,
-                        'message': '-2022 position already closed on exchange'}
+                try:
+                    verify_side = 'LONG' if direction.upper() in ('BUY', 'LONG') else 'SHORT'
+                    live_qty = self._live_position_qty(futures_sym, verify_side, raise_on_error=True)
+                except Exception as verify_err:
+                    logger.error(
+                        f"[Binance Futures] {symbol} -2022 but live qty unverified: {verify_err}"
+                    )
+                    return {
+                        'status': 'error',
+                        'broker': 'binance_futures',
+                        'message': f'-2022 unverified ({verify_err})',
+                        'error': str(e),
+                    }
+                if live_qty <= 0:
+                    logger.info(f'[Binance Futures] {symbol} already flat (-2022) -- marking closed')
+                    return {
+                        'status': 'already_flat',
+                        'broker': 'binance_futures',
+                        'already_closed': True,
+                        'order_id': '',
+                        'symbol': symbol,
+                        'message': '-2022 position already closed on exchange',
+                    }
+                logger.error(
+                    f"[Binance Futures] {symbol} reduce-only rejected but {live_qty} still open"
+                )
+                return {
+                    'status': 'error',
+                    'broker': 'binance_futures',
+                    'message': f'-2022 with live qty {live_qty} remaining',
+                    'error': str(e),
+                }
             logger.error(f"[Binance Futures] place_order error: {e}")
             return {'status': 'error', 'broker': 'binance_futures', 'message': str(e), 'error': str(e)}
 
@@ -1281,28 +1356,30 @@ class BinanceFuturesService:
         params = copy.deepcopy(order_params)
 
         transient_retries = 3
+        precision_retries = 0
         backoff = 0.5
         while True:
             try:
                 return client.futures_create_order(**params)
             except Exception as e:
                 err_str = str(e)
-                # Precision error: trim decimals and retry immediately
-                if "-1111" in err_str:
+                # Precision error: trim decimals and retry only if params change
+                if "-1111" in err_str and precision_retries < 4:
+                    before = copy.deepcopy(params)
                     if "stopPrice" in params:
                         sp_str = str(params["stopPrice"])
                         if "." in sp_str:
                             decimals = len(sp_str.split(".")[1])
                             if decimals > 0:
                                 params["stopPrice"] = float(f"{params['stopPrice']:.{decimals - 1}f}")
-                                continue
                     if "price" in params:
                         sym = params.get("symbol", "")
                         params["price"] = self._round_price(sym, float(params["price"]))
-                        continue
                     if "quantity" in params:
                         sym = params.get("symbol", "")
                         params["quantity"] = self._round_qty(sym, float(params["quantity"]))
+                    if params != before:
+                        precision_retries += 1
                         continue
                 # Duplicate clientOrderId (-4015/-2010 "Duplicate") → idempotent no-op
                 if "duplicate" in err_str.lower() or "-4015" in err_str:
@@ -1338,7 +1415,11 @@ class BinanceFuturesService:
                     )
                     raise e
                 # Transient errors: retry with backoff
-                is_transient = any(t in err_str for t in ("429", "418", "-1003", "500", "502", "503", "504", "Timeout", "timed out", "Connection"))
+                is_transient = any(t in err_str for t in (
+                    "HTTP 429", "HTTP 418", "status_code=429", "status_code=418",
+                    "-1003", " 500 ", "HTTP 500", "502", "503", "504",
+                    "Timeout", "timed out", "Connection",
+                ))
                 if is_transient and transient_retries > 0:
                     transient_retries -= 1
                     logger.warning(f"  [retry] transient order error, retrying in {backoff}s: {err_str[:120]}")
@@ -1718,7 +1799,14 @@ class BinanceFuturesService:
             if not held:
                 return {"status": "already_flat", "symbol": symbol}
 
-        return self.place_order(symbol=symbol, direction=held, action="close", quantity=None)
+        futures_sym = self._to_futures_symbol(symbol)
+        side = "LONG" if held == "BUY" else "SHORT"
+        live_qty = self._live_position_qty(futures_sym, side) if futures_sym else 0.0
+        if live_qty <= 0:
+            return {"status": "already_flat", "symbol": symbol}
+        return self.place_order(
+            symbol=symbol, direction=held, action="close", quantity=live_qty
+        )
 
     def cancel_order(self, order_id: str, symbol: Optional[str] = None) -> dict:
         if not live_binance_orders_allowed():
