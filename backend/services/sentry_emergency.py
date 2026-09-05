@@ -115,14 +115,21 @@ def _close_all_positions_sync() -> dict[str, Any]:
                 side = pos['side']
                 if qty > 0:
                     try:
-                        binance_futures_broker.place_order(
+                        ores = binance_futures_broker.place_order(
                             symbol=symbol,
                             direction=side,
                             action='close',
                             quantity=qty,
                             comment='Sentry emergency close orphan'
-                        )
-                        closed_orphans += 1
+                        ) or {}
+                        status = str(ores.get("status") or "").lower()
+                        if status in CLOSE_SUCCESS_STATUSES:
+                            closed_orphans += 1
+                        else:
+                            errors.append(
+                                f"Orphan {symbol}: close {status or 'unknown'} "
+                                f"— {ores.get('message') or ores.get('reason') or 'no detail'}"
+                            )
                     except Exception as e:
                         errors.append(f"Orphan {symbol}: {e}")
         except Exception as e:
@@ -180,6 +187,28 @@ def _cancel_all_open_orders_sync() -> dict[str, Any]:
         "symbols_cancelled": cancelled,
         "errors": errors,
         "mode": "non_protective_only",
+    }
+
+
+def trigger_emergency_halt_sync(*, reason: str, source: str, manual: bool = False) -> dict[str, Any]:
+    """Synchronous halt + flatten for callers already off the event loop.
+
+    Used by replace_stop_loss so a failed stop restore cannot fire-and-forget
+    the flatten under a starved loop.
+    """
+    state = halt_trading(reason=reason, halted_by=source, manual=manual)
+    close_result: dict[str, Any] = {}
+    cancel_result: dict[str, Any] = {}
+    try:
+        close_result = _close_all_positions_sync()
+        cancel_result = _cancel_all_open_orders_sync()
+    except Exception as exc:
+        logger.error("Emergency halt sync failed", error=str(exc))
+        cancel_result = {"error": str(exc)}
+    return {
+        "state": state,
+        "close": close_result,
+        "cancel": cancel_result,
     }
 
 

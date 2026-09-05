@@ -110,11 +110,13 @@ class EmergencyExitManager:
 
             logger.info(f"  [POSITION MGR] Pre-sync review: {len(pre_open)} open positions")
             
-            # Fetch live mark prices from broker
+            # Fetch live mark prices and qtys from broker
             live_prices = {}
+            live_qty = {}
             try:
                 for bp in broker.get_positions():
                     live_prices[bp['symbol']] = float(bp.get('mark_price') or bp.get('entry_price') or 0)
+                    live_qty[bp['symbol']] = abs(float(bp.get('quantity') or bp.get('positionAmt') or 0))
             except Exception as _bfs_err:
                 logger.error(f"  [STEP 0] Price fetch error: {_bfs_err}")
                 return 0
@@ -174,8 +176,26 @@ class EmergencyExitManager:
                                 '-2022' in str(res.message) or 'already' in str(res.message).lower()
                             )
                         ):
-                            # already_flat is mapped to success with no fill — do not
-                            # invent PnL from the last mark; record an unknown close.
+                            remaining = live_qty.get(trade.symbol)
+                            if remaining is None:
+                                try:
+                                    remaining = 0.0
+                                    for bp in broker.get_positions():
+                                        if bp.get("symbol") == trade.symbol:
+                                            remaining = abs(float(bp.get("quantity") or 0))
+                                            break
+                                except Exception as verify_err:
+                                    logger.error(
+                                        f"  [EMERGENCY EXIT] {trade.symbol} already_flat "
+                                        f"unverified ({verify_err}); leaving DB open"
+                                    )
+                                    continue
+                            if remaining and remaining > 0:
+                                logger.error(
+                                    f"  [EMERGENCY EXIT] {trade.symbol} claimed flat but "
+                                    f"live qty {remaining} remains; leaving DB open"
+                                )
+                                continue
                             logger.info(f"  [EMERGENCY EXIT] {trade.symbol} already flat on exchange — marking DB closed")
                             trade.status = 'closed'
                             trade.closed_at = datetime.now(timezone.utc)

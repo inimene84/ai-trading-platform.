@@ -308,7 +308,22 @@ app.add_middleware(
 
 @app.middleware("http")
 async def require_admin_token_for_sensitive_requests(request: Request, call_next):
-    if admin_auth_enabled() and is_sensitive_request(request):
+    path = request.url.path
+    trading_mutation = (
+        request.method.upper() not in {"GET", "HEAD", "OPTIONS"}
+        and path.startswith((
+            "/trading", "/api/trading",
+            "/sentry", "/api/sentry",
+            "/signals", "/api/signals",
+        ))
+    )
+    if trading_mutation and not admin_auth_enabled():
+        return JSONResponse(
+            status_code=401,
+            content={"detail": "Admin API token is not configured"},
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    if (admin_auth_enabled() or trading_mutation) and is_sensitive_request(request):
         try:
             validate_admin_request(request)
         except HTTPException as exc:

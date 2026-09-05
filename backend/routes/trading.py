@@ -262,7 +262,7 @@ async def get_portfolio():
 
             if is_ctrader:
                 pid = str(getattr(t, "broker_position_id", "") or "").strip()
-                if is_ctrader_connected or live_ctrader:
+                if live_ctrader:
                     if pid and pid not in live_by_pid:
                         continue
                     if not pid and sym not in live_by_symbol:
@@ -882,7 +882,10 @@ async def get_positions():
             if is_ctrader:
                 pid = str(getattr(t, "broker_position_id", "") or "").strip()
                 # If cTrader is connected or has live positions, skip ghost rows absent from live book
-                if is_ctrader_connected or live_ctrader:
+                # A non-empty live book is authoritative. An empty snapshot is
+                # ambiguous (rate-limit / reconnect) — keep showing the DB row
+                # instead of hiding it as a ghost after we refused a bulk close.
+                if live_ctrader:
                     if pid and pid not in live_by_pid:
                         continue
                     if not pid and sym not in live_by_symbol:

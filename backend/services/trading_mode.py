@@ -39,11 +39,21 @@ def paper_starting_balance() -> float:
     return value if value > 0 else _DEFAULT_PAPER_BALANCE
 
 
-def live_binance_orders_allowed() -> bool:
-    """Whether BinanceFuturesService may hit the live/testnet private API.
+def live_exchange_orders_allowed() -> bool:
+    """Whether any exchange adapter may send live orders.
 
     Single source of truth: only TRADING_MODE=live (or the legacy
-    PAPER_TRADING/DRY_RUN_ALL fallback resolving to live) allows exchange
-    orders. Unset TRADING_MODE with default PAPER_TRADING=true refuses them.
+    PAPER_TRADING/DRY_RUN_ALL fallback resolving to live) allows them.
+    Unset TRADING_MODE with default PAPER_TRADING=true refuses them.
     """
     return get_trading_mode() == TradingMode.LIVE
+
+
+def live_binance_orders_allowed() -> bool:
+    """Whether BinanceFuturesService may hit the live/testnet private API."""
+    return live_exchange_orders_allowed()
+
+
+def live_ctrader_orders_allowed() -> bool:
+    """Whether CTraderService may send ProtoOANewOrder / close / amend."""
+    return live_exchange_orders_allowed()

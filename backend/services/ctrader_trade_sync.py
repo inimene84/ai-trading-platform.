@@ -146,6 +146,12 @@ def reconcile_ctrader_positions(
             if entry > 0:
                 row.entry_price = entry
             row.direction = side
+            live_sl = raw.get("stop_loss")
+            live_tp = raw.get("take_profit")
+            if live_sl:
+                row.stop_loss = float(live_sl)
+            if live_tp:
+                row.take_profit = float(live_tp)
             updated += 1
             continue
 
@@ -160,6 +166,12 @@ def reconcile_ctrader_positions(
             if entry > 0:
                 row.entry_price = entry
             row.direction = side
+            live_sl = raw.get("stop_loss")
+            live_tp = raw.get("take_profit")
+            if live_sl:
+                row.stop_loss = float(live_sl)
+            if live_tp:
+                row.take_profit = float(live_tp)
             updated += 1
             continue
 
@@ -182,7 +194,35 @@ def reconcile_ctrader_positions(
     # Reconcile absent trades (e.g. hit SL/TP or closed on cTrader)
     closed = 0
     now = datetime.now(timezone.utc)
-    for row in ctrader_open_rows:
+    unmatched_rows = [row for row in ctrader_open_rows if row.id not in matched_db_trade_ids]
+    # An entirely empty live book while SQL still has opens is the same
+    # ambiguous case as Binance sync: rate-limit / reconnect / permission
+    # blip. Only close a row when the broker confirms a recent close deal.
+    if not live_positions_list and unmatched_rows:
+        confirmed = []
+        for row in unmatched_rows:
+            deal = None
+            if broker is not None and row.broker_position_id:
+                try:
+                    deal = broker.get_recent_deal(
+                        position_id=row.broker_position_id,
+                        symbol=row.symbol,
+                    )
+                except Exception:
+                    deal = None
+            if deal:
+                confirmed.append(row)
+        if not confirmed:
+            logger.error(
+                "cTrader returned an empty positions snapshot while DB has "
+                "%s open cTrader row(s) and no close deals; refusing bulk close",
+                len(unmatched_rows),
+            )
+            db.commit()
+            return {"created": created, "updated": updated, "closed": 0}
+        unmatched_rows = confirmed
+
+    for row in unmatched_rows:
         if row.id in matched_db_trade_ids:
             continue
 

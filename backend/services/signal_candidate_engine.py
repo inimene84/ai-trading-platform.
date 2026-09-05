@@ -19,6 +19,7 @@ from backend.services.unified_trading import UnifiedTrading, UnifiedOrder, Order
 from backend.services.binance_futures_service import binance_futures_broker
 from backend.services.binance_market_data import binance_market_data
 from backend.services.multi_asset_bars import classify_symbol, tf_to_binance_interval
+from backend.services.trading_mode import live_ctrader_orders_allowed
 
 logger = logging.getLogger(__name__)
 
@@ -953,7 +954,7 @@ class SignalCandidateEngine:
                     qty = min(float(qty), max_lots)
             side = cand["direction"].upper()
 
-            if cand["broker"] == "ctrader":
+            if cand["broker"] == "ctrader" and live_ctrader_orders_allowed():
                 connected = await asyncio.to_thread(ctrader_service.ensure_connected)
                 if not connected and ctrader_service.has_credentials():
                     return {

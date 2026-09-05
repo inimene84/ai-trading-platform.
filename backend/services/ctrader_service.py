@@ -16,6 +16,7 @@ from typing import Optional, Dict, List, Any
 
 from backend.brokers.base import BrokerService
 from backend.services.ctrader_tokens import token_store
+from backend.services.trading_mode import live_ctrader_orders_allowed
 
 logger = logging.getLogger(__name__)
 
@@ -804,6 +805,29 @@ class CTraderService(BrokerService):
         return max(pip * cls.MAX_FX_STOP_PIPS, entry_abs * 0.012)
 
     @classmethod
+    def is_plausible_stop(
+        cls, symbol: str, entry: float, stop: float, direction: str = "",
+    ) -> bool:
+        """False when a DB stop is on the wrong side or impossibly far from entry.
+
+        CADJPY SELL @ 112.9 with SL 95.9 is ~1700 pips — a live 30-pip stop
+        must not be overwritten by that row.
+        """
+        try:
+            entry_f = float(entry)
+            stop_f = float(stop)
+        except (TypeError, ValueError):
+            return False
+        if entry_f <= 0 or stop_f <= 0:
+            return False
+        side = (direction or "").upper()
+        if side in ("BUY", "LONG") and stop_f >= entry_f:
+            return False
+        if side in ("SELL", "SHORT") and stop_f <= entry_f:
+            return False
+        return abs(stop_f - entry_f) <= cls.max_protective_distance(symbol, entry_f) * 1.05
+
+    @classmethod
     def min_protective_distance(cls, symbol: str, entry: float) -> float:
         """Closest a stop may sit and still be accepted by the broker.
 
@@ -949,6 +973,10 @@ class CTraderService(BrokerService):
     def dry_run(self) -> bool:
         return self._dry_run
 
+    def _orders_live_blocked(self) -> bool:
+        """True when TRADING_MODE is not live — reads stay up, orders must not."""
+        return not live_ctrader_orders_allowed()
+
     def has_credentials(self) -> bool:
         """True when OAuth tokens or env vars are present for a live session."""
         tokens = token_store.get_tokens()
@@ -1023,12 +1051,18 @@ class CTraderService(BrokerService):
             logger.warning("cTrader credentials missing. Operating in paper/dry-run mode.")
             return False
 
-        # Host security gate: paper mode defaults to demo host
+        # Host security gate: paper mode defaults to demo host.
+        # TRADING_MODE=paper must never select live.ctraderapi.com even when
+        # CTRADER_PAPER_MODE=false and CTRADER_LIVE_CONFIRM is set.
         paper_mode = (
             os.getenv("CTRADER_PAPER_MODE", os.getenv("CTRADE_PAPER_MODE", "true")).lower() == "true"
         )
         live_confirm = os.getenv("CTRADER_LIVE_CONFIRM", os.getenv("CTRADE_LIVE_CONFIRM", "")).strip()
-        is_live = (not paper_mode) and (live_confirm == "I_UNDERSTAND")
+        is_live = (
+            (not paper_mode)
+            and (live_confirm == "I_UNDERSTAND")
+            and live_ctrader_orders_allowed()
+        )
         if self._host_override == "live.ctraderapi.com" and not is_live:
             logger.error("Ignoring cTrader live host override without live confirmation")
             self._host_override = None
@@ -1410,8 +1444,8 @@ class CTraderService(BrokerService):
                 direction=side,
             )
 
-        # Simulated fallback in dry-run
-        if self._dry_run or not self.is_connected or self._protocol is None:
+        # Simulated fallback in dry-run or when TRADING_MODE is not live
+        if self._orders_live_blocked() or self._dry_run or not self.is_connected or self._protocol is None:
             logger.info(f"[PAPER] cTrader: {side} {ct_symbol} lots={lots:.2f}")
             return {
                 "status": "simulated",
@@ -1560,13 +1594,35 @@ class CTraderService(BrokerService):
         take_profit: Optional[float] = None,
     ) -> Dict[str, Any]:
         """Set absolute SL/TP on an open cTrader position (ProtoOAAmendPositionSLTPReq)."""
-        if self._dry_run or not self.is_connected or self._protocol is None:
+        if self._orders_live_blocked() or self._dry_run or not self.is_connected or self._protocol is None:
             return {
                 "status": "simulated",
                 "position_id": str(position_id),
                 "stop_loss": stop_loss,
                 "take_profit": take_profit,
             }
+        matched = next(
+            (p for p in self._positions if str(p.get("position_id")) == str(position_id)),
+            None,
+        )
+        if stop_loss and matched:
+            entry = float(matched.get("entry_price") or 0)
+            symbol = str(matched.get("symbol") or "")
+            side = str(matched.get("side") or matched.get("direction") or "")
+            if entry > 0 and symbol and not self.is_plausible_stop(
+                symbol, entry, stop_loss, side
+            ):
+                logger.error(
+                    "Refusing implausible cTrader amend SL %s for %s %s @ %s",
+                    stop_loss, side, symbol, entry,
+                )
+                return {
+                    "status": "error",
+                    "error": "implausible stop versus live entry",
+                    "position_id": str(position_id),
+                    "stop_loss": stop_loss,
+                    "entry_price": entry,
+                }
         try:
             from ctrader_open_api.messages import OpenApiMessages_pb2 as msgs
             from twisted.internet import reactor
@@ -1647,7 +1703,7 @@ class CTraderService(BrokerService):
         if not symbol and matched is not None:
             symbol = matched.get("symbol")
 
-        if self._dry_run or not self.is_connected or self._protocol is None:
+        if self._orders_live_blocked() or self._dry_run or not self.is_connected or self._protocol is None:
             self._positions = [p for p in self._positions if str(p.get("position_id")) != str(position_id)]
             return {
                 "status": "closed",

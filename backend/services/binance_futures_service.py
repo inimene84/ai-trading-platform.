@@ -661,6 +661,23 @@ class BinanceFuturesService:
         if qty <= 0:
             return {'status': 'skipped', 'reason': 'no open position'}
 
+        live_entry = None
+        try:
+            for p in self.get_positions():
+                if p.get("symbol") == futures_sym and float(p.get("quantity") or 0) > 0:
+                    live_entry = float(p.get("entry_price") or p.get("entryPrice") or 0)
+                    break
+        except Exception:
+            live_entry = None
+        if stop_loss and live_entry and live_entry > 0:
+            deviation = abs(float(stop_loss) - live_entry) / live_entry
+            if deviation > 0.15:
+                logger.error(
+                    f"  [PROTECT-RESTORE] {futures_sym} refusing implausible DB stop "
+                    f"{stop_loss} vs entry {live_entry} ({deviation:.1%})"
+                )
+                stop_loss = None
+
         try:
             has_sl = self._has_exchange_stop(futures_sym, position_side, raise_on_error=True)
             needs_tp = bool(take_profit and take_profit > 0)
@@ -1073,15 +1090,38 @@ class BinanceFuturesService:
                         sl_algo_id = sl_order.get('algoId') or sl_order.get('orderId')
                         logger.info(f"  [SL] Placed for {futures_sym} @ {stop_loss} (id={sl_algo_id})")
                     except Exception as sl_e:
-                        if self._is_existing_close_position_error(sl_e) and self._has_exchange_stop(
-                            futures_sym, position_side
-                        ):
+                        try:
+                            has_sl = self._has_exchange_stop(
+                                futures_sym, position_side, raise_on_error=True
+                            )
+                        except Exception as verify_err:
+                            logger.error(
+                                f"  [SL] FAILED to place stop-loss for {futures_sym}: {sl_e} "
+                                f"— protection unverified ({verify_err}); leaving position open"
+                            )
+                            return {
+                                'status': 'error',
+                                'broker': 'binance_futures',
+                                'message': (
+                                    f'SL placement failed ({sl_e}); '
+                                    f'protection unverified ({verify_err}) — no emergency close'
+                                ),
+                                'order_id': order_id,
+                                'symbol': futures_sym,
+                                'sl_error': str(sl_e),
+                            }
+                        if self._is_existing_close_position_error(sl_e) and has_sl:
                             logger.info(
                                 f"  [SL] {futures_sym}: -4130 with live exchange stop — "
                                 f"position protected, skipping emergency close"
                             )
+                        elif has_sl:
+                            logger.info(
+                                f"  [SL] {futures_sym}: place failed ({sl_e}) but exchange "
+                                f"already has a stop — skipping emergency close"
+                            )
                         else:
-                            # SL failed with no live protection → EMERGENCY CLOSE
+                            # SL failed and exchange confirmed no protection → EMERGENCY CLOSE
                             logger.error(
                                 f"  [SL] FAILED to place stop-loss for {futures_sym}: {sl_e}"
                                 f" — initiating emergency close to prevent naked position"
@@ -1285,10 +1325,15 @@ class BinanceFuturesService:
                 # would double-fill — so handle the partial here explicitly.
                 remaining = self._round_qty(futures_sym, quantity - executed)
                 if remaining > 0:
-                    client.futures_create_order(
-                        symbol=futures_sym, side=side, type="MARKET",
-                        quantity=remaining, positionSide=position_side,
-                    )
+                    bucket = int(time.time())
+                    self._safe_create_order(client, {
+                        "symbol": futures_sym,
+                        "side": side,
+                        "type": "MARKET",
+                        "quantity": remaining,
+                        "positionSide": position_side,
+                        "newClientOrderId": f"x{futures_sym[:6]}{side[0]}m{bucket}"[:36],
+                    })
                 logger.info(f"  [MAKER] partial maker {executed}, topped up {remaining} at MARKET")
                 return final
         except Exception as e:
@@ -1611,15 +1656,13 @@ class BinanceFuturesService:
                         f"  [TRAIL-SL] {futures_sym} STOP REPLACEMENT AND RESTORE FAILED. "
                         "Triggering Sentry Emergency Halt to protect the account."
                     )
-                    from backend.services.sentry_emergency import emergency_halt
-                    import asyncio
+                    # Circular: sentry_emergency imports binance_futures_broker.
+                    from backend.services.sentry_emergency import trigger_emergency_halt_sync
                     try:
-                        loop = asyncio.get_event_loop()
-                        if loop.is_running():
-                            loop.create_task(emergency_halt(
-                                reason=f"STOP REPLACEMENT AND RESTORE FAILED for {futures_sym}",
-                                source="replace_stop_loss"
-                            ))
+                        trigger_emergency_halt_sync(
+                            reason=f"STOP REPLACEMENT AND RESTORE FAILED for {futures_sym}",
+                            source="replace_stop_loss",
+                        )
                     except Exception as eh_err:
                         logger.critical(f"Failed to trigger emergency halt: {eh_err}")
                     return {
