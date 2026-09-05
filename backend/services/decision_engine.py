@@ -51,6 +51,12 @@ def _reviewer_gate_fail_open() -> bool:
     return get_trading_mode() != TradingMode.LIVE
 
 
+def _sentiment_filter_enabled() -> bool:
+    """Whether the soft news sentiment gate is enabled."""
+    return os.getenv("SENTIMENT_FILTER_ENABLED", "false").lower() == "true"
+
+
+
 def _positive_price_level(level: Optional[float]) -> Optional[float]:
     """Treat 0 / negative / unparseable as 'no level' — never a valid stop or target."""
     if level is None:
@@ -476,6 +482,40 @@ class DecisionEngine:
             if signal.signal not in ["BUY", "SELL"] or signal.confidence < self.config.min_signal_strength:
                 return None
 
+        # 4d. Soft News Sentiment Gate (Forex/Macro & Crypto recency-weighted sentiment)
+        if _sentiment_filter_enabled():
+            try:
+                from backend.services.news_sentiment_service import news_sentiment_service
+                sent_data = news_sentiment_service.get_pair_sentiment(symbol)
+                sent_score = sent_data.get("recency_weighted_score", 0.0)
+                sent_conf = sent_data.get("confidence", 0.0)
+
+                # Hard Veto on extreme divergence with high confidence
+                if signal.signal == "BUY" and sent_score < -0.35 and sent_conf >= 0.45:
+                    logger.info(f"[{symbol}] Sentiment Gate VETO: Bearish sentiment ({sent_score:+.2f}, conf={sent_conf:.2f}) blocks BUY")
+                    self._record_eval(symbol, signal.signal, signal.confidence, f"vetoed by sentiment gate: {sent_score:+.2f}")
+                    return None
+                elif signal.signal == "SELL" and sent_score > 0.35 and sent_conf >= 0.45:
+                    logger.info(f"[{symbol}] Sentiment Gate VETO: Bullish sentiment ({sent_score:+.2f}, conf={sent_conf:.2f}) blocks SELL")
+                    self._record_eval(symbol, signal.signal, signal.confidence, f"vetoed by sentiment gate: {sent_score:+.2f}")
+                    return None
+
+                # Soft Dampen on moderate disagreement
+                if signal.signal == "BUY" and sent_score < -0.15:
+                    dampen = max(0.05, min(0.20, abs(sent_score) * 0.3))
+                    signal.confidence = max(0.0, signal.confidence - dampen)
+                elif signal.signal == "SELL" and sent_score > 0.15:
+                    dampen = max(0.05, min(0.20, abs(sent_score) * 0.3))
+                    signal.confidence = max(0.0, signal.confidence - dampen)
+                elif (signal.signal == "BUY" and sent_score > 0.15) or (signal.signal == "SELL" and sent_score < -0.15):
+                    # Slight alignment boost
+                    signal.confidence = min(1.0, signal.confidence + 0.05)
+
+                if signal.confidence < self.config.min_signal_strength:
+                    self._record_eval(symbol, signal.signal, signal.confidence, "confidence reduced below threshold by sentiment gate")
+                    return None
+            except Exception as e:
+                logger.warning(f"[{symbol}] Sentiment gate evaluation error (failing neutral): {e}")
 
         # 5. AI Opinion Layer — multi-agent weighted consensus
         if self.config.enable_personas:
@@ -550,6 +590,29 @@ class DecisionEngine:
                 if not _reviewer_gate_fail_open():
                     self._record_eval(symbol, decision.action, decision.confidence,
                                       "entry blocked: risk reviewer gate errored (fail-closed in live)")
+                    return None
+
+        # 9. Event-Risk Filter (Macro Economic Event Gate)
+        if decision:
+            try:
+                from backend.services.event_risk_filter import event_risk_filter
+                risk_res = event_risk_filter.evaluate_order(
+                    symbol=symbol,
+                    proposed_quantity=decision.quantity,
+                    proposed_direction=decision.action,
+                )
+                if not risk_res.approved:
+                    logger.warning(f"[{symbol}] Entry VETOED by Event-Risk Filter: {risk_res.reason}")
+                    self._record_eval(symbol, decision.action, decision.confidence, f"vetoed by event risk filter: {risk_res.reason}")
+                    return None
+                if risk_res.action == "reduce":
+                    logger.info(f"[{symbol}] Quantity REDUCED by Event-Risk Filter: {decision.quantity} -> {risk_res.final_quantity}")
+                    decision.quantity = risk_res.final_quantity
+                    decision.reasoning += f" | EventRisk: {risk_res.reason}"
+            except Exception as e:
+                logger.error(f"[{symbol}] Error in Event-Risk Filter gate: {e}")
+                if get_trading_mode() == TradingMode.LIVE:
+                    self._record_eval(symbol, decision.action, decision.confidence, "entry blocked: event risk filter errored (fail-closed in live)")
                     return None
 
         if decision:
