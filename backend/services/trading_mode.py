@@ -46,6 +46,19 @@ def paper_leverage_for_broker(broker: str) -> float:
     return value if value > 0 else 1.0
 
 
+def paper_reported_equity(cash: float, margin_used: float = 0.0) -> float:
+    """Paper NAV for kill switch, snapshots, and the drawdown gate.
+
+    Margin is reserved buying power, not equity. Adding it to cash
+    double-counts open notionals: a 1x book with $100k cash and $98k
+    LINK/LTC margin reported a fake $198k peak; after 10x the same book
+    reported $133k and the 20% drawdown gate halted a flat paper session.
+    ``margin_used`` is accepted so call sites stay explicit.
+    """
+    _ = margin_used
+    return float(cash or 0.0)
+
+
 def paper_starting_balance() -> float:
     """Simulated cash for local paper mode (not a Binance wallet).
 
