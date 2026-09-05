@@ -15,6 +15,25 @@ from backend.services.skill_miner import skill_miner
 logger = logging.getLogger(__name__)
 
 
+def affordable_notional(
+    equity: float,
+    available: float,
+    leverage: float,
+    max_equity_mult: float,
+    max_margin_use_pct: float,
+) -> float:
+    """Largest notional a book can take without blowing the margin check."""
+    caps: list[float] = []
+    if equity > 0 and max_equity_mult > 0:
+        caps.append(equity * max_equity_mult)
+    avail = available if available > 0 else equity
+    lev = leverage if leverage > 0 else 1.0
+    frac = max_margin_use_pct if max_margin_use_pct > 0 else 0.95
+    if avail > 0:
+        caps.append(avail * lev * frac)
+    return min(caps) if caps else 0.0
+
+
 def pyramid_price_improved(
     direction: str, current_price: float, last_layer_price: float, minimum: float,
 ) -> bool:
@@ -145,6 +164,9 @@ class DecisionEngine:
         # Live account equity (set by the loop each cycle) for risk-based sizing.
         # 0 → fall back to fixed trade_usdt_amount notional.
         self.account_equity: float = 0.0
+        # Available cash/margin and session leverage (paper 1x vs Binance 10x).
+        self.account_available: float = 0.0
+        self.account_leverage: float = 1.0
 
     def _record_eval(self, symbol, direction, confidence, reason, entry=None, sl=None, tp=None, approved=False):
         self.last_evaluation = {
@@ -643,10 +665,16 @@ class DecisionEngine:
             if per_unit_risk > 0:
                 risk_amount = self.account_equity * self.config.risk_per_trade_pct
                 qty_by_risk = risk_amount / per_unit_risk
-                notional = qty_by_risk * entry_price
-                # Cap per-trade notional at a multiple of equity (post-leverage)
-                max_notional = self.account_equity * self.config.max_trade_notional_equity_mult
-                notional = max(trade_usdt, min(notional, max_notional))
+                notional = max(trade_usdt, qty_by_risk * entry_price)
+                max_affordable = affordable_notional(
+                    self.account_equity,
+                    self.account_available,
+                    self.account_leverage,
+                    self.config.max_trade_notional_equity_mult,
+                    getattr(self.config, "max_trade_margin_use_pct", 0.95),
+                )
+                if max_affordable > 0:
+                    notional = min(notional, max_affordable)
         
         # Block NEW entries in RANGING regime unless the config-gated ranging
         # path matched a mean-reversion / mined-skill setup. Pyramid adds stay

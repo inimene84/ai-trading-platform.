@@ -46,6 +46,30 @@ def test_paper_starting_balance_rejects_non_positive(monkeypatch):
     assert paper_starting_balance() == 100_000.0
 
 
+def test_paper_clips_oversize_eth_instead_of_skipping():
+    """1% risk on a tight ETH stop used to reject: need 107548, have 100000."""
+    UnifiedTrading._instance = None
+    engine = UnifiedTrading()._paper
+    pid = engine.create_portfolio("eth-clip", 100_000.0, leverage=1.0)
+    res = engine.place_order(pid, UnifiedOrder(
+        symbol="ETHUSDT", side=OrderSide.BUY, order_type=OrderType.MARKET,
+        quantity=107548.62 / 2451.0, price=2451.0,
+    ))
+    assert res.success is True
+    assert res.filled_qty * 2451.0 <= 100_000.0
+    UnifiedTrading._instance = None
+
+
+def test_init_session_upgrades_binance_paper_leverage(monkeypatch):
+    monkeypatch.setenv("BINANCE_LEVERAGE", "10")
+    UnifiedTrading._instance = None
+    ut = UnifiedTrading()
+    session = ut.init_session("binance_futures", mode="paper", paper_balance=100_000.0)
+    pf = ut._paper._portfolios[session.paper_portfolio_id]
+    assert pf["_meta"]["leverage"] == 10.0
+    UnifiedTrading._instance = None
+
+
 def test_explicit_paper_mode_disables_live_binance_orders(monkeypatch):
     monkeypatch.setenv("TRADING_MODE", "paper")
     assert get_trading_mode() == TradingMode.PAPER

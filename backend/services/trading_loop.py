@@ -26,7 +26,12 @@ from backend.services.decision_engine import DecisionEngine
 from backend.services.unified_trading import UnifiedTrading, UnifiedOrder, OrderSide, OrderType
 from backend.services.position_manager import get_position_manager
 from backend.services.sentry_state import get_trading_status, is_trading_allowed
-from backend.services.trading_mode import TradingMode, get_trading_mode, paper_starting_balance
+from backend.services.trading_mode import (
+    TradingMode,
+    get_trading_mode,
+    paper_leverage_for_broker,
+    paper_starting_balance,
+)
 from backend.services.trading_loop_helpers import (
     EmergencyExitManager,
     BrokerPositionSyncService,
@@ -1169,6 +1174,20 @@ class TradingLoopService:
                 regime_detector=self._regime_detector_for(symbol),
             )
             decision_engine.account_equity = getattr(self, "_cycle_equity", 0.0)
+            decision_engine.account_available = getattr(self, "_cycle_available", 0.0)
+            if get_trading_mode() == TradingMode.PAPER:
+                decision_engine.account_leverage = paper_leverage_for_broker(
+                    get_active_broker_name()
+                )
+            else:
+                try:
+                    decision_engine.account_leverage = float(
+                        os.getenv("BINANCE_LEVERAGE", "10") or 10
+                    )
+                except (TypeError, ValueError):
+                    decision_engine.account_leverage = 10.0
+                if decision_engine.account_leverage <= 0:
+                    decision_engine.account_leverage = 10.0
             decision = await decision_engine.evaluate_symbol(
                 symbol=symbol,
                 bars=bars,

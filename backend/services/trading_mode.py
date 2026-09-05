@@ -25,6 +25,27 @@ def get_trading_mode() -> TradingMode:
     return TradingMode.PAPER if (paper_trading or dry_run) else TradingMode.LIVE
 
 
+def paper_leverage_for_broker(broker: str) -> float:
+    """Leverage used by the paper book for a broker session.
+
+    Binance paper simulates USDT-M futures, so it follows BINANCE_LEVERAGE
+    (default 10x). A 1x paper book rejects risk-based sizes that a tight
+    stop produces (1% equity risk / ~0.9% stop ≈ 1.07x notional).
+    """
+    name = (broker or "").strip().lower()
+    if name in {"binance_futures", "binance"}:
+        raw = os.getenv("BINANCE_LEVERAGE", "10")
+    elif name == "ctrader":
+        raw = os.getenv("CTRADER_PAPER_LEVERAGE", "1")
+    else:
+        raw = os.getenv("PAPER_LEVERAGE", "1")
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        value = 1.0
+    return value if value > 0 else 1.0
+
+
 def paper_starting_balance() -> float:
     """Simulated cash for local paper mode (not a Binance wallet).
 

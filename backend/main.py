@@ -101,7 +101,12 @@ async def run_supervised_task(task_name: str, coro_func, *args, **kwargs):
 async def lifespan(app: FastAPI):
     """Lifespan context manager for startup and shutdown events."""
     validate_live_startup_security()
-    from backend.services.trading_mode import TradingMode, get_trading_mode, paper_starting_balance
+    from backend.services.trading_mode import (
+        TradingMode,
+        get_trading_mode,
+        paper_leverage_for_broker,
+        paper_starting_balance,
+    )
     resolved_mode = get_trading_mode()
     mode = "live" if resolved_mode == TradingMode.LIVE else "paper"
     paper_trading = mode == "paper"
@@ -147,7 +152,7 @@ async def lifespan(app: FastAPI):
         init_kwargs = {
             "broker": get_active_broker_name(),
             "mode": mode,
-            "leverage": 1.0,
+            "leverage": paper_leverage_for_broker(get_active_broker_name()),
         }
         if paper_trading:
             init_kwargs["paper_balance"] = paper_starting_balance()
