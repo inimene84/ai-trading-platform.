@@ -138,6 +138,39 @@ def test_paper_drawdown_uses_cash_not_inflated_total(db_session, monkeypatch):
     enforce_risk_limits(db_session, cfg, [], current)
 
 
+def test_inflated_paper_snapshots_do_not_trip_drawdown_in_live_mode(db_session, monkeypatch):
+    """Same $198k/$133k rows must not halt after TRADING_MODE is flipped live."""
+    monkeypatch.setenv("TRADING_MODE", "live")
+    monkeypatch.setenv("PAPER_TRADING", "false")
+    monkeypatch.setenv("DRY_RUN_ALL", "false")
+    cfg = RiskConfig(
+        max_portfolio_drawdown_pct=20.0,
+        max_daily_loss_pct=99.0,
+        max_positions=20,
+        max_open_positions=20,
+        max_directional_exposure_usdt=0,
+        equity_sizing_enabled=False,
+    )
+    now = datetime.now(timezone.utc)
+    db_session.add(
+        PortfolioSnapshot(
+            total_value=198465.54,
+            cash=100000.0,
+            positions_value=98474.48,
+            timestamp=now - timedelta(hours=3),
+        )
+    )
+    current = PortfolioSnapshot(
+        total_value=132960.60,
+        cash=100000.0,
+        positions_value=428080.51,
+        timestamp=now,
+    )
+    db_session.add(current)
+    db_session.commit()
+    enforce_risk_limits(db_session, cfg, [], current)
+
+
 def test_risk_guard_blocks_excessive_drawdown(db_session):
     cfg = RiskConfig(
         max_position_risk_pct=1.0,

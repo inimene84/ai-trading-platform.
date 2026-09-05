@@ -1,7 +1,6 @@
 import logging
 import os
 from datetime import datetime, timezone, timedelta
-from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from backend.services.risk_config import RiskConfig
@@ -9,17 +8,42 @@ from backend.services.trading_mode import TradingMode, get_trading_mode
 from backend.database.models import Trade, PortfolioSnapshot
 
 
-def _snapshot_risk_equity(snapshot: PortfolioSnapshot) -> float:
+def _snapshot_risk_equity(snapshot: PortfolioSnapshot | None) -> float:
     """Equity the drawdown / daily-loss gates should see.
 
-    In paper mode, ``total_value`` was historically cash + margin_used.
-    That is reserved buying power, not NAV, so peak/current must use cash.
+    Paper snapshots used to store ``total_value = cash + margin_used``.
+    That is reserved buying power, not NAV. Detect that shape from the
+    row itself so a later TRADING_MODE=live flip cannot revive a fake
+    $198k peak against a $133k current on a flat $100k book.
     """
-    if get_trading_mode() == TradingMode.PAPER:
-        cash = float(getattr(snapshot, "cash", 0.0) or 0.0)
-        if cash > 0:
-            return cash
-    return float(getattr(snapshot, "total_value", 0.0) or 0.0)
+    if snapshot is None:
+        return 0.0
+    cash = float(getattr(snapshot, "cash", 0.0) or 0.0)
+    total_value = float(getattr(snapshot, "total_value", 0.0) or 0.0)
+    positions_value = float(getattr(snapshot, "positions_value", 0.0) or 0.0)
+    inflated = total_value - cash
+    if cash > 0 and inflated > 0 and positions_value >= inflated * 0.9:
+        return cash
+    if get_trading_mode() == TradingMode.PAPER and cash > 0:
+        return cash
+    return total_value
+
+
+def _peak_risk_equity(db: Session, window_start: datetime, current_value: float) -> float:
+    """Max de-poisoned snapshot equity in the lookback window."""
+    rows = (
+        db.query(PortfolioSnapshot)
+        .filter(PortfolioSnapshot.timestamp >= window_start)
+        .all()
+    )
+    values = [_snapshot_risk_equity(row) for row in rows]
+    values = [v for v in values if v > 0]
+    if values:
+        return max(values)
+    fallback_rows = db.query(PortfolioSnapshot).all()
+    fallback = [_snapshot_risk_equity(row) for row in fallback_rows]
+    fallback = [v for v in fallback if v > 0]
+    return max(fallback) if fallback else current_value
 
 logger = logging.getLogger(__name__)
 
@@ -151,31 +175,7 @@ def enforce_risk_limits(
         #    exceed it", so we skip the query work and never raise.
         if cfg.max_portfolio_drawdown_pct < 100:
             window_start = datetime.now(timezone.utc) - timedelta(hours=PEAK_LOOKBACK_HOURS)
-            if get_trading_mode() == TradingMode.PAPER:
-                peak_value = (
-                    db.query(func.max(PortfolioSnapshot.cash))
-                    .filter(
-                        PortfolioSnapshot.timestamp >= window_start,
-                        PortfolioSnapshot.cash > 0,
-                    )
-                    .scalar()
-                )
-                if peak_value is None:
-                    peak_value = (
-                        db.query(func.max(PortfolioSnapshot.cash))
-                        .filter(PortfolioSnapshot.cash > 0)
-                        .scalar()
-                    ) or current_value
-            else:
-                peak_value = (
-                    db.query(func.max(PortfolioSnapshot.total_value))
-                    .filter(PortfolioSnapshot.timestamp >= window_start)
-                    .scalar()
-                )
-                # Fallback if the window is empty (fresh DB / sparse history): use the
-                # all-time peak so we still have *some* drawdown anchor rather than none.
-                if peak_value is None:
-                    peak_value = db.query(func.max(PortfolioSnapshot.total_value)).scalar() or current_value
+            peak_value = _peak_risk_equity(db, window_start, current_value)
             if current_value < peak_value:
                 drawdown_pct = ((peak_value - current_value) / peak_value) * 100
                 if drawdown_pct > cfg.max_portfolio_drawdown_pct:
