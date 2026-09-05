@@ -366,7 +366,10 @@ class CTraderProtocol:
                             )
 
                     deal_type = getattr(deal, "closePositionType", None)
-                    close_type_name = str(deal_type) if deal_type is not None else "CLOSED"
+                    if close_detail:
+                        close_type_name = str(deal_type) if deal_type is not None else "CLOSED"
+                    else:
+                        close_type_name = "OPEN"
                     if hasattr(ev, "order") and ev.order and getattr(ev.order, "orderType", None) == 4:
                         close_type_name = "SL_TP"
 
@@ -1551,8 +1554,13 @@ class CTraderService(BrokerService):
 
     def cancel_order(self, order_id: str, symbol: Optional[str] = None) -> Dict[str, Any]:
         """Cancel pending order by ID."""
-        if self._dry_run or not self.is_connected or self._protocol is None:
-            return {"success": True, "message": "Order cancelled in paper mode", "order_id": order_id}
+        if self._orders_live_blocked() or self._dry_run or not self.is_connected or self._protocol is None:
+            return {
+                "success": True,
+                "simulated": True,
+                "message": "Cancel skipped: TRADING_MODE is not live" if self._orders_live_blocked() else "Order cancelled in paper mode",
+                "order_id": order_id,
+            }
 
         try:
             from ctrader_open_api.messages import OpenApiMessages_pb2 as msgs
@@ -1605,13 +1613,25 @@ class CTraderService(BrokerService):
             (p for p in self._positions if str(p.get("position_id")) == str(position_id)),
             None,
         )
-        if stop_loss and matched:
+        if stop_loss:
+            if not matched:
+                return {
+                    "status": "error",
+                    "error": "cannot validate stop without cached position",
+                    "position_id": str(position_id),
+                    "stop_loss": stop_loss,
+                }
             entry = float(matched.get("entry_price") or 0)
             symbol = str(matched.get("symbol") or "")
             side = str(matched.get("side") or matched.get("direction") or "")
-            if entry > 0 and symbol and not self.is_plausible_stop(
-                symbol, entry, stop_loss, side
-            ):
+            if entry <= 0 or not symbol:
+                return {
+                    "status": "error",
+                    "error": "cannot validate stop without entry/symbol",
+                    "position_id": str(position_id),
+                    "stop_loss": stop_loss,
+                }
+            if not self.is_plausible_stop(symbol, entry, stop_loss, side):
                 logger.error(
                     "Refusing implausible cTrader amend SL %s for %s %s @ %s",
                     stop_loss, side, symbol, entry,
@@ -1703,7 +1723,26 @@ class CTraderService(BrokerService):
         if not symbol and matched is not None:
             symbol = matched.get("symbol")
 
-        if self._orders_live_blocked() or self._dry_run or not self.is_connected or self._protocol is None:
+        if self._orders_live_blocked():
+            # Paper + a live read socket must not rewrite the connected book
+            # or report closed (the dashboard would then persist a SQL close).
+            if self.is_connected and self._protocol is not None and not self._dry_run:
+                return {
+                    "status": "error",
+                    "error": "cTrader live closes are disabled unless TRADING_MODE=live",
+                    "position_id": position_id,
+                    "symbol": symbol,
+                }
+            self._positions = [p for p in self._positions if str(p.get("position_id")) != str(position_id)]
+            return {
+                "status": "closed",
+                "position_id": position_id,
+                "symbol": symbol,
+                "quantity": lots,
+                "broker": "ctrader:paper",
+            }
+
+        if self._dry_run or not self.is_connected or self._protocol is None:
             self._positions = [p for p in self._positions if str(p.get("position_id")) != str(position_id)]
             return {
                 "status": "closed",

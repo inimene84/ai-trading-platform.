@@ -662,6 +662,7 @@ class BinanceFuturesService:
             return {'status': 'skipped', 'reason': 'no open position'}
 
         live_entry = None
+        implausible_db_stop = False
         try:
             for p in self.get_positions():
                 if p.get("symbol") == futures_sym and float(p.get("quantity") or 0) > 0:
@@ -676,6 +677,7 @@ class BinanceFuturesService:
                     f"  [PROTECT-RESTORE] {futures_sym} refusing implausible DB stop "
                     f"{stop_loss} vs entry {live_entry} ({deviation:.1%})"
                 )
+                implausible_db_stop = True
                 stop_loss = None
 
         try:
@@ -688,6 +690,15 @@ class BinanceFuturesService:
 
         if has_sl and has_tp:
             return {'status': 'ok', 'symbol': futures_sym}
+        if implausible_db_stop and not has_sl:
+            return {
+                'status': 'error',
+                'message': (
+                    f'implausible DB stop vs entry {live_entry}; '
+                    'exchange has no stop'
+                ),
+                'symbol': futures_sym,
+            }
 
         client = self._get_client()
         sl_side = 'SELL' if direction.upper() == 'BUY' else 'BUY'

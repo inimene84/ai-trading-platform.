@@ -176,20 +176,21 @@ class EmergencyExitManager:
                                 '-2022' in str(res.message) or 'already' in str(res.message).lower()
                             )
                         ):
-                            remaining = live_qty.get(trade.symbol)
-                            if remaining is None:
-                                try:
-                                    remaining = 0.0
-                                    for bp in broker.get_positions():
-                                        if bp.get("symbol") == trade.symbol:
-                                            remaining = abs(float(bp.get("quantity") or 0))
-                                            break
-                                except Exception as verify_err:
-                                    logger.error(
-                                        f"  [EMERGENCY EXIT] {trade.symbol} already_flat "
-                                        f"unverified ({verify_err}); leaving DB open"
-                                    )
-                                    continue
+                            # Re-fetch after the close. The pre-loop live_qty
+                            # map is stale (it still has the size that triggered
+                            # the exit) and would permanently leave the row open.
+                            try:
+                                remaining = 0.0
+                                for bp in broker.get_positions():
+                                    if bp.get("symbol") == trade.symbol:
+                                        remaining = abs(float(bp.get("quantity") or 0))
+                                        break
+                            except Exception as verify_err:
+                                logger.error(
+                                    f"  [EMERGENCY EXIT] {trade.symbol} already_flat "
+                                    f"unverified ({verify_err}); leaving DB open"
+                                )
+                                continue
                             if remaining and remaining > 0:
                                 logger.error(
                                     f"  [EMERGENCY EXIT] {trade.symbol} claimed flat but "

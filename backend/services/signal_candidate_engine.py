@@ -954,15 +954,16 @@ class SignalCandidateEngine:
                     qty = min(float(qty), max_lots)
             side = cand["direction"].upper()
 
-            if cand["broker"] == "ctrader" and live_ctrader_orders_allowed():
-                connected = await asyncio.to_thread(ctrader_service.ensure_connected)
-                if not connected and ctrader_service.has_credentials():
-                    return {
-                        "success": False,
-                        "error": "cTrader is not connected; refused to simulate a live forex fill.",
-                        "candidate_id": candidate_id,
-                        "symbol": cand["symbol"],
-                    }
+            if cand["broker"] == "ctrader":
+                if live_ctrader_orders_allowed():
+                    connected = await asyncio.to_thread(ctrader_service.ensure_connected)
+                    if not connected and ctrader_service.has_credentials():
+                        return {
+                            "success": False,
+                            "error": "cTrader is not connected; refused to simulate a live forex fill.",
+                            "candidate_id": candidate_id,
+                            "symbol": cand["symbol"],
+                        }
                 order_res = ctrader_service.place_order(
                     symbol=cand["symbol"],
                     direction=side,
@@ -974,7 +975,10 @@ class SignalCandidateEngine:
                 status = (order_res or {}).get("status", "")
                 err_text = str((order_res or {}).get("error") or "")
                 success = status in ("ok", "filled", "sent")
-                if status == "simulated" and not ctrader_service.has_credentials():
+                if status == "simulated" and (
+                    not live_ctrader_orders_allowed()
+                    or not ctrader_service.has_credentials()
+                ):
                     success = True
                 order_id = order_res.get("order_id") if order_res else None
                 msg = f"cTrader order {order_id or 'pending'} placed ({status or 'unknown'})"
