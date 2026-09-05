@@ -78,6 +78,11 @@ services:
       INFLUXDB_TOKEN: ${INFLUXDB_TOKEN}
       INFLUXDB_ORG: ${INFLUXDB_ORG:-hedge-fund}
       INFLUXDB_BUCKET: ${INFLUXDB_BUCKET:-trading-system}
+      # Kronos timing-gate sidecar (runs alongside backend on the same stack)
+      KRONOS_SIDECAR_URL: ${KRONOS_SIDECAR_URL:-http://kronos-infer:8001}
+      TIMING_GATE_SHADOW: ${TIMING_GATE_SHADOW:-true}
+      ENABLE_VISION_TIMING: ${ENABLE_VISION_TIMING:-false}
+      KRONOS_ALLOW_LOCAL_STUB: ${KRONOS_ALLOW_LOCAL_STUB:-false}
     command: ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000"]
     healthcheck:
       test:
@@ -256,6 +261,37 @@ services:
       - trading-net
     depends_on:
       - backend
+  kronos-infer:
+    build:
+      context: ./kronos-infer
+      dockerfile: Dockerfile
+    container_name: ai-trading-kronos
+    restart: unless-stopped
+    # Internal only — backend reaches it via Docker network on :8001
+    environment:
+      - KRONOS_MODEL=NeoQuasar/Kronos-mini
+      - KRONOS_TOKENIZER=NeoQuasar/Kronos-Tokenizer-2k
+      - KRONOS_ALLOW_ANALYTICAL_FALLBACK=${KRONOS_ALLOW_ANALYTICAL_FALLBACK:-false}
+    volumes:
+      - kronos-model-cache:/root/.cache/huggingface
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 4G
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+    networks:
+      - trading-net
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: 3
 networks:
   trading-net:
     external: true
@@ -263,6 +299,7 @@ volumes:
   app-data:
   app-logs:
   grafana-storage:
+  kronos-model-cache:
   influxdb-2-ksyg_influxdb2-data:
     external: true
   influxdb-2-ksyg_influxdb2-config:

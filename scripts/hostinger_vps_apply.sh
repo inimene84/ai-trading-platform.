@@ -145,7 +145,7 @@ docker network create trading-net 2>/dev/null || true
 echo ""
 echo "=== 5. Rebuild & start full stack ==="
 docker compose -f "$COMPOSE_FILE" up -d --build \
-  backend litellm nginx influxdb grafana qdrant mcp-server
+  backend litellm nginx influxdb grafana qdrant mcp-server kronos-infer
 
 echo ""
 echo "=== 5b. InfluxDB buckets ==="
