@@ -8,8 +8,8 @@ from flask import Flask, request, jsonify, Response
 
 app = Flask(__name__)
 
-KIE_KEY = os.environ.get('KIE_API_KEY', '7c94cdbf5d6d3d421190af998bd854aa').replace('Bearer ', '').strip()
-OMNI_KEY = os.environ.get('OMNIROUTE_API_KEY', 'sk-7f0eac8a1e1d7486-38fcb7-fdb40445').replace('Bearer ', '').strip()
+KIE_KEY = os.environ.get('KIE_API_KEY', '${KIE_API_KEY}').replace('Bearer ', '').strip()
+OMNI_KEY = os.environ.get('OMNIROUTE_API_KEY', '').replace('Bearer ', '').strip()
 OMNI_URL = 'https://omni.allikas.online/v1/chat/completions'
 PORT = int(os.environ.get('KIEAI_PROXY_PORT', 11434))
 

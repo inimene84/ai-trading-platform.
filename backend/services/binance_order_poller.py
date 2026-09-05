@@ -17,13 +17,12 @@ _task = None
 
 
 async def start_order_poller():
-    """Start the background order polling loop (idempotent)."""
+    """Supervisor entry: run the order poll loop until cancelled."""
     global _task
-    if _task and not _task.done():
-        return
-    _task = asyncio.create_task(_poll_loop())
+    _task = asyncio.current_task()
     interval = int(os.getenv("BINANCE_ORDER_POLL_INTERVAL", "60"))
     logger.info(f"Binance order poller started (interval={interval}s)")
+    await _poll_loop()
 
 
 async def stop_order_poller():
@@ -42,9 +41,9 @@ async def stop_order_poller():
 async def _poll_loop():
     """Main polling loop - runs until process exits."""
     try:
-        from backend.services.binance_futures_service import BinanceFuturesService
-        svc = BinanceFuturesService()
-        logger.info("Order poller: BinanceFuturesService initialized")
+        from backend.services.binance_futures_service import binance_futures_broker
+        svc = binance_futures_broker
+        logger.info("Order poller: using binance_futures_broker singleton")
     except Exception as e:
         logger.error(f"Order poller: failed to init BinanceFuturesService: {e}")
         return

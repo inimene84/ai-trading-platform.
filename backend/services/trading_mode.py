@@ -39,18 +39,21 @@ def paper_starting_balance() -> float:
     return value if value > 0 else _DEFAULT_PAPER_BALANCE
 
 
-def live_binance_orders_allowed() -> bool:
-    """Whether BinanceFuturesService may hit the live/testnet private API.
+def live_exchange_orders_allowed() -> bool:
+    """Whether any exchange adapter may send live orders.
 
-    Explicit TRADING_MODE=paper|backtest always refuses exchange orders.
-    TRADING_MODE=live allows them (python-binance testnet=True still depends
-    on BINANCE_TESTNET). When TRADING_MODE is unset, do not refuse at this
-    layer — unit tests construct the client without env, and UnifiedTrading
-    already routes PAPER_TRADING/DRY_RUN_ALL to the local fill engine.
+    Single source of truth: only TRADING_MODE=live (or the legacy
+    PAPER_TRADING/DRY_RUN_ALL fallback resolving to live) allows them.
+    Unset TRADING_MODE with default PAPER_TRADING=true refuses them.
     """
-    raw = os.getenv("TRADING_MODE", "").lower()
-    if raw in {TradingMode.PAPER.value, TradingMode.BACKTEST.value}:
-        return False
-    if raw == TradingMode.LIVE.value:
-        return True
-    return True
+    return get_trading_mode() == TradingMode.LIVE
+
+
+def live_binance_orders_allowed() -> bool:
+    """Whether BinanceFuturesService may hit the live/testnet private API."""
+    return live_exchange_orders_allowed()
+
+
+def live_ctrader_orders_allowed() -> bool:
+    """Whether CTraderService may send ProtoOANewOrder / close / amend."""
+    return live_exchange_orders_allowed()

@@ -158,7 +158,7 @@ def test_live_partial_tp_one_reduce_only_from_exchange_qty():
     broker = MagicMock()
     broker._to_futures_symbol.return_value = "ETHUSDT"
     broker._live_position_qty.side_effect = [2.0, 1.0]  # before close, after fill
-    broker._round_qty.side_effect = lambda sym, qty: round(qty, 3)
+    broker._round_qty.side_effect = lambda sym, qty, **kwargs: round(qty, 3)
 
     fill = MagicMock()
     fill.success = True

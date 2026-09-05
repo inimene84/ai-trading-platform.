@@ -19,6 +19,7 @@ from backend.services.unified_trading import UnifiedTrading, UnifiedOrder, Order
 from backend.services.binance_futures_service import binance_futures_broker
 from backend.services.binance_market_data import binance_market_data
 from backend.services.multi_asset_bars import classify_symbol, tf_to_binance_interval
+from backend.services.trading_mode import live_ctrader_orders_allowed
 
 logger = logging.getLogger(__name__)
 
@@ -498,22 +499,16 @@ class SignalCandidateEngine:
         return None
 
     def _resolve_equity(self, broker: str) -> float:
-        """Live account equity for risk sizing. $10k is a logged fallback only."""
-        if broker == "ctrader" and ("_account_equity" in self.__dict__ or getattr(getattr(self, "_account_equity", None), "_mock_return_value", None) is not None):
+        """Live account equity for risk sizing. Conservative fallback, never $10k on a live book."""
+        if broker == "ctrader":
             return float(self._account_equity())
         cached = self._equity_cache.get(broker)
         if cached is not None:
             return cached
-        fallback = float(
-            self.timing_config.get("account_equity_override", EQUITY_FALLBACK_USD)
-            or EQUITY_FALLBACK_USD
-        )
+        fallback = float(os.getenv("BINANCE_FALLBACK_EQUITY", "150"))
         equity = 0.0
         try:
-            if broker == "ctrader":
-                bal = ctrader_service.get_balance() or {}
-            else:
-                bal = binance_futures_broker.get_balance() or {}
+            bal = binance_futures_broker.get_balance() or {}
             equity = float(bal.get("equity") or bal.get("balance") or 0.0)
         except Exception as err:
             logger.warning(
@@ -868,12 +863,9 @@ class SignalCandidateEngine:
         sym = symbol.upper()
         try:
             if broker == "binance_futures":
-                from backend.services.binance_futures_service import BinanceFuturesService
-                bfs = BinanceFuturesService()
-                ticker = await asyncio.to_thread(
-                    bfs._get_client().futures_symbol_ticker, symbol=sym
-                )
-                return float(ticker.get("price", 0) or 0)
+                tick = await binance_market_data.get_ticker_24h(sym)
+                if tick and tick.get("lastPrice"):
+                    return float(tick["lastPrice"])
             tick = await binance_market_data.get_ticker_24h(sym)
             if tick and tick.get("lastPrice"):
                 return float(tick["lastPrice"])
@@ -887,6 +879,10 @@ class SignalCandidateEngine:
         cand = self.candidates.get(candidate_id)
         if not cand:
             return {"success": False, "error": f"Candidate {candidate_id} not found."}
+
+        from backend.services.sentry_state import is_trading_allowed
+        if not is_trading_allowed():
+            return {"success": False, "error": "Trading halted by sentry."}
 
         now_ts = int(time.time())
         if not force:
@@ -959,14 +955,15 @@ class SignalCandidateEngine:
             side = cand["direction"].upper()
 
             if cand["broker"] == "ctrader":
-                connected = await asyncio.to_thread(ctrader_service.ensure_connected)
-                if not connected and ctrader_service.has_credentials():
-                    return {
-                        "success": False,
-                        "error": "cTrader is not connected; refused to simulate a live forex fill.",
-                        "candidate_id": candidate_id,
-                        "symbol": cand["symbol"],
-                    }
+                if live_ctrader_orders_allowed():
+                    connected = await asyncio.to_thread(ctrader_service.ensure_connected)
+                    if not connected and ctrader_service.has_credentials():
+                        return {
+                            "success": False,
+                            "error": "cTrader is not connected; refused to simulate a live forex fill.",
+                            "candidate_id": candidate_id,
+                            "symbol": cand["symbol"],
+                        }
                 order_res = ctrader_service.place_order(
                     symbol=cand["symbol"],
                     direction=side,
@@ -978,7 +975,10 @@ class SignalCandidateEngine:
                 status = (order_res or {}).get("status", "")
                 err_text = str((order_res or {}).get("error") or "")
                 success = status in ("ok", "filled", "sent")
-                if status == "simulated" and not ctrader_service.has_credentials():
+                if status == "simulated" and (
+                    not live_ctrader_orders_allowed()
+                    or not ctrader_service.has_credentials()
+                ):
                     success = True
                 order_id = order_res.get("order_id") if order_res else None
                 msg = f"cTrader order {order_id or 'pending'} placed ({status or 'unknown'})"

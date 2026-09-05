@@ -144,6 +144,12 @@ class SentimentLoopService:
             f"symbols={len(self._symbols)}, use_llm={self._use_llm})"
         )
 
+    async def run(self) -> None:
+        """Supervisor entry: start and await the inner loop."""
+        await self.start()
+        if self._task is not None:
+            await self._task
+
     async def stop(self) -> None:
         self._running = False
         self._state = "stopped"

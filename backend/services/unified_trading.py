@@ -198,6 +198,60 @@ class PaperTradingEngine:
         logger.info(f"Paper portfolio created: {name} (id={pid}, balance={balance}, leverage={leverage}x)")
         return pid
 
+    def find_or_create_portfolio(self, name: str, balance: float, currency: str = "USD",
+                                 leverage: float = 1.0, margin_mode: str = "cross",
+                                 fee_rate: float = 0.001, exchange: str = "") -> str:
+        """Reuse an in-memory or persisted paper book so restarts do not reset PnL."""
+        with self._lock:
+            for pid, pf in self._portfolios.items():
+                meta = pf.get("_meta") or {}
+                if meta.get("name") == name:
+                    return pid
+        db = None
+        try:
+            db = _get_db()
+            from backend.database.models import PaperPortfolio as PP
+            row = (
+                db.query(PP)
+                .filter(PP.name == name)
+                .order_by(PP.id.desc())
+                .first()
+            )
+            if row:
+                pid = row.portfolio_id
+                with self._lock:
+                    if pid not in self._portfolios:
+                        pf = create_portfolio(
+                            initial_cash=float(row.cash or balance),
+                            margin_requirement=1.0 / max(float(row.leverage or leverage), 1e-9),
+                            tickers=[],
+                            portfolio_positions=None,
+                        )
+                        pf["_meta"] = {
+                            "id": pid, "name": row.name, "currency": row.currency or currency,
+                            "leverage": float(row.leverage or leverage),
+                            "margin_mode": row.margin_mode or margin_mode,
+                            "fee_rate": float(row.fee_rate or fee_rate),
+                            "exchange": row.broker or exchange,
+                            "initial_balance": float(row.initial_balance or balance),
+                            "created_at": _db_now(),
+                        }
+                        pf["orders"] = []
+                        pf["trades"] = []
+                        pf["cash"] = float(row.cash or balance)
+                        pf["margin_used"] = float(row.margin_used or 0.0)
+                        self._portfolios[pid] = pf
+                return pid
+        except Exception as e:
+            logger.warning(f"Paper portfolio lookup failed: {e}")
+        finally:
+            if db is not None:
+                db.close()
+        return self.create_portfolio(
+            name=name, balance=balance, currency=currency, leverage=leverage,
+            margin_mode=margin_mode, fee_rate=fee_rate, exchange=exchange,
+        )
+
     def get_portfolio(self, portfolio_id: str) -> dict:
         with self._lock:
             if portfolio_id not in self._portfolios:
@@ -265,9 +319,10 @@ class PaperTradingEngine:
                             )
                         ref = last_fills[-1]
                     required = net_new * ref / meta["leverage"]
-                    if required > pf["cash"]:
+                    available = float(pf["cash"]) - float(pf.get("margin_used") or 0.0)
+                    if required > available:
                         return UnifiedOrderResponse(False, oid,
-                            f"Insufficient margin: need {required:.2f}, have {pf['cash']:.2f}", "paper")
+                            f"Insufficient margin: need {required:.2f}, have {available:.2f}", "paper")
 
             rec = {
                 "id": oid, "portfolio_id": portfolio_id,
@@ -305,20 +360,11 @@ class PaperTradingEngine:
             # Auto-fill market orders
             if order.order_type == OrderType.MARKET:
                 fill_price = order.price
-                if fill_price <= 0 and order.reduce_only:
-                    # A safety-fallback close may not carry a quote. Use the
-                    # actual paper position basis rather than the old hardcoded
-                    # $1000 fill, which corrupted every non-$1000 asset.
-                    pos = pf["positions"].get(order.symbol, {})
-                    closing_side = "long" if order.side == OrderSide.SELL else "short"
-                    if pos.get(closing_side, 0) > 0:
-                        fill_price = float(
-                            pos.get(f"{closing_side}_cost_basis", 0) or 0
-                        )
                 if fill_price <= 0:
+                    # Never invent a fill at cost basis — that zeroes paper PnL.
                     rec["status"] = "rejected"
                     return UnifiedOrderResponse(
-                        False, oid, "Paper market order has no valid fill price",
+                        False, oid, "Paper market order requires an explicit fill price",
                         "paper",
                     )
                 self._fill_order_locked(pf, rec, fill_price)
@@ -431,9 +477,15 @@ class PaperTradingEngine:
                 pos[f"{position_side}_cost_basis"] = (old_cost + fill_price * qty) / total
             pos[position_side] = total
 
-        # 3. Update balance (deduct fee only on closing fills)
+        # 3. Update balance (deduct fee only on closing fills) and margin
         balance_change = pnl - (fee if had_opposite else 0)
         pf["cash"] += balance_change
+        leverage = max(float(meta.get("leverage") or 1.0), 1e-9)
+        used = 0.0
+        for p in pf.get("positions", {}).values():
+            used += (float(p.get("long") or 0) * float(p.get("long_cost_basis") or 0)) / leverage
+            used += (float(p.get("short") or 0) * float(p.get("short_cost_basis") or 0)) / leverage
+        pf["margin_used"] = used
 
         # 4. Update order
         new_filled = order["filled_qty"] + qty
@@ -607,15 +659,19 @@ class UnifiedTrading:
                      currency: str = "USD", leverage: float = 1.0,
                      session_id: Optional[str] = None) -> TradingSession:
         """Initialize a trading session (paper or live). Returns session."""
-        sid = session_id or f"{broker}_{mode}_{uuid.uuid4().hex[:6]}"
+        sid = session_id or f"{broker}_{mode}"
         with self._session_lock:
+            existing = self._sessions.get(sid)
+            if existing:
+                return existing
             session = TradingSession(broker=broker, mode=mode)
             if mode == "paper":
-                pid = self._paper.create_portfolio(
-                    name=f"{broker} Paper Trading ({sid})",
+                pid = self._paper.find_or_create_portfolio(
+                    name=f"{broker} Paper Trading",
                     balance=paper_balance,
                     currency=currency,
                     leverage=leverage,
+                    exchange=broker,
                 )
                 session.paper_portfolio_id = pid
             self._sessions[sid] = session
@@ -653,9 +709,10 @@ class UnifiedTrading:
             sess = self._sessions[sid]
             sess.mode = mode
             if mode == "paper" and not sess.paper_portfolio_id:
-                pid = self._paper.create_portfolio(
+                pid = self._paper.find_or_create_portfolio(
                     name=f"{sess.broker} Paper Trading",
                     balance=100_000.0,
+                    exchange=sess.broker,
                 )
                 sess.paper_portfolio_id = pid
             return sess
@@ -680,7 +737,7 @@ class UnifiedTrading:
                 f"Forcing {order.symbol} order into paper execution."
             )
             if not session.paper_portfolio_id:
-                pid = self._paper.create_portfolio(
+                pid = self._paper.find_or_create_portfolio(
                     name="Safety Fallback Paper Portfolio",
                     balance=100_000.0,
                 )

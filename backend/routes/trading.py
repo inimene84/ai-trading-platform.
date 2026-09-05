@@ -250,7 +250,7 @@ async def get_portfolio():
         non_ctrader_symbols = {
             t.symbol for t in open_trades if not _is_ctrader_trade(t)
         }
-        mark_prices = _fetch_mark_prices_for_symbols(non_ctrader_symbols)
+        mark_prices = await _fetch_mark_prices_for_symbols(non_ctrader_symbols)
 
         total_notional = 0.0
         total_unrealized_pnl = 0.0
@@ -262,7 +262,7 @@ async def get_portfolio():
 
             if is_ctrader:
                 pid = str(getattr(t, "broker_position_id", "") or "").strip()
-                if is_ctrader_connected or live_ctrader:
+                if live_ctrader:
                     if pid and pid not in live_by_pid:
                         continue
                     if not pid and sym not in live_by_symbol:
@@ -442,8 +442,6 @@ async def get_recent_signals():
 @router.get("/status")
 async def get_status():
     """Get system status with real configuration."""
-    load_dotenv(override=True)
-
     # Check which LLM providers are configured
     llm_providers = []
 
@@ -774,43 +772,56 @@ async def loop_status():
 
 # ── Positions ─────────────────────────────────────────────────────────────────
 
-def _fetch_mark_prices_for_symbols(symbols: set[str]) -> dict[str, float]:
-    """Mark prices for open positions — Binance when live, else yfinance."""
+async def _fetch_mark_prices_for_symbols(symbols: set[str]) -> dict[str, float]:
+    """Public mark prices for dashboard P&L — never constructs a new Binance client."""
     prices: dict[str, float] = {}
-    if os.getenv("ACTIVE_BROKER", "ctrader") == "binance_futures":
+    if not symbols:
+        return prices
+    from backend.services.binance_market_data import binance_market_data
+    from backend.services.trading_mode import TradingMode, get_trading_mode
+
+    crypto_syms = {s for s in symbols if str(s).upper().endswith(("USDT", "USDC"))}
+    other = symbols - crypto_syms
+
+    if get_trading_mode() == TradingMode.LIVE and os.getenv("ACTIVE_BROKER", "ctrader") == "binance_futures":
         try:
             from backend.services.binance_futures_service import binance_futures_broker
-            for p in binance_futures_broker.get_positions():
+            live = await asyncio.to_thread(binance_futures_broker.get_positions)
+            for p in live or []:
                 sym = p.get("symbol")
                 mark = float(p.get("mark_price") or 0)
                 if sym and mark > 0:
                     prices[sym] = mark
         except Exception:
             pass
-        missing = symbols - set(prices.keys())
-        if missing:
-            try:
-                from backend.services.binance_futures_service import BinanceFuturesService
-                bfs = BinanceFuturesService()
-                client = bfs._get_client()
-                for sym in missing:
-                    info = client.futures_mark_price(symbol=sym)
-                    mark = float(info.get("markPrice") or 0)
-                    if mark > 0:
-                        prices[sym] = mark
-            except Exception:
-                pass
-        return prices
 
-    import yfinance as yf
-    for sym in symbols:
+    missing = crypto_syms - set(prices.keys())
+    for sym in missing:
         try:
-            yf_sym = _to_yfinance_symbol(sym)
-            hist = yf.Ticker(yf_sym).history(period="5d")
-            if not hist.empty:
-                prices[sym] = float(hist["Close"].iloc[-1])
+            tick = await binance_market_data.get_ticker_24h(sym)
+            last = float((tick or {}).get("lastPrice") or 0)
+            if last > 0:
+                prices[sym] = last
         except Exception:
             pass
+
+    leftover = other - set(prices.keys())
+    if leftover:
+        import yfinance as yf
+
+        def _yf_closes() -> dict[str, float]:
+            out: dict[str, float] = {}
+            for sym in leftover:
+                try:
+                    yf_sym = _to_yfinance_symbol(sym)
+                    hist = yf.Ticker(yf_sym).history(period="5d")
+                    if not hist.empty:
+                        out[sym] = float(hist["Close"].iloc[-1])
+                except Exception:
+                    pass
+            return out
+
+        prices.update(await asyncio.to_thread(_yf_closes))
     return prices
 
 
@@ -848,7 +859,7 @@ async def get_positions():
         non_ctrader_symbols = {
             t.symbol for t in open_trades if not _is_ctrader_trade(t)
         }
-        mark_prices = _fetch_mark_prices_for_symbols(non_ctrader_symbols)
+        mark_prices = await _fetch_mark_prices_for_symbols(non_ctrader_symbols)
         if live_ctrader:
             try:
                 ctrader_broker.ensure_spot_quotes(
@@ -871,7 +882,10 @@ async def get_positions():
             if is_ctrader:
                 pid = str(getattr(t, "broker_position_id", "") or "").strip()
                 # If cTrader is connected or has live positions, skip ghost rows absent from live book
-                if is_ctrader_connected or live_ctrader:
+                # A non-empty live book is authoritative. An empty snapshot is
+                # ambiguous (rate-limit / reconnect) — keep showing the DB row
+                # instead of hiding it as a ghost after we refused a bulk close.
+                if live_ctrader:
                     if pid and pid not in live_by_pid:
                         continue
                     if not pid and sym not in live_by_symbol:
@@ -1261,6 +1275,11 @@ async def place_smart_order(req: SmartOrderRequest):
     from backend.services.binance_futures_service import binance_futures_broker
     from backend.services.ctrader_service import ctrader_broker
     from backend.services.broker_circuit_breaker import broker_circuit_breaker
+    from backend.services.sentry_state import is_trading_allowed
+    from backend.services.trading_mode import TradingMode, get_trading_mode, paper_starting_balance
+
+    if not is_trading_allowed():
+        raise HTTPException(status_code=403, detail="Trading is halted by sentry.")
 
     clean_sym = req.symbol.upper().replace("=X", "").replace("-", "").replace("/", "")
 
@@ -1283,7 +1302,40 @@ async def place_smart_order(req: SmartOrderRequest):
     # 3. Route to Target Broker
     db = SessionLocal()
     try:
-        if target_broker_name == "binance_futures":
+        if get_trading_mode() != TradingMode.LIVE:
+            ut = UnifiedTrading()
+            ut.init_session(
+                target_broker_name,
+                mode="paper",
+                paper_balance=paper_starting_balance(),
+                session_id=f"{target_broker_name}_paper",
+            )
+            px = float(req.price or 0)
+            if px <= 0:
+                from backend.services.binance_market_data import binance_market_data
+                tick = await binance_market_data.get_ticker_24h(clean_sym)
+                px = float((tick or {}).get("lastPrice") or 0)
+            side = OrderSide.BUY if req.direction == "BUY" else OrderSide.SELL
+            paper_resp = ut.place_order(
+                UnifiedOrder(
+                    symbol=clean_sym,
+                    side=side,
+                    order_type=OrderType.MARKET if req.order_type == "MARKET" else OrderType.LIMIT,
+                    quantity=req.quantity,
+                    price=px,
+                    stop_loss=float(req.stop_loss or 0),
+                    take_profit=float(req.take_profit or 0),
+                ),
+                session_id=f"{target_broker_name}_paper",
+            )
+            result = {
+                "status": "filled" if paper_resp.success else "error",
+                "order_id": paper_resp.order_id,
+                "price": paper_resp.filled_price or px,
+                "filled_price": paper_resp.filled_price or px,
+                "message": paper_resp.message,
+            }
+        elif target_broker_name == "binance_futures":
             result = binance_futures_broker.place_order(
                 symbol=clean_sym,
                 direction=req.direction,
@@ -1566,6 +1618,9 @@ async def ai_parse_trade(req: AIAgentTradeRequest):
     Parses an AI trading instruction, extracts trading parameters,
     and executes via the multi-broker Smart Order router.
     """
+    from backend.services.sentry_state import is_trading_allowed
+    if not is_trading_allowed():
+        raise HTTPException(status_code=403, detail="Trading is halted by sentry.")
     import re
     prompt = req.prompt.lower()
     direction: Literal["BUY", "SELL"] = "BUY" if any(w in prompt for w in ["buy", "long"]) else "SELL"
@@ -1582,8 +1637,8 @@ async def ai_parse_trade(req: AIAgentTradeRequest):
     elif "sol" in prompt:
         symbol = "SOLUSDT"
 
-    qty_match = re.search(r'(\d+(\.\d+)?)', prompt)
-    quantity = float(qty_match.group(1)) if qty_match else (0.1 if symbol == "EURUSD" else 0.01)
+    qty_match = re.search(r'(?:qty|quantity|lots?|size)\s*[:=]?\s*(\d+(\.\d+)?)', prompt)
+    quantity = float(qty_match.group(1)) if qty_match else (0.01 if symbol.endswith("USDT") else 0.01)
 
     smart_req = SmartOrderRequest(
         symbol=symbol,
@@ -2109,17 +2164,22 @@ async def session_status():
 @router.post("/paper/order")
 async def paper_place_order(request: dict):
     """Place a paper/simulated order and persist to Trade table."""
+    from backend.services.trading_mode import paper_starting_balance
     ut = UnifiedTrading()
+    ut.init_session(
+        "binance_futures",
+        mode="paper",
+        paper_balance=paper_starting_balance(),
+        session_id="paper_manual",
+    )
     sym = request.get("symbol", "").upper()
     side_str = request.get("side", "buy").lower()
     px = float(request.get("price", 0) or 0)
     if px <= 0:
-        # If no explicit price provided for market order, fetch current price
         try:
-            from backend.services.binance_futures_service import BinanceFuturesService
-            bfs = BinanceFuturesService()
-            ticker = await asyncio.to_thread(bfs._get_client().futures_symbol_ticker, symbol=sym)
-            px = float(ticker.get("price", 0) or 0)
+            from backend.services.binance_market_data import binance_market_data
+            tick = await binance_market_data.get_ticker_24h(sym)
+            px = float((tick or {}).get("lastPrice") or 0)
         except Exception:
             pass
 
@@ -2132,7 +2192,7 @@ async def paper_place_order(request: dict):
         stop_loss=float(request.get("stop_loss", 0) or 0),
         take_profit=float(request.get("take_profit", 0) or 0),
     )
-    resp = ut.place_order(order)
+    resp = ut.place_order(order, session_id="paper_manual")
     if resp.success:
         db = SessionLocal()
         try:

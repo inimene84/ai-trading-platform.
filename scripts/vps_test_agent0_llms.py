@@ -8,8 +8,8 @@ import requests
 import litellm
 import os
 
-kie_key = '7c94cdbf5d6d3d421190af998bd854aa'
-omni_key = 'sk-7f0eac8a1e1d7486-38fcb7-fdb40445'
+kie_key = '${KIE_API_KEY}'
+omni_key = os.environ.get('OMNIROUTE_API_KEY', '')
 
 def log(msg):
     print(msg, flush=True)

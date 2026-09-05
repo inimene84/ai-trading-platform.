@@ -15,13 +15,12 @@ _task = None
 
 
 async def start_wallet_poller():
-    """Start the background wallet polling loop (idempotent)."""
+    """Supervisor entry: run the wallet poll loop until cancelled."""
     global _task
-    if _task and not _task.done():
-        return
-    _task = asyncio.create_task(_poll_loop())
+    _task = asyncio.current_task()
     interval = int(os.getenv("BINANCE_WALLET_POLL_INTERVAL", "60"))
     logger.info(f"Binance wallet poller started (interval={interval}s)")
+    await _poll_loop()
 
 
 async def stop_wallet_poller():
@@ -45,9 +44,9 @@ async def _poll_loop():
 
     # Create a dedicated Binance service instance
     try:
-        from backend.services.binance_futures_service import BinanceFuturesService
-        svc = BinanceFuturesService()
-        logger.info("Wallet poller: BinanceFuturesService initialized")
+        from backend.services.binance_futures_service import binance_futures_broker
+        svc = binance_futures_broker
+        logger.info("Wallet poller: using binance_futures_broker singleton")
     except Exception as e:
         logger.error(f"Wallet poller: failed to init BinanceFuturesService: {e}")
         return

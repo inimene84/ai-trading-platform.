@@ -13,13 +13,14 @@ services:
       PYTHONUNBUFFERED: 1
       PYTHONPATH: /app
       OLLAMA_BASE_URL: http://litellm:4000
-      PAPER_TRADING: false
+      PAPER_TRADING: ${PAPER_TRADING:-true}
+      TRADING_MODE: ${TRADING_MODE:-paper}
       ACTIVE_BROKER: binance_futures
       BINANCE_API_KEY: ${BINANCE_API_KEY}
       BINANCE_SECRET_KEY: ${BINANCE_SECRET_KEY}
-      BINANCE_TESTNET: false
-      BINANCE_DRY_RUN: false
-      DRY_RUN_ALL: false
+      BINANCE_TESTNET: ${BINANCE_TESTNET:-false}
+      BINANCE_DRY_RUN: ${BINANCE_DRY_RUN:-true}
+      DRY_RUN_ALL: ${DRY_RUN_ALL:-true}
       GEMINI_API_KEY: ${GOOGLE_API_KEY}
       XAI_API_KEY: ${XAI_API_KEY}
       OPENAI_API_KEY: ${OPENAI_API_KEY}

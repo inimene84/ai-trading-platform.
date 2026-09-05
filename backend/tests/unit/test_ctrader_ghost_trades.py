@@ -2,7 +2,7 @@
 
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -231,17 +231,18 @@ async def test_dashboard_positions_filters_out_ghost_trades():
     with patch("backend.routes.trading.SessionLocal", return_value=db), patch(
         "backend.routes.trading.ctrader_broker", broker
     ), patch(
-        "backend.routes.trading._fetch_mark_prices_for_symbols", return_value={}
+        "backend.routes.trading._fetch_mark_prices_for_symbols",
+        new_callable=AsyncMock,
+        return_value={},
     ):
         result = await get_positions()
 
-    # The ghost trade should have been reconciled to closed and NOT returned in positions
-    assert result["count"] == 0
-    assert len(result["positions"]) == 0
-
-    # DB trade is now marked closed
+    # Empty live book + no close deal is ambiguous (rate-limit / reconnect).
+    # Do not mass-close; the row stays open until a deal confirms.
     row = db.query(Trade).filter(Trade.id == trade_id).one()
-    assert row.status == "closed"
+    assert row.status == "open"
+    assert result["count"] == 1
+    assert result["positions"][0]["symbol"] == "EURUSD"
 
 
 @pytest.mark.asyncio
@@ -294,7 +295,9 @@ async def test_reconcile_14_trades_down_to_9_live_positions():
     with patch("backend.routes.trading.SessionLocal", return_value=db), patch(
         "backend.routes.trading.ctrader_broker", broker
     ), patch(
-        "backend.routes.trading._fetch_mark_prices_for_symbols", return_value={}
+        "backend.routes.trading._fetch_mark_prices_for_symbols",
+        new_callable=AsyncMock,
+        return_value={},
     ):
         positions_res = await get_positions()
         portfolio_res = await get_portfolio()

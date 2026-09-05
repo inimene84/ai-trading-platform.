@@ -49,7 +49,10 @@ def _sentry_tokens() -> list[str]:
 def _validate_sentry_token(request: Request) -> None:
     tokens = _sentry_tokens()
     if not tokens:
-        return
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Sentry token is not configured; refusing unauthenticated halt/resume.",
+        )
 
     supplied = request.headers.get("x-sentry-token", "").strip()
     if not supplied:

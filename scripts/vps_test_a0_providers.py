@@ -27,7 +27,7 @@ async def test():
 
     print('--- Test 2: kieai-claude with claude-sonnet-4-6 via proxy ---', flush=True)
     try:
-        m2 = models.get_chat_model("openai", "claude-sonnet-4-6", api_base="http://kieai-proxy:11434/v1", api_key="7c94cdbf5d6d3d421190af998bd854aa")
+        m2 = models.get_chat_model("openai", "claude-sonnet-4-6", api_base="http://kieai-proxy:11434/v1", api_key=os.environ.get("KIE_API_KEY", ""))
         msg = [{"role": "user", "content": "Say hello in 3 words"}]
         resp2 = await m2.unified_call(msg)
         print("Response 2:", resp2, flush=True)

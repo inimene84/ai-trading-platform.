@@ -27,16 +27,18 @@ def _close_all_positions_sync() -> dict[str, Any]:
     from backend.database.connection import SessionLocal
     from backend.database.models import Trade
     from backend.services.binance_futures_service import binance_futures_broker
+    from backend.services.trading_mode import TradingMode, get_trading_mode
     from datetime import datetime, timezone
 
     broker_name = os.getenv("ACTIVE_BROKER", "ctrader")
     if broker_name != "binance_futures":
         return {"skipped": True, "reason": f"broker={broker_name}"}
 
-    paper = os.getenv("PAPER_TRADING", "false").lower() == "true"
+    if get_trading_mode() != TradingMode.LIVE:
+        return {"skipped": True, "reason": "not_live"}
     dry_run = os.getenv("BINANCE_DRY_RUN", "false").lower() == "true"
-    if paper or dry_run:
-        return {"skipped": True, "reason": "paper_or_dry_run"}
+    if dry_run:
+        return {"skipped": True, "reason": "dry_run"}
 
     db = SessionLocal()
     closed_trades = 0
@@ -113,14 +115,21 @@ def _close_all_positions_sync() -> dict[str, Any]:
                 side = pos['side']
                 if qty > 0:
                     try:
-                        binance_futures_broker.place_order(
+                        ores = binance_futures_broker.place_order(
                             symbol=symbol,
                             direction=side,
                             action='close',
                             quantity=qty,
                             comment='Sentry emergency close orphan'
-                        )
-                        closed_orphans += 1
+                        ) or {}
+                        status = str(ores.get("status") or "").lower()
+                        if status in CLOSE_SUCCESS_STATUSES:
+                            closed_orphans += 1
+                        else:
+                            errors.append(
+                                f"Orphan {symbol}: close {status or 'unknown'} "
+                                f"— {ores.get('message') or ores.get('reason') or 'no detail'}"
+                            )
                     except Exception as e:
                         errors.append(f"Orphan {symbol}: {e}")
         except Exception as e:
@@ -138,14 +147,17 @@ def _close_all_positions_sync() -> dict[str, Any]:
 
 def _cancel_all_open_orders_sync() -> dict[str, Any]:
     """Cancel every open order on Binance Futures (regular + algo)."""
+    from backend.services.trading_mode import TradingMode, get_trading_mode
+
     broker_name = os.getenv("ACTIVE_BROKER", "ctrader")
     if broker_name != "binance_futures":
         return {"skipped": True, "reason": f"broker={broker_name}"}
 
-    paper = os.getenv("PAPER_TRADING", "false").lower() == "true"
+    if get_trading_mode() != TradingMode.LIVE:
+        return {"skipped": True, "reason": "not_live"}
     dry_run = os.getenv("BINANCE_DRY_RUN", "false").lower() == "true"
-    if paper or dry_run:
-        return {"skipped": True, "reason": "paper_or_dry_run"}
+    if dry_run:
+        return {"skipped": True, "reason": "dry_run"}
 
     from backend.services.binance_futures_service import binance_futures_broker
 
@@ -175,6 +187,28 @@ def _cancel_all_open_orders_sync() -> dict[str, Any]:
         "symbols_cancelled": cancelled,
         "errors": errors,
         "mode": "non_protective_only",
+    }
+
+
+def trigger_emergency_halt_sync(*, reason: str, source: str, manual: bool = False) -> dict[str, Any]:
+    """Synchronous halt + flatten for callers already off the event loop.
+
+    Used by replace_stop_loss so a failed stop restore cannot fire-and-forget
+    the flatten under a starved loop.
+    """
+    state = halt_trading(reason=reason, halted_by=source, manual=manual)
+    close_result: dict[str, Any] = {}
+    cancel_result: dict[str, Any] = {}
+    try:
+        close_result = _close_all_positions_sync()
+        cancel_result = _cancel_all_open_orders_sync()
+    except Exception as exc:
+        logger.error("Emergency halt sync failed", error=str(exc))
+        cancel_result = {"error": str(exc)}
+    return {
+        "state": state,
+        "close": close_result,
+        "cancel": cancel_result,
     }
 
 

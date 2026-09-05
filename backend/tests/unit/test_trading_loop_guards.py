@@ -300,6 +300,7 @@ def _open_trade(symbol="BTCUSDT", direction="BUY", qty=0.1, entry=100.0,
     t.stop_loss = stop_loss
     t.take_profit = take_profit
     t.notes = ""
+    t.status = "open"
     t.id = trade_id
     return t
 
@@ -365,9 +366,8 @@ def test_check_sl_tp_short_take_profit_hit():
     assert trade.pnl == pytest.approx(1.1)
 
 
-def test_check_sl_tp_already_flat_marks_closed():
-    """When the close order fails with -2022 (already flat on exchange), the
-    DB trade is marked closed without error (exchange SL already fired)."""
+def test_check_sl_tp_failed_close_leaves_trade_open():
+    """A failed close (including unverified -2022) must not close the DB row."""
     loop = _loop()
     trade = _open_trade(direction="BUY", stop_loss=95.0)
     fake_res = SimpleNamespace(
@@ -376,10 +376,9 @@ def test_check_sl_tp_already_flat_marks_closed():
     )
     UT = _run_check_sl_tp(loop, trade, close_price=94.0, fake_res=fake_res)
 
-    # The close attempt still happens once, then DB is reconciled closed.
     UT.return_value.place_order.assert_called_once()
-    assert trade.status == "closed"
-    assert trade.closed_at is not None
+    assert trade.status == "open"
+    assert "SL/TP close FAILED" in (trade.notes or "")
 
 
 def test_check_sl_tp_no_hit_leaves_trade_open():

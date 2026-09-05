@@ -16,6 +16,7 @@ from typing import Optional, Dict, List, Any
 
 from backend.brokers.base import BrokerService
 from backend.services.ctrader_tokens import token_store
+from backend.services.trading_mode import live_ctrader_orders_allowed
 
 logger = logging.getLogger(__name__)
 
@@ -164,6 +165,22 @@ class CTraderProtocol:
                     account_live = bool(chosen_row.get("is_live"))
                     current_live = "live.ctraderapi.com" in str(self._creds.get("host") or "")
                     if account_live != current_live:
+                        live_confirm = os.getenv(
+                            "CTRADER_LIVE_CONFIRM", os.getenv("CTRADE_LIVE_CONFIRM", "")
+                        ).strip()
+                        if account_live and live_confirm != "I_UNDERSTAND":
+                            logger.error(
+                                "cTrader account %s is live but CTRADER_LIVE_CONFIRM is not set — staying on demo",
+                                chosen,
+                            )
+                            self._service._last_protocol_error = "LIVE_CONFIRM_REQUIRED"
+                            self._service._auth_event.set()
+                            if self.transport:
+                                try:
+                                    self.transport.loseConnection()
+                                except Exception:
+                                    pass
+                            return
                         correct = "live.ctraderapi.com" if account_live else "demo.ctraderapi.com"
                         logger.warning(
                             "cTrader account %s is_live=%s but host is %s — switching to %s",
@@ -349,7 +366,10 @@ class CTraderProtocol:
                             )
 
                     deal_type = getattr(deal, "closePositionType", None)
-                    close_type_name = str(deal_type) if deal_type is not None else "CLOSED"
+                    if close_detail:
+                        close_type_name = str(deal_type) if deal_type is not None else "CLOSED"
+                    else:
+                        close_type_name = "OPEN"
                     if hasattr(ev, "order") and ev.order and getattr(ev.order, "orderType", None) == 4:
                         close_type_name = "SL_TP"
 
@@ -788,6 +808,29 @@ class CTraderService(BrokerService):
         return max(pip * cls.MAX_FX_STOP_PIPS, entry_abs * 0.012)
 
     @classmethod
+    def is_plausible_stop(
+        cls, symbol: str, entry: float, stop: float, direction: str = "",
+    ) -> bool:
+        """False when a DB stop is on the wrong side or impossibly far from entry.
+
+        CADJPY SELL @ 112.9 with SL 95.9 is ~1700 pips — a live 30-pip stop
+        must not be overwritten by that row.
+        """
+        try:
+            entry_f = float(entry)
+            stop_f = float(stop)
+        except (TypeError, ValueError):
+            return False
+        if entry_f <= 0 or stop_f <= 0:
+            return False
+        side = (direction or "").upper()
+        if side in ("BUY", "LONG") and stop_f >= entry_f:
+            return False
+        if side in ("SELL", "SHORT") and stop_f <= entry_f:
+            return False
+        return abs(stop_f - entry_f) <= cls.max_protective_distance(symbol, entry_f) * 1.05
+
+    @classmethod
     def min_protective_distance(cls, symbol: str, entry: float) -> float:
         """Closest a stop may sit and still be accepted by the broker.
 
@@ -933,6 +976,10 @@ class CTraderService(BrokerService):
     def dry_run(self) -> bool:
         return self._dry_run
 
+    def _orders_live_blocked(self) -> bool:
+        """True when TRADING_MODE is not live — reads stay up, orders must not."""
+        return not live_ctrader_orders_allowed()
+
     def has_credentials(self) -> bool:
         """True when OAuth tokens or env vars are present for a live session."""
         tokens = token_store.get_tokens()
@@ -1007,12 +1054,21 @@ class CTraderService(BrokerService):
             logger.warning("cTrader credentials missing. Operating in paper/dry-run mode.")
             return False
 
-        # Host security gate: paper mode defaults to demo host
+        # Host security gate: paper mode defaults to demo host.
+        # TRADING_MODE=paper must never select live.ctraderapi.com even when
+        # CTRADER_PAPER_MODE=false and CTRADER_LIVE_CONFIRM is set.
         paper_mode = (
             os.getenv("CTRADER_PAPER_MODE", os.getenv("CTRADE_PAPER_MODE", "true")).lower() == "true"
         )
         live_confirm = os.getenv("CTRADER_LIVE_CONFIRM", os.getenv("CTRADE_LIVE_CONFIRM", "")).strip()
-        is_live = (not paper_mode) and (live_confirm == "I_UNDERSTAND")
+        is_live = (
+            (not paper_mode)
+            and (live_confirm == "I_UNDERSTAND")
+            and live_ctrader_orders_allowed()
+        )
+        if self._host_override == "live.ctraderapi.com" and not is_live:
+            logger.error("Ignoring cTrader live host override without live confirmation")
+            self._host_override = None
         host = self._host_override or ("live.ctraderapi.com" if is_live else "demo.ctraderapi.com")
         port = 5035
         if self._host_override:
@@ -1391,8 +1447,8 @@ class CTraderService(BrokerService):
                 direction=side,
             )
 
-        # Simulated fallback in dry-run
-        if self._dry_run or not self.is_connected or self._protocol is None:
+        # Simulated fallback in dry-run or when TRADING_MODE is not live
+        if self._orders_live_blocked() or self._dry_run or not self.is_connected or self._protocol is None:
             logger.info(f"[PAPER] cTrader: {side} {ct_symbol} lots={lots:.2f}")
             return {
                 "status": "simulated",
@@ -1498,8 +1554,13 @@ class CTraderService(BrokerService):
 
     def cancel_order(self, order_id: str, symbol: Optional[str] = None) -> Dict[str, Any]:
         """Cancel pending order by ID."""
-        if self._dry_run or not self.is_connected or self._protocol is None:
-            return {"success": True, "message": "Order cancelled in paper mode", "order_id": order_id}
+        if self._orders_live_blocked() or self._dry_run or not self.is_connected or self._protocol is None:
+            return {
+                "success": True,
+                "simulated": True,
+                "message": "Cancel skipped: TRADING_MODE is not live" if self._orders_live_blocked() else "Order cancelled in paper mode",
+                "order_id": order_id,
+            }
 
         try:
             from ctrader_open_api.messages import OpenApiMessages_pb2 as msgs
@@ -1541,13 +1602,47 @@ class CTraderService(BrokerService):
         take_profit: Optional[float] = None,
     ) -> Dict[str, Any]:
         """Set absolute SL/TP on an open cTrader position (ProtoOAAmendPositionSLTPReq)."""
-        if self._dry_run or not self.is_connected or self._protocol is None:
+        if self._orders_live_blocked() or self._dry_run or not self.is_connected or self._protocol is None:
             return {
                 "status": "simulated",
                 "position_id": str(position_id),
                 "stop_loss": stop_loss,
                 "take_profit": take_profit,
             }
+        matched = next(
+            (p for p in self._positions if str(p.get("position_id")) == str(position_id)),
+            None,
+        )
+        if stop_loss:
+            if not matched:
+                return {
+                    "status": "error",
+                    "error": "cannot validate stop without cached position",
+                    "position_id": str(position_id),
+                    "stop_loss": stop_loss,
+                }
+            entry = float(matched.get("entry_price") or 0)
+            symbol = str(matched.get("symbol") or "")
+            side = str(matched.get("side") or matched.get("direction") or "")
+            if entry <= 0 or not symbol:
+                return {
+                    "status": "error",
+                    "error": "cannot validate stop without entry/symbol",
+                    "position_id": str(position_id),
+                    "stop_loss": stop_loss,
+                }
+            if not self.is_plausible_stop(symbol, entry, stop_loss, side):
+                logger.error(
+                    "Refusing implausible cTrader amend SL %s for %s %s @ %s",
+                    stop_loss, side, symbol, entry,
+                )
+                return {
+                    "status": "error",
+                    "error": "implausible stop versus live entry",
+                    "position_id": str(position_id),
+                    "stop_loss": stop_loss,
+                    "entry_price": entry,
+                }
         try:
             from ctrader_open_api.messages import OpenApiMessages_pb2 as msgs
             from twisted.internet import reactor
@@ -1627,6 +1722,25 @@ class CTraderService(BrokerService):
             lots = matched.get("quantity")
         if not symbol and matched is not None:
             symbol = matched.get("symbol")
+
+        if self._orders_live_blocked():
+            # Paper + a live read socket must not rewrite the connected book
+            # or report closed (the dashboard would then persist a SQL close).
+            if self.is_connected and self._protocol is not None and not self._dry_run:
+                return {
+                    "status": "error",
+                    "error": "cTrader live closes are disabled unless TRADING_MODE=live",
+                    "position_id": position_id,
+                    "symbol": symbol,
+                }
+            self._positions = [p for p in self._positions if str(p.get("position_id")) != str(position_id)]
+            return {
+                "status": "closed",
+                "position_id": position_id,
+                "symbol": symbol,
+                "quantity": lots,
+                "broker": "ctrader:paper",
+            }
 
         if self._dry_run or not self.is_connected or self._protocol is None:
             self._positions = [p for p in self._positions if str(p.get("position_id")) != str(position_id)]

@@ -217,7 +217,7 @@ async def lifespan(app: FastAPI):
 
     # 3. Trading Loop
     interval = int(os.getenv("TRADING_LOOP_INTERVAL_MIN", "15"))
-    task = asyncio.create_task(run_supervised_task("Trading Loop", trading_loop.start, interval_minutes=interval))
+    task = asyncio.create_task(run_supervised_task("Trading Loop", trading_loop.run, interval_minutes=interval))
     background_tasks.append(task)
     mode_str = mode.upper()
     logger.info(f"✓ Trading loop auto-started ({mode_str} MODE) under supervisor")
@@ -225,7 +225,7 @@ async def lifespan(app: FastAPI):
     # 4. Sentiment Loop
     if os.getenv("SENTIMENT_LOOP_ENABLED", "true").lower() == "true":
         from backend.services.sentiment_loop import sentiment_loop
-        task = asyncio.create_task(run_supervised_task("Sentiment Loop", sentiment_loop.start))
+        task = asyncio.create_task(run_supervised_task("Sentiment Loop", sentiment_loop.run))
         background_tasks.append(task)
         logger.info("✓ Native sentiment loop auto-started under supervisor")
     else:
@@ -252,7 +252,7 @@ async def lifespan(app: FastAPI):
     # 7. Market Alerts Loop
     if os.getenv("MARKET_ALERTS_ENABLED", "true").lower() == "true":
         from backend.services.market_alerts import market_alerts_loop
-        task = asyncio.create_task(run_supervised_task("Market Alerts Loop", market_alerts_loop.start))
+        task = asyncio.create_task(run_supervised_task("Market Alerts Loop", market_alerts_loop.run))
         background_tasks.append(task)
         logger.info("✓ Market alerts loop auto-started under supervisor")
     else:
@@ -308,7 +308,22 @@ app.add_middleware(
 
 @app.middleware("http")
 async def require_admin_token_for_sensitive_requests(request: Request, call_next):
-    if admin_auth_enabled() and is_sensitive_request(request):
+    path = request.url.path
+    trading_mutation = (
+        request.method.upper() not in {"GET", "HEAD", "OPTIONS"}
+        and path.startswith((
+            "/trading", "/api/trading",
+            "/sentry", "/api/sentry",
+            "/signals", "/api/signals",
+        ))
+    )
+    if trading_mutation and not admin_auth_enabled():
+        return JSONResponse(
+            status_code=401,
+            content={"detail": "Admin API token is not configured"},
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    if (admin_auth_enabled() or trading_mutation) and is_sensitive_request(request):
         try:
             validate_admin_request(request)
         except HTTPException as exc:

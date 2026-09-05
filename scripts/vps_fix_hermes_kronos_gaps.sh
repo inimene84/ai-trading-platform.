@@ -11,7 +11,7 @@ set -euo pipefail
 PROJECT_DIR="${PROJECT_DIR:-/root/ai-trading-platform-v3}"
 HERMES_CONTAINER="${HERMES_CONTAINER:-hermes-webui}"
 A0_CONTAINER="${A0_CONTAINER:-a0-instance}"
-PUBKEY_LINE="${PUBKEY_LINE:-ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMPdc81hu58Qrgt5ODe8OvMJmqrM11GB848GmSqj1d7t valgutom@gmail.com}"
+PUBKEY_LINE="${PUBKEY_LINE:-${CLOUD_AGENT_PUBKEY:-}}"
 
 echo "=== 1) Restore /root SSH permissions ==="
 chown root:root /root
@@ -21,7 +21,7 @@ chown -R root:root /root/.ssh
 chmod 700 /root/.ssh
 touch /root/.ssh/authorized_keys
 chmod 600 /root/.ssh/authorized_keys
-if ! grep -qxF "$PUBKEY_LINE" /root/.ssh/authorized_keys 2>/dev/null; then
+if [[ -n "$PUBKEY_LINE" ]] && ! grep -qxF "$PUBKEY_LINE" /root/.ssh/authorized_keys 2>/dev/null; then
   echo "$PUBKEY_LINE" >> /root/.ssh/authorized_keys
   echo "Appended cloud-agent pubkey to authorized_keys"
 fi

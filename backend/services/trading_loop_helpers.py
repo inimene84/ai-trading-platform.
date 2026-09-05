@@ -110,11 +110,13 @@ class EmergencyExitManager:
 
             logger.info(f"  [POSITION MGR] Pre-sync review: {len(pre_open)} open positions")
             
-            # Fetch live mark prices from broker
+            # Fetch live mark prices and qtys from broker
             live_prices = {}
+            live_qty = {}
             try:
                 for bp in broker.get_positions():
                     live_prices[bp['symbol']] = float(bp.get('mark_price') or bp.get('entry_price') or 0)
+                    live_qty[bp['symbol']] = abs(float(bp.get('quantity') or bp.get('positionAmt') or 0))
             except Exception as _bfs_err:
                 logger.error(f"  [STEP 0] Price fetch error: {_bfs_err}")
                 return 0
@@ -148,6 +150,7 @@ class EmergencyExitManager:
                             side=close_side,
                             order_type=OrderType.MARKET,
                             quantity=trade.quantity,
+                            price=float(live_px or 0),
                             reduce_only=True,
                         ))
                         if res.success and res.filled_price:
@@ -173,8 +176,27 @@ class EmergencyExitManager:
                                 '-2022' in str(res.message) or 'already' in str(res.message).lower()
                             )
                         ):
-                            # already_flat is mapped to success with no fill — do not
-                            # invent PnL from the last mark; record an unknown close.
+                            # Re-fetch after the close. The pre-loop live_qty
+                            # map is stale (it still has the size that triggered
+                            # the exit) and would permanently leave the row open.
+                            try:
+                                remaining = 0.0
+                                for bp in broker.get_positions():
+                                    if bp.get("symbol") == trade.symbol:
+                                        remaining = abs(float(bp.get("quantity") or 0))
+                                        break
+                            except Exception as verify_err:
+                                logger.error(
+                                    f"  [EMERGENCY EXIT] {trade.symbol} already_flat "
+                                    f"unverified ({verify_err}); leaving DB open"
+                                )
+                                continue
+                            if remaining and remaining > 0:
+                                logger.error(
+                                    f"  [EMERGENCY EXIT] {trade.symbol} claimed flat but "
+                                    f"live qty {remaining} remains; leaving DB open"
+                                )
+                                continue
                             logger.info(f"  [EMERGENCY EXIT] {trade.symbol} already flat on exchange — marking DB closed")
                             trade.status = 'closed'
                             trade.closed_at = datetime.now(timezone.utc)
@@ -573,6 +595,7 @@ class PartialTPManager:
                     side=close_side,
                     order_type=OrderType.MARKET,
                     quantity=close_qty,
+                    price=float(current_price or 0),
                     reduce_only=True,
                 ))
 
@@ -673,8 +696,8 @@ class PartialTPManager:
 
             raw_close = live_qty * close_pct
             if hasattr(broker, "_round_qty"):
-                close_qty = broker._round_qty(futures_sym, raw_close)
-                remainder = broker._round_qty(futures_sym, live_qty - close_qty)
+                close_qty = broker._round_qty(futures_sym, raw_close, bump_to_min=False)
+                remainder = broker._round_qty(futures_sym, live_qty - close_qty, bump_to_min=False)
             else:
                 close_qty = raw_close
                 remainder = live_qty - close_qty
@@ -692,6 +715,7 @@ class PartialTPManager:
                 side=close_side,
                 order_type=OrderType.MARKET,
                 quantity=close_qty,
+                price=float(current_price or 0),
                 reduce_only=True,
             ))
             if not res.success:

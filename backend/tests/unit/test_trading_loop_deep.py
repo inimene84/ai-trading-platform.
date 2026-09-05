@@ -119,7 +119,7 @@ def test_binance_qty_and_price_precision():
 
         # Tick size price rounding
         px_btc = service._round_price("BTCUSDT", 64123.4567)
-        assert px_btc == 64123.46  # 2 decimal places price precision
+        assert px_btc == 64123.5  # BTCUSDT tickSize is 0.1, not pricePrecision=2
 
 
 @pytest.mark.asyncio

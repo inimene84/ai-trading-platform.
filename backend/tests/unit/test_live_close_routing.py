@@ -204,7 +204,8 @@ def test_paper_market_entry_without_price_is_rejected_not_filled_at_1000():
     assert "requires an explicit price" in response.message
 
 
-def test_paper_price_less_reduce_close_uses_position_basis_not_1000():
+def test_paper_price_less_reduce_close_is_rejected_not_filled_at_basis():
+    """A price-less paper close used to fill at cost basis and record $0 PnL."""
     engine = PaperTradingEngine()
     portfolio_id = engine.create_portfolio("test", balance=10_000)
     opened = engine.place_order(portfolio_id, UnifiedOrder(
@@ -224,6 +225,6 @@ def test_paper_price_less_reduce_close_uses_position_basis_not_1000():
         price=0.0,
         reduce_only=True,
     ))
-    assert closed.success is True
-    assert closed.filled_price == 100.0
+    assert closed.success is False
+    assert "explicit fill price" in closed.message
 

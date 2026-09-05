@@ -8,8 +8,8 @@ from scripts.vps_ssh_common import ssh_cmd, scp_cmd
 DEPLOY_PY = """import os, sys, yaml, json
 from pathlib import Path
 
-KIE_KEY = '7c94cdbf5d6d3d421190af998bd854aa'
-OMNI_KEY = 'sk-7f0eac8a1e1d7486-38fcb7-fdb40445'
+KIE_KEY = '${KIE_API_KEY}'
+OMNI_KEY = os.environ.get('OMNIROUTE_API_KEY', '')
 
 print('=== 1. Updating /docker/kieai-proxy/docker-compose.yml ===')
 compose_path = Path('/docker/kieai-proxy/docker-compose.yml')
@@ -128,8 +128,8 @@ from helpers.extension import Extension
 from helpers.print_style import PrintStyle
 
 PLUGIN_NAME = "kie-ai"
-KIE_KEY = "7c94cdbf5d6d3d421190af998bd854aa"
-OMNI_KEY = "sk-7f0eac8a1e1d7486-38fcb7-fdb40445"
+KIE_KEY = "${KIE_API_KEY}"
+OMNI_KEY = os.environ.get("OMNIROUTE_API_KEY", "")
 
 TARGET_PROVIDERS = {
     "kieai-claude": {
@@ -264,8 +264,8 @@ python3 -c "
 import yaml
 from pathlib import Path
 
-KIE_KEY = '7c94cdbf5d6d3d421190af998bd854aa'
-OMNI_KEY = 'sk-7f0eac8a1e1d7486-38fcb7-fdb40445'
+KIE_KEY = '${KIE_API_KEY}'
+OMNI_KEY = os.environ.get('OMNIROUTE_API_KEY', '')
 
 TARGET_PROVIDERS = {
     'kieai-claude': {
@@ -337,7 +337,7 @@ This skill maintains and restores working Kie.ai and OmniRoute provider configur
 
 - **Kie.ai Proxy**: `http://kieai-proxy:11434/v1` (OpenAI format, litellm_provider: openai)
 - **Supported Models**: `claude-sonnet-4-6`, `claude-haiku-4-5`, `claude-opus-4-6`, `gpt-5.4-codex`, `gpt-5.1-codex`, `gpt-5-2`
-- **OmniRoute**: `https://omni.allikas.online/v1` (Key: `sk-7f0eac8a1e1d7486-38fcb7-fdb40445`)
+- **OmniRoute**: `https://omni.allikas.online/v1` (Key: `<OMNIROUTE_API_KEY>`)
 
 ## Run Provider Repair
 ```bash
@@ -364,7 +364,7 @@ k_text = '''# Agent Zero LLM Providers & Kie.ai / OmniRoute Setup
   - `claude-opus-4-6` (Opus)
   - `gpt-5.4-codex` (Codex Coding Specialist)
   - `gpt-5.1-codex` (Codex Coding)
-- **OmniRoute**: `https://omni.allikas.online/v1`, API Key: `sk-7f0eac8a1e1d7486-38fcb7-fdb40445`
+- **OmniRoute**: `https://omni.allikas.online/v1`, API Key: `<OMNIROUTE_API_KEY>`
 
 ## Key Rules
 1. Never put `§§secret(...)` in `extra_headers`. LiteLLM/httpx cannot encode Unicode in HTTP headers.
