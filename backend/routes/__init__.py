@@ -20,6 +20,8 @@ from backend.routes.sentry import router as sentry_router
 from backend.routes.signals import router as signals_router
 from backend.routes.assistant import router as assistant_router
 from backend.routes.agents import router as agents_router
+from backend.routes.sentiment import router as sentiment_router
+from backend.routes.calendar import router as calendar_router
 
 # Main API router
 api_router = APIRouter()
@@ -55,3 +57,8 @@ api_router.include_router(assistant_router, prefix="/api/backend", tags=["assist
 api_router.include_router(agents_router, tags=["agents"])
 api_router.include_router(agents_router, prefix="/api", tags=["agents-api"])
 api_router.include_router(agents_router, prefix="/api/backend", tags=["agents-backend"])
+api_router.include_router(sentiment_router, tags=["sentiment"])
+api_router.include_router(sentiment_router, prefix="/api", tags=["sentiment-api"])
+api_router.include_router(calendar_router, tags=["calendar"])
+api_router.include_router(calendar_router, prefix="/api", tags=["calendar-api"])
+

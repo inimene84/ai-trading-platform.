@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, Text, Boolean, JSON, ForeignKey, Float
+from sqlalchemy import Column, Integer, String, DateTime, Text, Boolean, JSON, ForeignKey, Float, UniqueConstraint, Index
 from sqlalchemy.sql import func
 from .connection import Base
 
@@ -318,3 +318,68 @@ class ShadowOutcome(Base):
     bars_elapsed = Column(Integer, nullable=False, default=0)
 
     scored_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+
+# ═══ Phase 1: Forex & Macro News Sentiment Models ═══
+
+class NewsArticle(Base):
+    """Raw news articles ingested from ForexNewsAPI, Finnhub, RSS, or cryptocurrency.cv."""
+    __tablename__ = "news_articles"
+
+    id = Column(Integer, primary_key=True, index=True)
+    source = Column(String(50), nullable=False, index=True)  # e.g. 'forexnewsapi', 'finnhub', 'cryptocurrency.cv'
+    external_id = Column(String(255), nullable=True, index=True)
+    title = Column(Text, nullable=False)
+    description = Column(Text, nullable=True)
+    url = Column(Text, nullable=True)
+    published_at = Column(DateTime(timezone=True), nullable=False, index=True)
+    fetched_at = Column(DateTime(timezone=True), server_default=func.now())
+    raw_payload = Column(JSON, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint('source', 'external_id', name='uq_news_articles_source_external_id'),
+    )
+
+
+class SentimentScore(Base):
+    """Sentiment score per currency pair or symbol derived from an article."""
+    __tablename__ = "sentiment_scores"
+
+    id = Column(Integer, primary_key=True, index=True)
+    article_id = Column(Integer, ForeignKey("news_articles.id", ondelete="CASCADE"), nullable=False, index=True)
+    pair = Column(String(20), nullable=False, index=True)  # e.g. 'EURUSD', 'GBPJPY', 'XAUUSD', 'BTCUSDT'
+    sentiment = Column(String(10), nullable=False)  # 'bullish', 'bearish', 'neutral'
+    score = Column(Float, nullable=False)  # -1.0 to +1.0
+    confidence = Column(Float, nullable=True, default=0.5)
+    model = Column(String(50), nullable=False, default="gemini-2.0-flash")
+    reasoning = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+    __table_args__ = (
+        Index('idx_sentiment_pair_created', 'pair', 'created_at'),
+    )
+
+
+# ═══ Phase 3: Economic Calendar Event Models ═══
+
+class CalendarEvent(Base):
+    """Macro and economic calendar events (NFP, FOMC, CPI, central bank rate decisions)."""
+    __tablename__ = "calendar_events"
+
+    id = Column(Integer, primary_key=True, index=True)
+    time_utc = Column(DateTime(timezone=True), nullable=False, index=True)
+    currency = Column(String(10), nullable=False, index=True)  # USD, EUR, GBP, JPY, AUD, CAD, CHF, NZD
+    impact = Column(String(10), nullable=False, index=True)    # HIGH, MEDIUM, LOW, NONE
+    title = Column(Text, nullable=False)
+    actual = Column(String(50), nullable=True)
+    forecast = Column(String(50), nullable=True)
+    previous = Column(String(50), nullable=True)
+    source = Column(String(50), nullable=False, default="forexfactory")
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        Index('idx_calendar_curr_time', 'currency', 'time_utc'),
+    )
+
+

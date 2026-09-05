@@ -11,6 +11,8 @@ Import these into n8n at **https://n8n1.thorinvest.org**.
 | `02_news_macro_scanner_workflow.json` | Every 1 min | `POST /api/signals/scan-news` | Macro calendar + news sentiment candidates |
 | `03_execution_scheduler_workflow.json` | Every 30 sec | `GET /api/signals/ready-for-execution` → `POST /api/signals/execute-candidate` | Execute timed candidates via smart router |
 | `04_forex_scanner_workflow.json` | Every 5 min | `POST /api/signals/scan-markets` | Forex/metals only (no crypto) |
+| `05_forex_sentiment_ingestion_workflow.json` | Every 15 min | `POST /api/sentiment/ingest` | Forex & Macro news ingestion with Gemini scoring |
+
 
 ## Where to find them
 

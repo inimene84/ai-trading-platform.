@@ -55,6 +55,29 @@ async function fetchData<T>(url: string): Promise<T> {
   return (await res.json()) as T;
 }
 
+export interface PairSentiment {
+  pair: string;
+  article_count: number;
+  avg_score: number;
+  recency_weighted_score: number;
+  signal: 'bullish' | 'bearish' | 'neutral';
+  confidence: number;
+  last_updated: string | null;
+}
+
+export interface SymbolBlackoutStatus {
+  symbol: string;
+  is_blackout: boolean;
+  reason: string;
+  active_event?: {
+    id: number;
+    title: string;
+    currency: string;
+    time_utc: string;
+    impact: string;
+  } | null;
+}
+
 export const newsDataService = {
   async getNewsFeed(): Promise<{ items: NewsItem[]; count: number; cached_at: string }> {
     return fetchData(`${BASE}/feed`);
@@ -71,4 +94,28 @@ export const newsDataService = {
   async getMarketSentiment(): Promise<MarketSentimentData> {
     return fetchData(`${BASE}/market-sentiment`);
   },
+
+  async getPairSentiment(pair: string, windowHours: number = 24): Promise<PairSentiment> {
+    const res = await fetchData<{ status: string; sentiment: PairSentiment }>(
+      `/api/sentiment/${pair.toUpperCase()}?window_hours=${windowHours}`
+    );
+    return res.sentiment;
+  },
+
+  async getAllPairSentiment(windowHours: number = 24): Promise<PairSentiment[]> {
+    const res = await fetchData<{ status: string; pairs: PairSentiment[] }>(
+      `/api/sentiment?window_hours=${windowHours}`
+    );
+    return res.pairs;
+  },
+
+  async checkBlackout(symbol: string): Promise<SymbolBlackoutStatus> {
+    return fetchData<SymbolBlackoutStatus>(`/api/calendar/check/${symbol.toUpperCase()}`);
+  },
+
+  async getMacroEvents(currency?: string, hoursAhead: number = 24): Promise<{ events: any[]; is_stale: boolean }> {
+    const q = currency ? `?currency=${encodeURIComponent(currency)}&hours_ahead=${hoursAhead}` : `?hours_ahead=${hoursAhead}`;
+    return fetchData<{ events: any[]; is_stale: boolean }>(`/api/calendar${q}`);
+  },
 };
+

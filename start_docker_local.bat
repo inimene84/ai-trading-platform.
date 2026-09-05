@@ -107,7 +107,7 @@ echo Access URLs:
 echo   - Web Dashboard:     http://localhost:8081
 echo   - Backend API Docs:  http://localhost:8001/docs
 echo   - InfluxDB Console:  http://localhost:8086
-echo   - MCP Server:        http://localhost:9100/mcp
+echo   - MCP Server:        http://localhost:9200/mcp
 echo.
 echo Useful Commands:
 echo   - View backend logs:   docker compose logs -f backend
