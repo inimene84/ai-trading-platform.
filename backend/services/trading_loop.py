@@ -261,6 +261,10 @@ class TradingLoopService:
         """
         if get_trading_mode() != TradingMode.LIVE:
             return "ok"
+        # A failed wallet fetch must not be treated as $0 equity (that used to
+        # permanently halt the loop on any Binance blip).
+        if balance.get("error"):
+            return "block_entries"
         if equity <= 0 and "equity" not in balance and "balance" not in balance:
             return "block_entries"
         if equity <= float(self.risk_config.kill_floor_usdt):
@@ -349,6 +353,21 @@ class TradingLoopService:
             f"symbols={self._symbols}, strategy={strategy}"
         )
         return {"message": "Trading loop started", "status": self.status}
+
+    async def run(
+        self,
+        interval_minutes: int = 15,
+        symbols: list[str] | None = None,
+        strategy: str = "combined",
+    ):
+        """Supervisor entry: start the loop and await it so crashes restart."""
+        await self.start(
+            interval_minutes=interval_minutes,
+            symbols=symbols,
+            strategy=strategy,
+        )
+        if self._task is not None:
+            await self._task
 
     def _reconstruct_cooldowns(self):
         """Repopulate SL cooldowns from recently-closed trades so a restart
@@ -790,6 +809,7 @@ class TradingLoopService:
                                 side=close_side,
                                 order_type=OrderType.MARKET,
                                 quantity=trade.quantity,
+                                price=float(curr_price or 0),
                                 reduce_only=True,
                             ))
                             if res.success:
@@ -1553,6 +1573,7 @@ class TradingLoopService:
                     side=close_side,
                     order_type=OrderType.MARKET,
                     quantity=trade.quantity,
+                    price=float(current_price or 0),
                     reduce_only=True
                 ))
 
@@ -1577,17 +1598,8 @@ class TradingLoopService:
                         f"  -> {symbol} position closed (SL/TP), PnL={pnl:+.2f}"
                     )
                 else:
-                    # already_flat = success (exchange SL already fired)
-                    if hasattr(res, 'message') and ('-2022' in str(res.message) or 'already' in str(res.message).lower()):
-                        logger.info(f"  -> {symbol} already flat on exchange — marking DB closed")
-                        trade.status = 'closed'
-                        trade.closed_at = datetime.now(timezone.utc)
-                        trade.notes = (trade.notes or '') + ' | SL/TP: already flat on exchange'
-                        if self._pyramid_mode:
-                            remove_closed_pyramid_layer(self._pyramid_layers, trade)
-                    else:
-                        logger.error(f"  -> Failed to close {symbol} via SL/TP: {res.message}")
-                        trade.notes = (trade.notes or "") + f" | SL/TP close FAILED: {res.message}"
+                    logger.error(f"  -> Failed to close {symbol} via SL/TP: {res.message}")
+                    trade.notes = (trade.notes or "") + f" | SL/TP close FAILED: {res.message}"
 
     def _is_market_open(self, symbol: str) -> bool:
         """Check if the market is open for the given symbol.

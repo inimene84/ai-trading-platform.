@@ -164,6 +164,22 @@ class CTraderProtocol:
                     account_live = bool(chosen_row.get("is_live"))
                     current_live = "live.ctraderapi.com" in str(self._creds.get("host") or "")
                     if account_live != current_live:
+                        live_confirm = os.getenv(
+                            "CTRADER_LIVE_CONFIRM", os.getenv("CTRADE_LIVE_CONFIRM", "")
+                        ).strip()
+                        if account_live and live_confirm != "I_UNDERSTAND":
+                            logger.error(
+                                "cTrader account %s is live but CTRADER_LIVE_CONFIRM is not set — staying on demo",
+                                chosen,
+                            )
+                            self._service._last_protocol_error = "LIVE_CONFIRM_REQUIRED"
+                            self._service._auth_event.set()
+                            if self.transport:
+                                try:
+                                    self.transport.loseConnection()
+                                except Exception:
+                                    pass
+                            return
                         correct = "live.ctraderapi.com" if account_live else "demo.ctraderapi.com"
                         logger.warning(
                             "cTrader account %s is_live=%s but host is %s — switching to %s",
@@ -1013,6 +1029,9 @@ class CTraderService(BrokerService):
         )
         live_confirm = os.getenv("CTRADER_LIVE_CONFIRM", os.getenv("CTRADE_LIVE_CONFIRM", "")).strip()
         is_live = (not paper_mode) and (live_confirm == "I_UNDERSTAND")
+        if self._host_override == "live.ctraderapi.com" and not is_live:
+            logger.error("Ignoring cTrader live host override without live confirmation")
+            self._host_override = None
         host = self._host_override or ("live.ctraderapi.com" if is_live else "demo.ctraderapi.com")
         port = 5035
         if self._host_override:

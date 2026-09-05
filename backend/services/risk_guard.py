@@ -155,7 +155,10 @@ def enforce_risk_limits(
             start_of_today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
             first_snapshot_today = (
                 db.query(PortfolioSnapshot)
-                .filter(PortfolioSnapshot.timestamp >= start_of_today)
+                .filter(
+                    PortfolioSnapshot.timestamp >= start_of_today,
+                    PortfolioSnapshot.total_value > 0,
+                )
                 .order_by(PortfolioSnapshot.timestamp.asc())
                 .first()
             )

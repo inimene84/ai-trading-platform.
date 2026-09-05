@@ -27,16 +27,18 @@ def _close_all_positions_sync() -> dict[str, Any]:
     from backend.database.connection import SessionLocal
     from backend.database.models import Trade
     from backend.services.binance_futures_service import binance_futures_broker
+    from backend.services.trading_mode import TradingMode, get_trading_mode
     from datetime import datetime, timezone
 
     broker_name = os.getenv("ACTIVE_BROKER", "ctrader")
     if broker_name != "binance_futures":
         return {"skipped": True, "reason": f"broker={broker_name}"}
 
-    paper = os.getenv("PAPER_TRADING", "false").lower() == "true"
+    if get_trading_mode() != TradingMode.LIVE:
+        return {"skipped": True, "reason": "not_live"}
     dry_run = os.getenv("BINANCE_DRY_RUN", "false").lower() == "true"
-    if paper or dry_run:
-        return {"skipped": True, "reason": "paper_or_dry_run"}
+    if dry_run:
+        return {"skipped": True, "reason": "dry_run"}
 
     db = SessionLocal()
     closed_trades = 0
@@ -138,14 +140,17 @@ def _close_all_positions_sync() -> dict[str, Any]:
 
 def _cancel_all_open_orders_sync() -> dict[str, Any]:
     """Cancel every open order on Binance Futures (regular + algo)."""
+    from backend.services.trading_mode import TradingMode, get_trading_mode
+
     broker_name = os.getenv("ACTIVE_BROKER", "ctrader")
     if broker_name != "binance_futures":
         return {"skipped": True, "reason": f"broker={broker_name}"}
 
-    paper = os.getenv("PAPER_TRADING", "false").lower() == "true"
+    if get_trading_mode() != TradingMode.LIVE:
+        return {"skipped": True, "reason": "not_live"}
     dry_run = os.getenv("BINANCE_DRY_RUN", "false").lower() == "true"
-    if paper or dry_run:
-        return {"skipped": True, "reason": "paper_or_dry_run"}
+    if dry_run:
+        return {"skipped": True, "reason": "dry_run"}
 
     from backend.services.binance_futures_service import binance_futures_broker
 
