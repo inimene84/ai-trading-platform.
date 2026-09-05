@@ -70,6 +70,23 @@ def test_should_evaluate_bar_fails_open_when_no_timestamp():
     assert loop._should_evaluate_bar("BTCUSDT", []) is True
 
 
+def test_entry_bar_interval_follows_loop_cadence():
+    loop = _loop()
+    loop._interval_minutes = 5
+    assert loop._entry_bar_interval() == "5m"
+    loop._interval_minutes = 15
+    assert loop._entry_bar_interval() == "15m"
+    loop._interval_minutes = 60
+    assert loop._entry_bar_interval() == "1h"
+
+
+def test_bar_interval_max_age_scales_with_timeframe(monkeypatch):
+    monkeypatch.delenv("WS_CANDLE_MAX_AGE_SEC", raising=False)
+    assert TradingLoopService._bar_interval_max_age_sec("5m") == 750.0
+    assert TradingLoopService._bar_interval_max_age_sec("15m") == 2250.0
+    assert TradingLoopService._bar_interval_max_age_sec("1h") == 9000.0
+
+
 def test_should_evaluate_bar_disabled_gate_always_true():
     loop = _loop(_fake_risk_config(eval_on_new_bar_only=False))
     bars = [{"date": "2026-08-28T00:00:00", "close": 100.0}]
