@@ -237,13 +237,12 @@ async def test_dashboard_positions_filters_out_ghost_trades():
     ):
         result = await get_positions()
 
-    # The ghost trade should have been reconciled to closed and NOT returned in positions
-    assert result["count"] == 0
-    assert len(result["positions"]) == 0
-
-    # DB trade is now marked closed
+    # Empty live book + no close deal is ambiguous (rate-limit / reconnect).
+    # Do not mass-close; the row stays open until a deal confirms.
     row = db.query(Trade).filter(Trade.id == trade_id).one()
-    assert row.status == "closed"
+    assert row.status == "open"
+    assert result["count"] == 1
+    assert result["positions"][0]["symbol"] == "EURUSD"
 
 
 @pytest.mark.asyncio

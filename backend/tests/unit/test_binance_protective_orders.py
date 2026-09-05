@@ -1,6 +1,6 @@
 """Protective-order safety: pyramid reuse, restore missing SL, full-qty emergency close."""
 import os
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 os.environ["MAKER_ENTRY_ENABLED"] = "false"
 
@@ -213,7 +213,7 @@ def test_replace_stop_emergency_closes_when_new_and_restore_both_fail():
              Exception("new rejected"),
              Exception("restore rejected"),
          ]) as create, \
-         patch("backend.services.sentry_emergency.emergency_halt", new_callable=AsyncMock):
+         patch("backend.services.sentry_emergency.trigger_emergency_halt_sync") as halt:
         result = broker.replace_stop_loss(
             "ETHUSDT", "BUY", 95.0, quantity=1.0,
         )
@@ -221,3 +221,4 @@ def test_replace_stop_emergency_closes_when_new_and_restore_both_fail():
     assert result["status"] == "critical"
     assert result["reason"] == "stop_replace_and_restore_failed_sentry_triggered"
     assert create.call_count == 2
+    halt.assert_called_once()

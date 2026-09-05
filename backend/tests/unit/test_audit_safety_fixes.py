@@ -10,6 +10,8 @@ from backend.services.trading_mode import (
     TradingMode,
     get_trading_mode,
     live_binance_orders_allowed,
+    live_ctrader_orders_allowed,
+    live_exchange_orders_allowed,
 )
 from backend.services.unified_trading import (
     OrderSide,
@@ -43,7 +45,9 @@ def test_unset_trading_mode_defaults_to_paper_and_blocks_live_orders(monkeypatch
     monkeypatch.setenv("PAPER_TRADING", "true")
     monkeypatch.setenv("DRY_RUN_ALL", "true")
     assert get_trading_mode() == TradingMode.PAPER
+    assert live_exchange_orders_allowed() is False
     assert live_binance_orders_allowed() is False
+    assert live_ctrader_orders_allowed() is False
 
 
 def test_kill_switch_blocks_entries_on_balance_error(monkeypatch):

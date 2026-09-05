@@ -8,15 +8,16 @@ def anyio_backend():
 
 
 @pytest.fixture
-def auth_headers():
-    """Admin token from env so POSTs pass when the VPS/container has auth enabled."""
+def auth_headers(monkeypatch):
+    """Admin token so trading/signal POSTs pass the fail-closed auth middleware."""
     key = (
         os.getenv("ADMIN_API_KEY")
         or os.getenv("API_AUTH_TOKEN")
         or os.getenv("BACKEND_API_KEY")
-        or ""
+        or "test-admin-key"
     ).strip()
-    return {"X-API-Key": key} if key else {}
+    monkeypatch.setenv("ADMIN_API_KEY", key)
+    return {"X-API-Key": key}
 
 
 @pytest.fixture(autouse=True)
