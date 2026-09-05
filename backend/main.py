@@ -217,7 +217,7 @@ async def lifespan(app: FastAPI):
 
     # 3. Trading Loop
     interval = int(os.getenv("TRADING_LOOP_INTERVAL_MIN", "15"))
-    task = asyncio.create_task(run_supervised_task("Trading Loop", trading_loop.start, interval_minutes=interval))
+    task = asyncio.create_task(run_supervised_task("Trading Loop", trading_loop.run, interval_minutes=interval))
     background_tasks.append(task)
     mode_str = mode.upper()
     logger.info(f"✓ Trading loop auto-started ({mode_str} MODE) under supervisor")
@@ -225,7 +225,7 @@ async def lifespan(app: FastAPI):
     # 4. Sentiment Loop
     if os.getenv("SENTIMENT_LOOP_ENABLED", "true").lower() == "true":
         from backend.services.sentiment_loop import sentiment_loop
-        task = asyncio.create_task(run_supervised_task("Sentiment Loop", sentiment_loop.start))
+        task = asyncio.create_task(run_supervised_task("Sentiment Loop", sentiment_loop.run))
         background_tasks.append(task)
         logger.info("✓ Native sentiment loop auto-started under supervisor")
     else:
@@ -252,7 +252,7 @@ async def lifespan(app: FastAPI):
     # 7. Market Alerts Loop
     if os.getenv("MARKET_ALERTS_ENABLED", "true").lower() == "true":
         from backend.services.market_alerts import market_alerts_loop
-        task = asyncio.create_task(run_supervised_task("Market Alerts Loop", market_alerts_loop.start))
+        task = asyncio.create_task(run_supervised_task("Market Alerts Loop", market_alerts_loop.run))
         background_tasks.append(task)
         logger.info("✓ Market alerts loop auto-started under supervisor")
     else:

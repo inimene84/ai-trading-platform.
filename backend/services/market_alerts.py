@@ -108,6 +108,12 @@ class MarketAlertsLoop:
         self._running = True
         self._task = asyncio.create_task(self._loop())
         logger.info(f"MarketAlertsLoop started (interval: {self._interval_minutes}m)")
+
+    async def run(self):
+        """Supervisor entry: start and await the inner loop."""
+        await self.start()
+        if self._task is not None:
+            await self._task
         
     async def stop(self):
         self._running = False

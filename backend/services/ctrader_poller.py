@@ -24,14 +24,13 @@ _stop_event: Optional[asyncio.Event] = None
 
 
 async def start_ctrader_poller() -> None:
-    """Start the background cTrader position polling loop (idempotent)."""
+    """Supervisor entry: run the cTrader poll loop until cancelled."""
     global _task, _stop_event
-    if _task and not _task.done():
-        return
     _stop_event = asyncio.Event()
-    _task = asyncio.create_task(_poll_loop())
+    _task = asyncio.current_task()
     interval = int(os.getenv("CTRADER_POLL_INTERVAL", "15"))
     logger.info(f"✓ cTrader position poller started (interval={interval}s)")
+    await _poll_loop()
 
 
 async def stop_ctrader_poller() -> None:
