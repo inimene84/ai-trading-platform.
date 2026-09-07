@@ -180,7 +180,7 @@ def test_recency_weighted_decay_calculation(db_session):
     assert result["confidence"] > 0.0
 
 
-def test_sentiment_api_endpoints():
+def test_sentiment_api_endpoints(auth_headers):
     import time
     client = TestClient(app)
 
@@ -202,7 +202,7 @@ def test_sentiment_api_endpoints():
         ]
     }
 
-    res = client.post("/api/sentiment/ingest", json=ingest_payload)
+    res = client.post("/api/sentiment/ingest", json=ingest_payload, headers=auth_headers)
     assert res.status_code == 200
     data = res.json()
     assert data["status"] == "ok"

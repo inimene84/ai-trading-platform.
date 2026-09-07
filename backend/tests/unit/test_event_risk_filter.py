@@ -119,7 +119,7 @@ def test_event_risk_filter_gate(db_session):
                 assert "CPI" in res.reason
 
 
-def test_calendar_api_routes():
+def test_calendar_api_routes(auth_headers):
     client = TestClient(app)
 
     # 1. Ingest batch events
@@ -133,7 +133,7 @@ def test_calendar_api_routes():
             }
         ]
     }
-    res = client.post("/api/calendar/batch", json=event_payload)
+    res = client.post("/api/calendar/batch", json=event_payload, headers=auth_headers)
     assert res.status_code == 200
     assert res.json()["status"] == "ok"
 
