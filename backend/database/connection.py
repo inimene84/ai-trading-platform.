@@ -23,10 +23,20 @@ else:
     engine = create_engine(
         DATABASE_URL, 
         connect_args={"check_same_thread": False},
-        pool_size=50,
-        max_overflow=50,
-        pool_timeout=60
+        pool_size=5,
+        max_overflow=10,
+        pool_timeout=30
     )
+    # Enable WAL mode for better concurrent read/write performance
+    # (8+ background tasks write concurrently; WAL avoids reader/writer blocking)
+    from sqlalchemy import event
+
+    @event.listens_for(engine, "connect")
+    def _set_sqlite_wal(dbapi_conn, connection_record):
+        cursor = dbapi_conn.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA busy_timeout=5000")
+        cursor.close()
 
 # Create SessionLocal class
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

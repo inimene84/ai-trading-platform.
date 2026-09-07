@@ -77,6 +77,86 @@ def persist_ctrader_execution(
         db.close()
 
 
+
+
+def count_open_ctrader_db_trades() -> int:
+    """Open cTrader Trade rows (live + simulated). Used by execution caps."""
+    db = SessionLocal()
+    try:
+        from backend.database.models import Trade
+        return int(
+            db.query(Trade)
+            .filter(Trade.broker == "ctrader", Trade.status == "open", Trade.closed_at.is_(None))
+            .count()
+        )
+    except Exception as exc:
+        logger.warning("Could not count open cTrader DB trades: %s", exc)
+        return 0
+    finally:
+        db.close()
+
+
+def open_ctrader_db_symbols() -> set:
+    """Symbols with an open cTrader Trade row (live + simulated)."""
+    db = SessionLocal()
+    try:
+        from backend.database.models import Trade
+        rows = (
+            db.query(Trade.symbol)
+            .filter(Trade.broker == "ctrader", Trade.status == "open", Trade.closed_at.is_(None))
+            .all()
+        )
+        return {str(r[0]).upper() for r in rows if r and r[0]}
+    except Exception as exc:
+        logger.warning("Could not list open cTrader DB symbols: %s", exc)
+        return set()
+    finally:
+        db.close()
+
+
+def close_simulated_open_ctrader_trades(*, reason: str = "simulated ghost cleanup") -> int:
+    """Mark open simulated cTrader trades closed (no broker position)."""
+    db = SessionLocal()
+    try:
+        from backend.database.models import Trade
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        rows = (
+            db.query(Trade)
+            .filter(
+                Trade.broker == "ctrader",
+                Trade.status == "open",
+                Trade.closed_at.is_(None),
+                Trade.broker_position_id.is_(None),
+            )
+            .all()
+        )
+        closed = 0
+        for t in rows:
+            notes = (t.notes or "")
+            order_id = (t.broker_order_id or "")
+            is_sim = (
+                "simulated" in notes.lower()
+                or str(order_id).startswith("sim_ct_")
+            )
+            if not is_sim:
+                continue
+            t.status = "closed"
+            t.closed_at = now
+            t.exit_price = t.entry_price
+            t.pnl = 0.0
+            t.notes = (notes + f" | {reason}").strip(" |")
+            closed += 1
+        db.commit()
+        return closed
+    except Exception as exc:
+        logger.warning("Failed closing simulated cTrader opens: %s", exc)
+        db.rollback()
+        return 0
+    finally:
+        db.close()
+
+
 def is_ctrader_close_deal(deal: Optional[Dict[str, Any]]) -> bool:
     """True only when the cached deal is a close, not the opening fill.
 

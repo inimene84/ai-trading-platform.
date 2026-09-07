@@ -81,7 +81,7 @@ services:
       # Kronos timing-gate sidecar (runs alongside backend on the same stack)
       KRONOS_SIDECAR_URL: ${KRONOS_SIDECAR_URL:-http://kronos-infer:8001}
       SCRAPLING_RESEARCH_URL: ${SCRAPLING_RESEARCH_URL:-http://ai-trading-scrapling:8080}
-      TIMING_GATE_SHADOW: ${TIMING_GATE_SHADOW:-true}
+      TIMING_GATE_SHADOW: ${TIMING_GATE_SHADOW:-false}
       ENABLE_VISION_TIMING: ${ENABLE_VISION_TIMING:-false}
       KRONOS_ALLOW_LOCAL_STUB: ${KRONOS_ALLOW_LOCAL_STUB:-false}
     command: ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000"]

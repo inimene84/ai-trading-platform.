@@ -30,7 +30,11 @@ def _snapshot_risk_equity(snapshot: PortfolioSnapshot | None) -> float:
 
 
 def _peak_risk_equity(db: Session, window_start: datetime, current_value: float) -> float:
-    """Max de-poisoned snapshot equity in the lookback window."""
+    """Max de-poisoned snapshot equity in the lookback window.
+
+    Ignore paper-era $100k peaks when the live book is a ~$1k cTrader demo
+    (or any book whose current equity is far below those snapshots).
+    """
     rows = (
         db.query(PortfolioSnapshot)
         .filter(PortfolioSnapshot.timestamp >= window_start)
@@ -38,11 +42,23 @@ def _peak_risk_equity(db: Session, window_start: datetime, current_value: float)
     )
     values = [_snapshot_risk_equity(row) for row in rows]
     values = [v for v in values if v > 0]
+    cur = float(current_value or 0.0)
+    if cur > 0 and values:
+        # Drop peaks more than 5x current NAV — classic paper-to-demo contamination.
+        sane = [v for v in values if v <= cur * 5.0]
+        if sane:
+            return max(sane)
+        return cur
     if values:
         return max(values)
     fallback_rows = db.query(PortfolioSnapshot).all()
     fallback = [_snapshot_risk_equity(row) for row in fallback_rows]
     fallback = [v for v in fallback if v > 0]
+    if cur > 0 and fallback:
+        sane = [v for v in fallback if v <= cur * 5.0]
+        if sane:
+            return max(sane)
+        return cur
     return max(fallback) if fallback else current_value
 
 logger = logging.getLogger(__name__)
@@ -58,33 +74,138 @@ logger = logging.getLogger(__name__)
 PEAK_LOOKBACK_HOURS = float(os.getenv("RISK_PEAK_LOOKBACK_HOURS", "72"))
 
 
+
+def _sane_snapshot_equity(db: Session, current_value: float, *, since: datetime | None = None) -> float | None:
+    """Pick a snapshot equity comparable to the live book (ignore paper $100k rows)."""
+    cur = float(current_value or 0.0)
+    q = db.query(PortfolioSnapshot)
+    if since is not None:
+        q = q.filter(PortfolioSnapshot.timestamp >= since)
+    rows = q.order_by(PortfolioSnapshot.timestamp.asc()).all()
+    vals = []
+    for row in rows:
+        v = _snapshot_risk_equity(row)
+        if v <= 0:
+            continue
+        if cur > 0 and v > cur * 5.0:
+            continue
+        vals.append(v)
+    if vals:
+        return vals[0] if since is not None else vals[-1]
+    return cur if cur > 0 else None
+
 class RiskBreach(Exception):
     def __init__(self, reason: str):
         super().__init__(reason)
         self.reason = reason
 
 
-def _directional_exposure_usdt(open_trades: list[Trade]) -> float:
-    """Sum the absolute notional (entry_price * quantity) of all open trades.
+def _is_fx_trade(trade: Trade) -> bool:
+    """cTrader FX/metal rows store quantity in lots, not coin units."""
+    broker = str(getattr(trade, "broker", "") or getattr(trade, "exchange", "") or "").lower()
+    if broker in {"ctrader", "ctrader:paper", "icmarkets", "ic"}:
+        return True
+    symbol = str(getattr(trade, "symbol", "") or "").upper().replace("/", "").replace("_", "")
+    if len(symbol) == 6 and symbol.isalpha():
+        return True
+    return False
 
-    Falls back gracefully if a Trade row is missing price/qty data — an
-    incomplete row must never make exposure look smaller than it is, so a
-    missing field contributes 0 only when genuinely unknown and we log it.
+
+def _fx_notional_usdt(symbol: str, lots: float, price: float) -> float:
+    """Approximate USD notional for 1 standard lot = 100_000 units of base.
+
+    quantity on cTrader trades is lots (0.01 = micro). Crypto-style
+    price*qty understates FX by ~1e5 and must not be used for the gate.
+    """
+    sym = str(symbol or "").upper().replace("/", "").replace("_", "")
+    lots = abs(float(lots or 0.0))
+    px = abs(float(price or 0.0))
+    if lots <= 0:
+        return 0.0
+    units = lots * 100_000.0
+    if len(sym) != 6:
+        return units * px if px > 0 else units
+    base, quote = sym[:3], sym[3:]
+    if base == "USD":
+        return units  # USDXXX: base notional is already USD
+    if quote == "USD":
+        return units * (px if px > 0 else 1.0)  # XXXUSD
+    if quote == "JPY":
+        # Convert JPY notional to USD with price if USDJPY-like, else ~150.
+        jpy_notional = units * (px if px > 0 else 150.0)
+        usdjpy = px if base == "USD" and px > 50 else float(os.getenv("RISK_USDJPY_FALLBACK", "150"))
+        return jpy_notional / max(usdjpy, 1.0)
+    # Other crosses: treat quote*units as quote-ccy, rough USD via price if small.
+    if px > 0 and px < 20:
+        return units * px
+    return units
+
+
+def _trade_exposure_usdt(trade: Trade) -> float:
+    price = getattr(trade, "entry_price", None) or getattr(trade, "price", None)
+    qty = getattr(trade, "quantity", None)
+    if price is None or qty is None:
+        logger.warning(
+            "[RISK GUARD] Open trade %s missing price/qty; excluded from exposure sum",
+            getattr(trade, "symbol", "?"),
+        )
+        return 0.0
+    try:
+        px = float(price)
+        q = float(qty)
+    except (TypeError, ValueError):
+        return 0.0
+    if _is_fx_trade(trade):
+        notional = _fx_notional_usdt(str(getattr(trade, "symbol", "") or ""), q, px)
+        # Cap compares against equity*mult (~4x). Full FX notional is leveraged
+        # buying power; use margin-equivalent exposure so a $1k demo with micros
+        # is not always halted. Override with RISK_FX_LEVERAGE.
+        lev = float(os.getenv("RISK_FX_LEVERAGE", os.getenv("CTRADER_LEVERAGE", "30")) or 30)
+        lev = max(lev, 1.0)
+        return notional / lev
+    return abs(px * q)
+
+
+def _active_broker_name() -> str:
+    return (os.getenv("ACTIVE_BROKER", "ctrader") or "ctrader").strip().lower()
+
+
+def _trades_for_risk(open_trades: list[Trade]) -> list[Trade]:
+    """Only count the active broker book for exposure / position caps.
+
+    Stale Binance paper rows (huge coin qtys) used to trip Max directional
+    exposure while IC demo FX was the live book.
+    """
+    active = _active_broker_name()
+    aliases = {
+        "ctrader": {"ctrader", "ctrader:paper", "ic", "icmarkets"},
+        "binance_futures": {"binance_futures", "binance", "binanceusdm"},
+    }
+    wanted = aliases.get(active, {active})
+    scoped = []
+    for t in open_trades:
+        broker = str(getattr(t, "broker", "") or getattr(t, "exchange", "") or "").lower()
+        if not broker:
+            # Unknown broker: include only when it looks like the active book.
+            if active.startswith("ctrader") and _is_fx_trade(t):
+                scoped.append(t)
+            elif active.startswith("binance") and not _is_fx_trade(t):
+                scoped.append(t)
+            continue
+        if broker in wanted:
+            scoped.append(t)
+    return scoped
+
+
+def _directional_exposure_usdt(open_trades: list[Trade]) -> float:
+    """Sum absolute exposure of open trades on the active broker book.
+
+    Crypto: |entry_price * quantity|.
+    FX/cTrader: lot notional in USD / RISK_FX_LEVERAGE (margin-equivalent).
     """
     total = 0.0
     for t in open_trades:
-        price = getattr(t, "entry_price", None) or getattr(t, "price", None)
-        qty = getattr(t, "quantity", None)
-        if price is None or qty is None:
-            logger.warning(
-                "[RISK GUARD] Open trade %s missing price/qty; excluded from exposure sum",
-                getattr(t, "symbol", "?"),
-            )
-            continue
-        try:
-            total += abs(float(price) * float(qty))
-        except (TypeError, ValueError):
-            continue
+        total += _trade_exposure_usdt(t)
     return total
 
 
@@ -124,8 +245,9 @@ def enforce_risk_limits(
     #    len(open_trades) over-counts and would false-trigger this breach. This
     #    matches how the trading loop itself defines an open position:
     #    func.count(func.distinct(Trade.symbol)).
+    risk_trades = _trades_for_risk(open_trades)
     open_symbols = {
-        s for t in open_trades if (s := getattr(t, "symbol", None))
+        s for t in risk_trades if (s := getattr(t, "symbol", None))
     }
     position_count = len(open_symbols)
     position_cap = min(cfg.max_positions, cfg.max_open_positions)
@@ -135,7 +257,7 @@ def enforce_risk_limits(
             f"(symbols: {sorted(open_symbols)})"
         )
 
-    # 2. Max directional exposure (notional).
+    # 2. Max directional exposure (notional / FX margin-equivalent).
     # When equity_sizing_enabled is True, calculate dynamic cap based on equity * max_direction_notional_equity_mult.
     effective_exposure_cap = cfg.max_directional_exposure_usdt
     if getattr(cfg, "equity_sizing_enabled", False):
@@ -152,7 +274,7 @@ def enforce_risk_limits(
             effective_exposure_cap = max(cfg.max_directional_exposure_usdt, equity * mult)
 
     if effective_exposure_cap > 0:
-        exposure = _directional_exposure_usdt(open_trades)
+        exposure = _directional_exposure_usdt(risk_trades)
         if exposure > effective_exposure_cap:
             msg = (
                 f"Max directional exposure exceeded: ${exposure:.2f} > "
@@ -167,6 +289,16 @@ def enforce_risk_limits(
 
     if latest_snapshot:
         current_value = _snapshot_risk_equity(latest_snapshot)
+        # If the latest snapshot is still a paper $100k row while the live
+        # broker book is ~$1k, prefer the live cTrader equity when available.
+        try:
+            if _active_broker_name().startswith("ctrader"):
+                from backend.services.ctrader_service import ctrader_service
+                live_eq = float(getattr(ctrader_service, "equity", 0) or 0)
+                if live_eq > 0 and (current_value <= 0 or current_value > live_eq * 5.0):
+                    current_value = live_eq
+        except Exception:
+            pass
 
         # 3. Max portfolio drawdown — peak over a ROLLING window (see module note).
         #    Disable entirely by setting max_portfolio_drawdown_pct >= 100
@@ -190,33 +322,14 @@ def enforce_risk_limits(
         #    sentinel so the loop can be tested through a down day.
         if cfg.max_daily_loss_pct < 100:
             start_of_today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-            first_snapshot_today = (
-                db.query(PortfolioSnapshot)
-                .filter(
-                    PortfolioSnapshot.timestamp >= start_of_today,
-                    PortfolioSnapshot.total_value > 0,
+            # Prefer a same-scale snapshot (demo ~$1k), not leftover paper ~$100k.
+            start_value = _sane_snapshot_equity(db, current_value, since=start_of_today)
+            if start_value is None or (current_value > 0 and start_value > current_value * 5.0):
+                start_value = _sane_snapshot_equity(db, current_value, since=None)
+            if start_value is None:
+                logger.warning(
+                    "[RISK GUARD] No baseline snapshot for daily-loss check; skipping (cold start)."
                 )
-                .order_by(PortfolioSnapshot.timestamp.asc())
-                .first()
-            )
-            if first_snapshot_today:
-                start_value = _snapshot_risk_equity(first_snapshot_today)
-            else:
-                # No snapshot recorded yet today: the original code silently skipped
-                # the daily-loss check entirely (fail-open). Instead, fall back to
-                # the most recent snapshot strictly before today as the day's
-                # baseline so the check still has teeth on the first cycle of a day.
-                prev = (
-                    db.query(PortfolioSnapshot)
-                    .filter(PortfolioSnapshot.timestamp < start_of_today)
-                    .order_by(PortfolioSnapshot.timestamp.desc())
-                    .first()
-                )
-                start_value = _snapshot_risk_equity(prev) if prev else None
-                if start_value is None:
-                    logger.warning(
-                        "[RISK GUARD] No baseline snapshot for daily-loss check; skipping (cold start)."
-                    )
 
             if start_value and current_value < start_value:
                 daily_loss_pct = ((start_value - current_value) / start_value) * 100

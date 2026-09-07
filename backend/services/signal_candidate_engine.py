@@ -14,7 +14,11 @@ from typing import Dict, Any, List, Optional, Set
 from datetime import datetime, timezone
 
 from backend.services.ctrader_service import CTraderService, ctrader_service
-from backend.services.ctrader_trade_sync import persist_ctrader_execution
+from backend.services.ctrader_trade_sync import (
+    persist_ctrader_execution,
+    count_open_ctrader_db_trades,
+    open_ctrader_db_symbols,
+)
 from backend.services.unified_trading import UnifiedTrading, UnifiedOrder, OrderSide, OrderType
 from backend.services.binance_futures_service import binance_futures_broker
 from backend.services.binance_market_data import binance_market_data
@@ -108,25 +112,38 @@ class SignalCandidateEngine:
         return False
 
     def _open_ctrader_position_count(self) -> int:
+        """Max of broker opens and DB opens so paper/sim fills cannot bypass the cap."""
+        broker_n = 0
         try:
             st = ctrader_service.status()
             if st.get("connected"):
-                return int(st.get("open_positions") or 0)
-            return len(ctrader_service.get_positions())
+                broker_n = int(st.get("open_positions") or 0)
+            else:
+                broker_n = len(ctrader_service.get_positions() or [])
         except Exception as err:
             logger.warning(f"Could not read cTrader open positions: {err}")
-            return 0
+            broker_n = 0
+        db_n = 0
+        try:
+            db_n = int(count_open_ctrader_db_trades() or 0)
+        except Exception as err:
+            logger.warning(f"Could not read cTrader DB open positions: {err}")
+        return max(broker_n, db_n)
 
     def _open_ctrader_symbols(self) -> Set[str]:
+        """Union of broker + DB open symbols so one-per-symbol works in paper/sim."""
+        syms: Set[str] = set()
         try:
-            return {
-                str(p.get("symbol", "")).upper()
-                for p in (ctrader_service.get_positions() or [])
-                if p.get("symbol")
-            }
+            for p in (ctrader_service.get_positions() or []):
+                if p.get("symbol"):
+                    syms.add(str(p.get("symbol")).upper())
         except Exception as err:
             logger.warning(f"Could not read cTrader open symbols: {err}")
-            return set()
+        try:
+            syms |= {s.upper() for s in (open_ctrader_db_symbols() or set()) if s}
+        except Exception as err:
+            logger.warning(f"Could not read cTrader DB open symbols: {err}")
+        return syms
 
     @staticmethod
     def _symbol_base(symbol: str) -> str:

@@ -65,10 +65,10 @@ def _load_symbols() -> list[str]:
     return list(_DEFAULT_SYMBOLS)
 
 
-def _aggregate_keyword_sentiment(articles: list[dict]) -> tuple[float, float, str, int]:
+def _aggregate_keyword_sentiment(articles: list[dict]) -> tuple[float, float, str, int, float]:
     """Aggregate the per-article keyword labels into one score for a coin.
 
-    Returns (sentiment_score, impact_score, direction, headline_count).
+    Returns (sentiment_score, impact_score, direction, headline_count, confidence).
     """
     if not articles:
         return 0.0, 0.0, "NEUTRAL", 0, 0.0

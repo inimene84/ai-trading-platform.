@@ -79,6 +79,10 @@ class QdrantNewsClient:
             logger.warning("qdrant-client not installed – news archive disabled")
             return
 
+        # Qdrant runs on Docker internal network (http://vps-qdrant:6333).
+        # API key over HTTP is acceptable; TLS is unnecessary for
+        # container-to-container traffic.  The UserWarning about
+        # "insecure connection" is expected and harmless here.
         self._client = AsyncQdrantClient(
             url=self.url,
             api_key=self.api_key if self.api_key else None,
