@@ -358,7 +358,8 @@ def test_daily_loss_uses_prior_day_baseline_when_no_snapshot_today(db_session):
         enforce_risk_limits(db_session, cfg, [], live)
 
 
-def test_risk_guard_allows_20_positions_across_dual_brokers(db_session):
+def test_risk_guard_allows_20_positions_across_dual_brokers(db_session, monkeypatch):
+    monkeypatch.setenv("ACTIVE_BROKER", "dual")
     cfg = RiskConfig(
         max_positions=20,
         max_open_positions=20,

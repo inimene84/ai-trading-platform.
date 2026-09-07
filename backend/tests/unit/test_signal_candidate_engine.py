@@ -19,6 +19,11 @@ from backend.services.ctrader_service import CTraderService
 from backend.services.multi_asset_bars import classify_symbol, tf_to_binance_interval
 
 
+@pytest.fixture(autouse=True)
+def isolate_ctrader_db_positions(monkeypatch):
+    monkeypatch.setattr("backend.services.signal_candidate_engine.open_ctrader_db_symbols", lambda: set())
+
+
 @pytest.fixture
 def client():
     return TestClient(app)

@@ -92,6 +92,8 @@ def _sane_snapshot_equity(db: Session, current_value: float, *, since: datetime 
         vals.append(v)
     if vals:
         return vals[0] if since is not None else vals[-1]
+    if since is not None:
+        return None
     return cur if cur > 0 else None
 
 class RiskBreach(Exception):
@@ -177,6 +179,8 @@ def _trades_for_risk(open_trades: list[Trade]) -> list[Trade]:
     exposure while IC demo FX was the live book.
     """
     active = _active_broker_name()
+    if active in {"all", "dual", "both", "*"} or not active:
+        return list(open_trades)
     aliases = {
         "ctrader": {"ctrader", "ctrader:paper", "ic", "icmarkets"},
         "binance_futures": {"binance_futures", "binance", "binanceusdm"},
@@ -186,11 +190,7 @@ def _trades_for_risk(open_trades: list[Trade]) -> list[Trade]:
     for t in open_trades:
         broker = str(getattr(t, "broker", "") or getattr(t, "exchange", "") or "").lower()
         if not broker:
-            # Unknown broker: include only when it looks like the active book.
-            if active.startswith("ctrader") and _is_fx_trade(t):
-                scoped.append(t)
-            elif active.startswith("binance") and not _is_fx_trade(t):
-                scoped.append(t)
+            scoped.append(t)
             continue
         if broker in wanted:
             scoped.append(t)
