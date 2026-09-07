@@ -39,6 +39,7 @@ services:
       # Override via TRADING_SYMBOLS in .env. ADA dropped (weekly loss leader).
       TRADING_SYMBOLS: ${TRADING_SYMBOLS:-BTCUSDC,ETHUSDC,SOLUSDC,BNBUSDC,XRPUSDC,AVAXUSDC,LINKUSDC,UNIUSDC}
       KRONOS_SIDECAR_URL: ${KRONOS_SIDECAR_URL:-http://kronos-infer:8001}
+      SCRAPLING_RESEARCH_URL: ${SCRAPLING_RESEARCH_URL:-http://ai-trading-scrapling:8080}
       TIMING_GATE_SHADOW: ${TIMING_GATE_SHADOW:-true}
       ENABLE_VISION_TIMING: ${ENABLE_VISION_TIMING:-false}
       KRONOS_ALLOW_LOCAL_STUB: ${KRONOS_ALLOW_LOCAL_STUB:-false}
@@ -189,10 +190,46 @@ services:
       - MCP_HOST=0.0.0.0
       - MCP_PORT=9100
       - MCP_API_TOKEN=${ADMIN_API_KEY:-local-admin-key}
+      - SCRAPLING_RESEARCH_URL=http://ai-trading-scrapling:8080
     networks:
       - trading-net
     depends_on:
       - backend
+  scrapling:
+    image: pyd4vinci/scrapling:latest
+    container_name: ai-trading-scrapling
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "/opt/scrapling-sidecar/entrypoint.sh"]
+    ports:
+      - "127.0.0.1:8003:8000"
+      - "127.0.0.1:8004:8080"
+    env_file:
+      - .env
+    environment:
+      SCRAPLING_MCP_AUTH_TOKEN: ${ADMIN_API_KEY:-local-admin-key}
+      ADMIN_API_KEY: ${ADMIN_API_KEY:-local-admin-key}
+      BACKEND_BASE_URL: http://ai-trading-backend:8000
+      BACKEND_API_PREFIX: /api
+      SCRAPLING_INGEST_ENABLED: ${SCRAPLING_INGEST_ENABLED:-true}
+      SCRAPLING_INGEST_INTERVAL_SEC: ${SCRAPLING_INGEST_INTERVAL_SEC:-3600}
+      JBLANKED_API_KEY: ${JBLANKED_API_KEY:-}
+      CALENDAR_JSON_URL: ${CALENDAR_JSON_URL:-}
+      NEWS_RSS_URLS: ${NEWS_RSS_URLS:-https://www.federalreserve.gov/feeds/press_all.xml}
+    volumes:
+      - ./scrapling_sidecar:/opt/scrapling-sidecar:ro
+    networks:
+      - trading-net
+    depends_on:
+      - backend
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: 3
   kronos-infer:
     build:
       context: ./kronos-infer

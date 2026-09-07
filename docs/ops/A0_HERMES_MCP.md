@@ -6,7 +6,9 @@ Goal: let **A0** (MCP/A2A client) and **Hermes** oversee live trades — inspect
 
 ```text
 A0 (a0-instance) ──MCP HTTP──► ai-trading-mcp:9100/mcp ──HTTP──► ai-trading-backend:8000
+                 ──MCP HTTP──► ai-trading-scrapling:8000/mcp  (web research)
 Hermes           ──REST/MCP──► 127.0.0.1:8001  /  127.0.0.1:9100/mcp
+Grok bots        ──REST──────► POST /api/research/fetch  ──► scrapling:8080/fetch
 ```
 
 - MCP server is already in `docker-compose.yml` / `docker-compose.prod.yml` as `ai-trading-mcp`.
@@ -50,6 +52,12 @@ The connect script writes this automatically. Manual equivalent inside Agent Zer
 | URL | `http://ai-trading-mcp:9100/mcp` |
 | Transport | streamable-http / HTTP |
 | Auth | Bearer / API key = `ADMIN_API_KEY` (if client supports headers) |
+
+| Name | `scrapling` |
+| URL | `http://ai-trading-scrapling:8000/mcp` |
+| Transport | streamable-http / HTTP |
+| Auth | Bearer = `ADMIN_API_KEY` |
+| Use | Web/news/calendar research for Grok bots. Do not use for live prices. |
 
 A0 stores servers under `mcp_servers.mcpServers.<name>` (not as a sibling of `mcpServers`).
 

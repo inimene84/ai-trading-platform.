@@ -313,6 +313,36 @@ async def sentry_resume(note: str = "resumed via MCP", reconcile: bool = True) -
     )
 
 
+# ---- Research (Scrapling sidecar via backend) --------------------------------
+@mcp.tool
+async def research_fetch(
+    url: str,
+    mode: str = "http",
+    extraction_type: str = "markdown",
+    css_selector: Optional[str] = None,
+) -> dict:
+    """Fetch a public web page through Scrapling for Grok/A0 research.
+
+    Use this for news, calendars, and filings — not live prices (use feed/binance).
+    mode=http for normal pages; mode=stealth for JS-heavy sites.
+    """
+    return await _post(
+        "/research/fetch",
+        json_body={
+            "url": url,
+            "mode": mode,
+            "extraction_type": extraction_type,
+            "css_selector": css_selector,
+        },
+    )
+
+
+@mcp.tool
+async def research_health() -> dict:
+    """Check whether the Scrapling research sidecar is reachable."""
+    return await _get("/research/health")
+
+
 # ---- Sentiment ---------------------------------------------------------------
 @mcp.tool
 async def sentiment_loop_status() -> dict:

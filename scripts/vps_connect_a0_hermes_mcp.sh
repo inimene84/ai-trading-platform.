@@ -11,6 +11,8 @@ HERMES_CONTAINER="${HERMES_CONTAINER:-hermes-webui}"
 A0_SETTINGS_HOST="${A0_SETTINGS_HOST:-/var/lib/docker/volumes/agent-zero_a0-data/_data/settings.json}"
 HERMES_CONFIG="${HERMES_CONFIG:-/root/.hermes/config.yaml}"
 QT_MCP_URL="http://${MCP_CONTAINER}:9100/mcp"
+SCRAPLING_CONTAINER="${SCRAPLING_CONTAINER:-ai-trading-scrapling}"
+SCRAPLING_MCP_URL="http://${SCRAPLING_CONTAINER}:8000/mcp"
 
 echo "=== Resolve trading-net ==="
 NETWORK=$(docker inspect "$BACKEND_CONTAINER" --format '{{range $k,$v := .NetworkSettings.Networks}}{{$k}} {{end}}' 2>/dev/null | awk '{print $1}' || true)
@@ -26,9 +28,9 @@ echo "Using network: $NETWORK"
 echo "=== Ensure MCP server is up ==="
 cd "$PROJECT_DIR"
 if [[ -f docker-compose.prod.yml ]]; then
-  docker compose -f docker-compose.prod.yml up -d mcp-server || true
+  docker compose -f docker-compose.prod.yml up -d mcp-server scrapling || true
 else
-  docker compose up -d mcp-server || true
+  docker compose up -d mcp-server scrapling || true
 fi
 
 echo "=== Attach A0 + Hermes to trading-net ==="
@@ -43,12 +45,15 @@ done
 
 echo "=== Write A0 quantumtrade MCP server (if settings volume present) ==="
 if [[ -f "$A0_SETTINGS_HOST" ]]; then
-  python3 - "$A0_SETTINGS_HOST" "$QT_MCP_URL" <<'PY'
+  ADMIN_TOKEN=$(grep '^ADMIN_API_KEY=' "$PROJECT_DIR/.env" 2>/dev/null | cut -d= -f2- || true)
+  python3 - "$A0_SETTINGS_HOST" "$QT_MCP_URL" "$SCRAPLING_MCP_URL" "$ADMIN_TOKEN" <<'PY'
 import json, sys
 from pathlib import Path
 
 path = Path(sys.argv[1])
-url = sys.argv[2]
+qt_url = sys.argv[2]
+scrapling_url = sys.argv[3]
+token = sys.argv[4] if len(sys.argv) > 4 else ""
 cfg = json.loads(path.read_text())
 raw = cfg.get("mcp_servers") or {}
 if isinstance(raw, str):
@@ -58,10 +63,17 @@ if not isinstance(servers, dict):
     servers = {}
 # Drop any misplaced sibling from earlier partial writes
 servers.pop("mcpServers", None)
+auth_headers = {"Authorization": f"Bearer {token}"} if token else {}
 servers["quantumtrade"] = {
     "type": "streamable-http",
-    "url": url,
-    "headers": {},
+    "url": qt_url,
+    "headers": auth_headers,
+    "disabled": False,
+}
+servers["scrapling"] = {
+    "type": "streamable-http",
+    "url": scrapling_url,
+    "headers": auth_headers,
     "disabled": False,
 }
 cfg["mcp_servers"] = {"mcpServers": servers}
@@ -74,7 +86,7 @@ fi
 
 echo "=== Write Hermes quantumtrade MCP server (if config present) ==="
 if [[ -f "$HERMES_CONFIG" ]]; then
-  python3 - "$HERMES_CONFIG" "$QT_MCP_URL" <<'PY'
+  python3 - "$HERMES_CONFIG" "$QT_MCP_URL" "$SCRAPLING_MCP_URL" <<'PY'
 from pathlib import Path
 import sys
 
@@ -86,11 +98,17 @@ except ImportError:
 
 path = Path(sys.argv[1])
 url = sys.argv[2]
+scrapling_url = sys.argv[3]
 cfg = yaml.safe_load(path.read_text()) or {}
 mcp = cfg.get("mcp_servers") or {}
 mcp["quantumtrade"] = {
     "url": url,
     "timeout": 120,
+    "connect_timeout": 60,
+}
+mcp["scrapling"] = {
+    "url": scrapling_url,
+    "timeout": 180,
     "connect_timeout": 60,
 }
 cfg["mcp_servers"] = mcp
@@ -102,7 +120,9 @@ PY
 # QuantumTrade Oversight
 
 Prefer MCP server `quantumtrade` (list_positions, get_loop_status, sentry_*, modify_position).
+Use MCP server `scrapling` (or `research_fetch` on quantumtrade) for web/news/calendar research — not live prices.
 REST fallback on this host: `http://127.0.0.1:8001` or `http://ai-trading-backend:8000`.
+Research REST: `POST /api/research/fetch` with admin bearer token.
 Via nginx from other hosts: `http://<trading-vps>:8081/api/...`
 Writes need `X-API-Key: $ADMIN_API_KEY`. Never request exchange keys.
 SKILL
@@ -136,8 +156,10 @@ cat <<EOF
 
 === Connected ===
 A0 MCP URL (inside a0-instance):  $QT_MCP_URL
+Scrapling MCP (inside a0-instance): $SCRAPLING_MCP_URL
 Hermes MCP URL (on trading-net):   $QT_MCP_URL
 Host MCP (localhost only):         http://127.0.0.1:9100/mcp
+Host Scrapling (localhost only):   http://127.0.0.1:8003/mcp
 
 Remote Hermes (other VPS) cannot reach :9100 (bound to 127.0.0.1).
 Use REST:  export QT_BASE=http://<this-vps>:8081/api
