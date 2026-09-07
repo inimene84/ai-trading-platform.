@@ -132,8 +132,13 @@ async def grok_overseer_overview(request: Request) -> Dict[str, Any]:
     out["grok_model"] = os.getenv("XAI_MODEL", "grok-beta")
     out["overseer_note"] = (
         "Use this snapshot for supervisor decisions. POST /api/agents/grok-overseer/analyze "
-        "for an LLM summary when XAI_API_KEY is configured."
+        "for an LLM summary when XAI_API_KEY is configured. "
+        "For web/news/calendar research use POST /api/research/fetch or MCP scrapling / research_fetch."
     )
+    out["research"] = {
+        "fetch": "/api/research/fetch",
+        "health": "/api/research/health",
+    }
     return out
 
 

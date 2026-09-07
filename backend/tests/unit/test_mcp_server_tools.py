@@ -101,3 +101,25 @@ async def test_get_trading_opinion_posts_analyze(monkeypatch):
     assert args[0] == "POST"
     assert args[1].endswith("/api/trading/opinion/analyze")
     assert kwargs["json"]["symbol"] == "BTCUSDC"
+
+
+@pytest.mark.asyncio
+async def test_research_fetch_posts_to_scrapling_sidecar(monkeypatch):
+    mod = _load_mcp_server(monkeypatch)
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {"url": "https://example.com", "content": "ok"}
+    mock_resp.raise_for_status = MagicMock()
+
+    mock_client = AsyncMock()
+    mock_client.__aenter__.return_value = mock_client
+    mock_client.request = AsyncMock(return_value=mock_resp)
+
+    with patch.object(mod.httpx, "AsyncClient", return_value=mock_client):
+        out = await mod.research_fetch("https://example.com", css_selector="h1")
+    assert out["content"] == "ok"
+    args, kwargs = mock_client.request.call_args
+    assert args[0] == "POST"
+    assert args[1].endswith("/api/research/fetch")
+    assert kwargs["json"]["url"] == "https://example.com"
+    assert kwargs["json"]["css_selector"] == "h1"

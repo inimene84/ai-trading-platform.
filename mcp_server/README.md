@@ -24,6 +24,7 @@ names and docstrings so LLM agents call them reliably:
 | `sentry_status` / `sentry_halt` / `emergency_halt` / `sentry_resume` | `/sentry/*` and `/api/sentry/*` | Safety |
 | `backend_health` | `/health` and `/api/health` | Health |
 | `sentiment_loop_status()` / `run_sentiment_loop` | `/news/sentiment-loop/*` | Sentiment |
+| `research_fetch(url, mode?, css_selector?)` / `research_health()` | Scrapling sidecar `/fetch` | Web research for Grok/A0 |
 | `backend_health()` | `GET /health` | Liveness |
 | `call_backend(method, path, …)` | GET/POST/**PUT** | Escape hatch |
 

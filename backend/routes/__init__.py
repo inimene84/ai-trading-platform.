@@ -22,6 +22,7 @@ from backend.routes.assistant import router as assistant_router
 from backend.routes.agents import router as agents_router
 from backend.routes.sentiment import router as sentiment_router
 from backend.routes.calendar import router as calendar_router
+from backend.routes.research import router as research_router
 
 # Main API router
 api_router = APIRouter()
@@ -61,4 +62,6 @@ api_router.include_router(sentiment_router, tags=["sentiment"])
 api_router.include_router(sentiment_router, prefix="/api", tags=["sentiment-api"])
 api_router.include_router(calendar_router, tags=["calendar"])
 api_router.include_router(calendar_router, prefix="/api", tags=["calendar-api"])
+api_router.include_router(research_router, tags=["research"])
+api_router.include_router(research_router, prefix="/api", tags=["research-api"])
 

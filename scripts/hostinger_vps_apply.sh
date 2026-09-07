@@ -145,7 +145,7 @@ docker network create trading-net 2>/dev/null || true
 echo ""
 echo "=== 5. Rebuild & start full stack ==="
 docker compose -f "$COMPOSE_FILE" up -d --build \
-  backend litellm nginx influxdb grafana qdrant mcp-server kronos-infer
+  backend litellm nginx influxdb grafana qdrant mcp-server kronos-infer scrapling
 
 echo ""
 echo "=== 5b. InfluxDB buckets ==="
@@ -182,6 +182,8 @@ curl -sf -o /dev/null -w "frontend /: %{http_code}\n" \
   http://127.0.0.1:8081/ || true
 curl -sf -o /dev/null -w "influxdb :8086: %{http_code}\n" \
   http://127.0.0.1:8086/health || true
+curl -sf -o /dev/null -w "scrapling research :8004: %{http_code}\n" \
+  http://127.0.0.1:8004/health || true
 curl -sf -o /dev/null -w "grafana via nginx: %{http_code}\n" \
   http://127.0.0.1:8081/grafana/api/health || true
 
