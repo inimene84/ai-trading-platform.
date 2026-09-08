@@ -31,10 +31,15 @@ if [[ -f "${TRADING_ENV}" ]]; then
   source "${TRADING_ENV}"
   set +a
   export BACKEND_API_KEY="${ADMIN_API_KEY:-${API_AUTH_TOKEN:-${BACKEND_API_KEY:-}}}"
-  # Compose reads this file on every later restart, avoiding a blank key when
-  # the upgrade shell is no longer present.
-  printf 'BACKEND_API_KEY=%s\n' "${BACKEND_API_KEY}" > "${N8N_COMPOSE_DIR}/.env"
+  # Upsert only — never clobber sandbox secrets already in /docker/n8n/.env.
+  touch "${N8N_COMPOSE_DIR}/.env"
   chmod 600 "${N8N_COMPOSE_DIR}/.env"
+  if grep -qE '^BACKEND_API_KEY=' "${N8N_COMPOSE_DIR}/.env"; then
+    escaped=$(printf '%s' "${BACKEND_API_KEY}" | sed -e 's/[&|\\]/\\&/g')
+    sed -i "s|^BACKEND_API_KEY=.*|BACKEND_API_KEY=${escaped}|" "${N8N_COMPOSE_DIR}/.env"
+  else
+    printf 'BACKEND_API_KEY=%s\n' "${BACKEND_API_KEY}" >> "${N8N_COMPOSE_DIR}/.env"
+  fi
 fi
 
 echo "=== Backing up database.sqlite ==="
@@ -69,8 +74,12 @@ for setting in "${N8N_SETTINGS[@]}"; do
 done
 
 echo "=== Pulling image and recreating n8n ==="
-docker compose pull n8n
-docker compose up -d n8n
+COMPOSE_ARGS=(-f docker-compose.yml)
+if [[ -f docker-compose.sandbox.yml ]]; then
+  COMPOSE_ARGS+=(-f docker-compose.sandbox.yml)
+fi
+docker compose "${COMPOSE_ARGS[@]}" pull n8n
+docker compose "${COMPOSE_ARGS[@]}" up -d n8n
 
 echo "=== Waiting for n8n startup ==="
 for i in $(seq 1 30); do
