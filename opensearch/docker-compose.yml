@@ -1,0 +1,74 @@
+# Single-node OpenSearch for n8n + QuantumTrade (internal only).
+# Binds 127.0.0.1 — n8n reaches it as http://ai-trading-opensearch:9200 on trading-net.
+#
+#   cd opensearch && docker compose up -d
+#   or: ./scripts/apply_opensearch.sh
+#
+# Security plugin is off because nothing is published past loopback.
+# Do not map 9200/5601 onto 0.0.0.0.
+
+networks:
+  trading-net:
+    external: true
+
+volumes:
+  opensearch-data:
+
+services:
+  opensearch:
+    image: opensearchproject/opensearch:2.19.2
+    container_name: ai-trading-opensearch
+    restart: unless-stopped
+    environment:
+      discovery.type: single-node
+      cluster.name: ai-trading-opensearch
+      DISABLE_SECURITY_PLUGIN: "true"
+      DISABLE_INSTALL_DEMO_CONFIG: "true"
+      OPENSEARCH_JAVA_OPTS: "-Xms512m -Xmx512m"
+      bootstrap.memory_lock: "true"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    ports:
+      - "127.0.0.1:9200:9200"
+    volumes:
+      - opensearch-data:/usr/share/opensearch/data
+    networks:
+      trading-net:
+        aliases:
+          - ai-trading-opensearch
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:9200 >/dev/null"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 45s
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1280M
+
+  dashboards:
+    image: opensearchproject/opensearch-dashboards:2.19.2
+    container_name: ai-trading-opensearch-dashboards
+    restart: unless-stopped
+    depends_on:
+      opensearch:
+        condition: service_healthy
+    environment:
+      OPENSEARCH_HOSTS: '["http://ai-trading-opensearch:9200"]'
+      DISABLE_SECURITY_DASHBOARDS_PLUGIN: "true"
+    ports:
+      - "127.0.0.1:5601:5601"
+    networks:
+      - trading-net
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512M
