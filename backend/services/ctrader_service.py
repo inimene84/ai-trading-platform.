@@ -464,6 +464,12 @@ class CTraderProtocol:
                 desc = str(getattr(err, "description", "") or "")
                 logger.error(f"cTrader Protocol Error: {code} — {desc}")
                 self._service._last_protocol_error = f"{code} — {desc}".strip(" —")
+                if code == "BLOCKED_PAYLOAD_TYPE" or "rate limit" in desc.lower():
+                    # Spotware is throttling us: serve stale trendbar cache and
+                    # stop making fresh requests for a minute instead of
+                    # piling onto the rate limiter (59 hits in 6h on 2026-09-08).
+                    self._service._rate_limited_until = time.time() + 60
+                    logger.warning("cTrader rate-limited — 60s request cooldown")
                 self._service._auth_event.set()
                 if self.transport:
                     try:
@@ -603,6 +609,7 @@ class CTraderService(BrokerService):
         self._next_connect_ok_at: float = 0.0
         self._reconnect_delay: float = 5.0
         self._last_protocol_error: Optional[str] = None
+        self._rate_limited_until: float = 0.0
         self._host_override: Optional[str] = None
         self._retry_correct_host: bool = False
         self._last_order_error: Optional[str] = None
@@ -1305,6 +1312,19 @@ class CTraderService(BrokerService):
                 wanted.add(int(sid))
         if wanted:
             self._protocol._subscribe_spots(wanted)
+
+    def get_spread_pips(self, symbol: str) -> Optional[float]:
+        """Live bid/ask spread in pips; None when no spot has streamed yet."""
+        spot = self._last_spots.get(self._normalize_symbol(symbol)) or self._last_spots.get(
+            self.normalize_symbol_name(symbol)
+        )
+        if not spot:
+            return None
+        bid, ask = spot.get("bid"), spot.get("ask")
+        if not bid or not ask:
+            return None
+        pip = max(float(self.pip_size_for(symbol)), 1e-9)
+        return abs(float(ask) - float(bid)) / pip
 
     def get_mark_price(self, symbol: str, side: Optional[str] = None) -> Optional[float]:
         """Last streamed price for a symbol.
@@ -2073,6 +2093,9 @@ class CTraderService(BrokerService):
         live_mode = not self._dry_run and self.is_connected and self._protocol is not None
 
         if live_mode:
+            if time.time() < self._rate_limited_until:
+                cached = self._trendbar_cache.get(cache_key) or []
+                return cached[-count:] if cached else []
             last = self._trendbar_last_req.get(cache_key, 0)
             if time.time() - last < 45:
                 cached = self._trendbar_cache.get(cache_key) or []

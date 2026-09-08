@@ -70,6 +70,17 @@ async def sync_ctrader_once() -> dict:
         res = reconcile_ctrader_positions(db, live_positions=live_positions, broker=ctrader_broker)
         if restored:
             res["restored_stops"] = restored
+        # Break-even / trailing ratchet runs on the same cadence as the
+        # poller (15s) — fast enough to protect M5 entries, cheap because
+        # it only amends when a level actually improves.
+        try:
+            from backend.services.ctrader_exit_manager import run_exit_manager_once
+            exit_res = await loop.run_in_executor(None, run_exit_manager_once)
+            if exit_res.get("managed"):
+                logger.info("cTrader exit manager: %s", exit_res)
+                res["exit_manager"] = exit_res
+        except Exception as exc:
+            logger.warning(f"cTrader exit manager cycle error: {exc}")
         return res
     except Exception as exc:
         logger.warning(f"cTrader position sync cycle error: {exc}")

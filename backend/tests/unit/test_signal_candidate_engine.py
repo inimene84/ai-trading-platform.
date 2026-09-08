@@ -23,6 +23,7 @@ from backend.services.multi_asset_bars import classify_symbol, tf_to_binance_int
 def isolate_ctrader_db_positions(monkeypatch):
     monkeypatch.setattr("backend.services.signal_candidate_engine.open_ctrader_db_symbols", lambda: set())
     monkeypatch.setattr("backend.services.signal_candidate_engine.count_open_ctrader_db_trades", lambda: 0)
+    monkeypatch.setattr("backend.services.signal_candidate_engine.open_ctrader_db_positions", lambda: [])
 
 
 @pytest.fixture
@@ -519,6 +520,7 @@ def test_get_ready_signals_fills_up_to_ten_open_slots():
                 "max_ready_per_poll": 10,
                 "one_position_per_symbol": True,
                 "max_same_base": 0,
+                "max_currency_exposure": 0,  # test targets the slot cap, not currency clusters
             },
         ), patch.object(
             signal_candidate_engine, "_open_ctrader_position_count", return_value=0

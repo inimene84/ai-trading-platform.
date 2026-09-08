@@ -18,6 +18,7 @@ from backend.services.ctrader_trade_sync import (
     persist_ctrader_execution,
     count_open_ctrader_db_trades,
     open_ctrader_db_symbols,
+    open_ctrader_db_positions,
 )
 from backend.services.unified_trading import UnifiedTrading, UnifiedOrder, OrderSide, OrderType
 from backend.services.binance_futures_service import binance_futures_broker
@@ -86,6 +87,7 @@ class SignalCandidateEngine:
             "one_position_per_symbol": os.getenv("CTRADER_ONE_POSITION_PER_SYMBOL", "true").lower() == "true",
             "include_metals": os.getenv("CTRADER_INCLUDE_METALS", "false").lower() == "true",
             "max_same_base": int(os.getenv("CTRADER_MAX_SAME_BASE", "2")),
+            "max_currency_exposure": int(os.getenv("CTRADER_MAX_CURRENCY_EXPOSURE", "2")),
             "max_candidates": int(os.getenv("CTRADER_MAX_CANDIDATES", "200")),
         }
         # High-impact calendar currencies map to the liquid FX pair, never gold.
@@ -109,6 +111,10 @@ class SignalCandidateEngine:
     @staticmethod
     def _fx_gate_mode() -> str:
         return os.getenv("FX_KRONOS_GATE", "shadow").strip().lower()
+
+    @staticmethod
+    def _fade_h1_filter_enabled() -> bool:
+        return os.getenv("FADE_H1_FILTER_ENABLED", "true").strip().lower() == "true"
 
     async def _fx_timing_gate(
         self,
@@ -203,6 +209,63 @@ class SignalCandidateEngine:
             if base:
                 counts[base] = counts.get(base, 0) + 1
         return counts
+
+    def _open_ctrader_currency_exposure(self) -> Dict[str, float]:
+        """Net signed currency exposure across open cTrader positions.
+
+        BUY EURUSD = long EUR / short USD. Broker positions win on symbol
+        conflicts; DB rows cover paper/sim fills the broker never saw.
+        The 2026-09-08 book held 4 JPY-linked positions at once — one
+        JPY headline would have hit all four.
+        """
+        exposure: Dict[str, float] = {}
+        seen_syms: Set[str] = set()
+
+        def _apply(sym: str, direction: str) -> None:
+            s = str(sym or "").upper()
+            if len(s) < 6:
+                return
+            sign = 1.0 if str(direction or "").upper() == "BUY" else -1.0
+            exposure[s[:3]] = exposure.get(s[:3], 0.0) + sign
+            exposure[s[3:6]] = exposure.get(s[3:6], 0.0) - sign
+
+        try:
+            for p in (ctrader_service.get_positions() or []):
+                sym = str(p.get("symbol") or "").upper()
+                if not sym:
+                    continue
+                seen_syms.add(sym)
+                _apply(sym, p.get("direction") or p.get("side"))
+        except Exception as err:
+            logger.warning(f"Could not read broker positions for exposure: {err}")
+        try:
+            for row in open_ctrader_db_positions():
+                sym = str(row.get("symbol") or "").upper()
+                if sym and sym not in seen_syms:
+                    _apply(sym, row.get("direction"))
+        except Exception as err:
+            logger.warning(f"Could not read DB positions for exposure: {err}")
+        return exposure
+
+    def _currency_exposure_slots_available(self, symbol: str, direction: str) -> bool:
+        """True unless the candidate piles onto an at-cap currency cluster.
+
+        Only blocks when the candidate INCREASES |net exposure| beyond the
+        cap — trades that reduce or hedge an existing cluster stay allowed.
+        """
+        cap = float(self.execution_config.get("max_currency_exposure") or 0)
+        if cap <= 0:
+            return True
+        sym = str(symbol or "").upper()
+        if len(sym) < 6:
+            return True
+        exposure = self._open_ctrader_currency_exposure()
+        sign = 1.0 if str(direction or "").upper() == "BUY" else -1.0
+        for curr, delta in ((sym[:3], sign), (sym[3:6], -sign)):
+            current = exposure.get(curr, 0.0)
+            if abs(current) >= cap and abs(current + delta) > abs(current):
+                return False
+        return True
 
     def _same_base_slots_available(self, symbol: str) -> bool:
         cap = int(self.execution_config.get("max_same_base") or 0)
@@ -350,6 +413,10 @@ class SignalCandidateEngine:
             if slow and slow.get("atr"):
                 features["stop_atr"] = slow["atr"]
                 features["stop_timeframe"] = tf
+            if slow and slow.get("trend"):
+                # Higher-timeframe trend context for counter-trend gating
+                # (FADE shorts into H1 rallies were the biggest losing cohort).
+                features["h1_trend"] = slow["trend"]
         except Exception as err:
             logger.warning(f"{symbol}: {tf} stop ATR unavailable ({err}); using signal ATR")
 
@@ -481,6 +548,23 @@ class SignalCandidateEngine:
 
         if not direction:
             return None
+
+        # H1 trend alignment: fading an H1 rally/selloff is shorting strength.
+        # 2026-09-08 live: 15 FADE trades, 19/21 SELLs, net negative — the
+        # strategy was systematically counter-trend. Block fades that fight
+        # the H1 EMA cross; allow when H1 is unavailable or NEUTRAL.
+        if self._fade_h1_filter_enabled():
+            h1_trend = features.get("h1_trend")
+            if h1_trend == "BULLISH" and direction == "SELL":
+                logger.info(
+                    f"[{symbol}] FADE veto: SELL overbought spike against H1 BULLISH trend"
+                )
+                return None
+            if h1_trend == "BEARISH" and direction == "BUY":
+                logger.info(
+                    f"[{symbol}] FADE veto: BUY oversold dip against H1 BEARISH trend"
+                )
+                return None
 
         price = features["last_close"]
         atr = self.stop_atr(features)
@@ -939,6 +1023,37 @@ class SignalCandidateEngine:
                 base_counts[base] = used + 1
             ready = limited
 
+        # Net currency exposure cap (base AND quote side), simulated
+        # incrementally so a ready batch cannot itself form a cluster.
+        fx_cap = float(self.execution_config.get("max_currency_exposure") or 0)
+        if fx_cap > 0:
+            exposure = self._open_ctrader_currency_exposure()
+            fx_limited: List[Dict[str, Any]] = []
+            for cand in ready:
+                sym = str(cand.get("symbol") or "").upper()
+                side = str(cand.get("direction") or "").upper()
+                if len(sym) < 6:
+                    fx_limited.append(cand)
+                    continue
+                sign = 1.0 if side == "BUY" else -1.0
+                base, quote = sym[:3], sym[3:6]
+                blocked = False
+                for curr, delta in ((base, sign), (quote, -sign)):
+                    current = exposure.get(curr, 0.0)
+                    if abs(current) >= fx_cap and abs(current + delta) > abs(current):
+                        blocked = True
+                        break
+                if blocked:
+                    logger.info(
+                        f"[{sym}] currency exposure cap: {side} would push "
+                        f"{base}/{quote} past net {fx_cap}"
+                    )
+                    continue
+                exposure[base] = exposure.get(base, 0.0) + sign
+                exposure[quote] = exposure.get(quote, 0.0) - sign
+                fx_limited.append(cand)
+            ready = fx_limited
+
         ready.sort(key=lambda c: float(c.get("confidence") or 0), reverse=True)
 
         if self.execution_config.get("one_position_per_symbol"):
@@ -1046,6 +1161,43 @@ class SignalCandidateEngine:
                         f"({self.execution_config.get('max_same_base', 2)} open)."
                     ),
                 }
+
+        # Net currency exposure re-check at execution (the ready queue check
+        # ran earlier; positions may have changed since).
+        if cand.get("broker") == "ctrader" and not self._currency_exposure_slots_available(
+            str(cand.get("symbol") or ""), str(cand.get("direction") or "")
+        ):
+            return {
+                "success": False,
+                "skipped": True,
+                "error": (
+                    f"Currency exposure cap reached for {cand.get('symbol')} "
+                    f"(net {self.execution_config.get('max_currency_exposure', 2)} per currency)."
+                ),
+            }
+
+        # Spread gate: with 10-30 pip stops, a 2+ pip spread is 7-20% of risk
+        # paid upfront. max_spread_pips existed in config but was never enforced.
+        if cand.get("broker") == "ctrader":
+            max_spread = float(self.timing_config.get("max_spread_pips") or 0)
+            if max_spread > 0:
+                try:
+                    spread = ctrader_service.get_spread_pips(str(cand.get("symbol") or ""))
+                except Exception:
+                    spread = None
+                if spread is not None and spread > max_spread:
+                    logger.info(
+                        f"[{cand.get('symbol')}] spread gate: {spread:.1f} pips > "
+                        f"max {max_spread} — skipping execution"
+                    )
+                    return {
+                        "success": False,
+                        "skipped": True,
+                        "error": (
+                            f"Spread {spread:.1f} pips exceeds max {max_spread} "
+                            f"for {cand.get('symbol')}"
+                        ),
+                    }
 
         # Route through appropriate broker engine
         try:

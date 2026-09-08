@@ -114,6 +114,30 @@ def open_ctrader_db_symbols() -> set:
         db.close()
 
 
+def open_ctrader_db_positions() -> list:
+    """Open cTrader Trade rows as {symbol, direction} dicts (live + simulated).
+
+    Used for net currency exposure caps, which need direction, not just symbols.
+    """
+    db = SessionLocal()
+    try:
+        from backend.database.models import Trade
+        rows = (
+            db.query(Trade.symbol, Trade.direction)
+            .filter(Trade.broker == "ctrader", Trade.status == "open", Trade.closed_at.is_(None))
+            .all()
+        )
+        return [
+            {"symbol": str(r[0]).upper(), "direction": str(r[1] or "").upper()}
+            for r in rows if r and r[0]
+        ]
+    except Exception as exc:
+        logger.warning("Could not list open cTrader DB positions: %s", exc)
+        return []
+    finally:
+        db.close()
+
+
 def close_simulated_open_ctrader_trades(*, reason: str = "simulated ghost cleanup") -> int:
     """Mark open simulated cTrader trades closed (no broker position)."""
     db = SessionLocal()
