@@ -59,6 +59,7 @@ The VPS runs these Docker containers:
 - `ai-trading-nginx` - Reverse proxy on port 8081
 - `ai-trading-litellm` - LLM proxy
 - `ai-trading-redis` - Cache
+- `ai-trading-searxng` - Private metasearch (JSON on `127.0.0.1:8888`, `http://ai-trading-searxng:8080` on trading-net)
 - `vps-influxdb` - Time series DB
 - `vps-qdrant` - Vector DB
 - `grafana-*` - Monitoring

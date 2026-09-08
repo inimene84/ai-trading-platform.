@@ -47,6 +47,10 @@ for required in ADMIN_API_KEY LITELLM_API_KEY QDRANT_API_KEY; do
     exit 1
   fi
 done
+if ! grep -qE '^SEARXNG_SECRET=.+$' .env; then
+  echo "SEARXNG_SECRET=$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')" >> .env
+  echo "  Generated SEARXNG_SECRET for internal SearXNG"
+fi
 ADMIN_API_KEY=$(grep '^ADMIN_API_KEY=' .env | cut -d= -f2-)
 
 # Never silently turn a safe/paper config into live trading. A live deploy must
@@ -145,7 +149,8 @@ docker network create trading-net 2>/dev/null || true
 echo ""
 echo "=== 5. Rebuild & start full stack ==="
 docker compose -f "$COMPOSE_FILE" up -d --build \
-  backend litellm nginx influxdb grafana qdrant mcp-server kronos-infer scrapling
+  backend litellm nginx influxdb grafana qdrant mcp-server kronos-infer scrapling \
+  searxng searxng-valkey
 
 echo ""
 echo "=== 5b. InfluxDB buckets ==="
