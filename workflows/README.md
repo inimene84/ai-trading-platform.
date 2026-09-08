@@ -12,6 +12,7 @@ Import these into n8n at **https://n8n1.thorinvest.org**.
 | `03_execution_scheduler_workflow.json` | Every 30 sec | `GET /api/signals/ready-for-execution` → `POST /api/signals/execute-candidate` | Execute timed candidates via smart router |
 | `04_forex_scanner_workflow.json` | Every 5 min | `POST /api/signals/scan-markets` | Forex/metals only (no crypto) |
 | `05_forex_sentiment_ingestion_workflow.json` | Every 15 min | `POST /api/sentiment/ingest` | Forex & Macro news ingestion with Gemini scoring |
+| `20_grok_overseer_daily_telegram.json` | Daily 15:00 UTC (18:00 EEST) + webhook `qt-grok-overseer-daily` | `POST /api/agents/grok-overseer/analyze` | GrokBOT daily overseer summary to Telegram |
 
 
 ## Where to find them
