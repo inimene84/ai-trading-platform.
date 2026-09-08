@@ -101,6 +101,52 @@ class SignalCandidateEngine:
             "CHF": "USDCHF",
         }
 
+    # ── P1: FX pre-execution timing gate ────────────────────────────────────
+    # FX entries historically bypassed every quality gate the DecisionEngine
+    # path enforces (Kronos veto, heuristic timing) — measured live win rate
+    # on 2026-09-08 was 20%. FX_KRONOS_GATE=shadow (default) logs vetoes on
+    # the candidate without blocking; =enforce blocks; =off disables.
+    @staticmethod
+    def _fx_gate_mode() -> str:
+        return os.getenv("FX_KRONOS_GATE", "shadow").strip().lower()
+
+    async def _fx_timing_gate(
+        self,
+        symbol: str,
+        direction: str,
+        confidence: float,
+        bars: List[Dict[str, Any]],
+    ):
+        from backend.services.kronos_gate import apply_pre_execution_gate
+        from backend.services import kronos_service
+
+        gate_bars = bars
+        try:
+            # cTrader trendbars carry epoch `time`; give kronos an ISO date so
+            # its (symbol, interval, last_bar_date) dedupe key rotates per bar.
+            gate_bars = [
+                ({**b, "date": datetime.fromtimestamp(float(b["time"]), tz=timezone.utc).isoformat()}
+                 if isinstance(b, dict) and b.get("time") and not b.get("date") else b)
+                for b in bars
+            ]
+        except Exception:
+            gate_bars = bars
+
+        kronos_result: Dict[str, Any] = {}
+        try:
+            kronos_result = await kronos_service.predict(gate_bars, symbol, interval="m5")
+        except Exception as err:
+            logger.debug(f"FX gate: kronos predict failed for {symbol}: {err}")
+
+        return apply_pre_execution_gate(
+            strategy_signal=direction,
+            strategy_confidence=confidence,
+            kronos_result=kronos_result,
+            bars=gate_bars,
+            shadow_mode=(self._fx_gate_mode() != "enforce"),
+            symbol=symbol,
+        )
+
     def _is_ctrader_forex_candidate(self, cand: Dict[str, Any]) -> bool:
         if cand.get("broker") != "ctrader":
             return False
@@ -657,9 +703,42 @@ class SignalCandidateEngine:
                             raw_signal.get("take_profit"),
                             direction=raw_signal.get("direction"),
                         )
-                        raw_signal["stop_loss"] = sl
-                        raw_signal["take_profit"] = tp
+                        # P0: veto geometry the broker clamp deformed into a
+                        # 1:1 (or worse) coin-flip instead of executing it.
+                        validated = CTraderService.validate_protective_geometry(
+                            sym,
+                            raw_signal["entry_price"],
+                            raw_signal.get("stop_loss"),
+                            raw_signal.get("take_profit"),
+                            sl,
+                            tp,
+                            direction=raw_signal.get("direction"),
+                        )
+                        if validated is None:
+                            continue  # next strategy may produce valid geometry
+                        raw_signal["stop_loss"], raw_signal["take_profit"] = validated
                         size_data = self._calculate_size(sym, raw_signal["entry_price"], raw_signal["stop_loss"], broker)
+
+                        # P1: Kronos + heuristic timing gate. Shadow mode logs
+                        # and annotates the candidate; enforce mode blocks.
+                        gate_result = None
+                        if broker == "ctrader" and self._fx_gate_mode() != "off":
+                            try:
+                                gate_result = await self._fx_timing_gate(
+                                    sym,
+                                    raw_signal["direction"],
+                                    raw_signal["confidence"],
+                                    bars,
+                                )
+                            except Exception as err:
+                                logger.debug(f"FX gate error for {sym}: {err}")
+                            if (
+                                gate_result is not None
+                                and gate_result.action == "veto"
+                                and self._fx_gate_mode() == "enforce"
+                            ):
+                                logger.info(f"[{sym}] FX gate ACTIVE VETO: {gate_result.reasoning}")
+                                continue
 
                         # Timing window parameters
                         timing_mode = raw_signal["timing_mode"]
@@ -688,6 +767,15 @@ class SignalCandidateEngine:
                             "reason": raw_signal["reason"],
                             "features": features,
                             "sizing": size_data,
+                            "fx_gate": (
+                                {
+                                    "action": gate_result.action,
+                                    "shadow_veto": gate_result.is_shadow_veto,
+                                    "reasoning": gate_result.reasoning[:300],
+                                }
+                                if gate_result is not None
+                                else None
+                            ),
                             "earliest_exec_at": earliest,
                             "latest_exec_at": latest,
                             "created_at": datetime.now(timezone.utc).isoformat(),
@@ -762,9 +850,17 @@ class SignalCandidateEngine:
                 else:
                     sl = round(entry + (1.2 * atr), 5)
                     tp = round(entry - (2.4 * atr), 5)
+                natural_sl, natural_tp = sl, tp
                 sl, tp = CTraderService.clamp_protective_prices(
                     matched_sym, entry, sl, tp, direction=direction
                 )
+                validated = CTraderService.validate_protective_geometry(
+                    matched_sym, entry, natural_sl, natural_tp, sl, tp,
+                    direction=direction,
+                )
+                if validated is None:
+                    continue
+                sl, tp = validated
                 size_data = self._calculate_size(matched_sym, entry, sl, "ctrader")
 
                 now_ts = int(time.time())

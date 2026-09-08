@@ -893,6 +893,77 @@ class CTraderService(BrokerService):
             return _clamp(stop_loss, True), _clamp(take_profit, False)
         return _clamp(stop_loss, None), _clamp(take_profit, None)
 
+    # ── Post-clamp geometry guards ──────────────────────────────────────────
+    # The broker min-distance clamp can silently rewrite a trade into a
+    # symmetric 1:1 coin-flip: on 2026-09-08 the live FX book measured a
+    # median planned R:R of exactly 1.00, 20% win rate, -$1.13 expectancy
+    # per trade. These guards REJECT deformed geometry instead of executing
+    # it — not trading beats negative-expectancy trading.
+    MIN_EFFECTIVE_RR = float(os.getenv("CTRADER_MIN_EFFECTIVE_RR", "1.5"))
+    REJECT_SUBMIN_STOP = os.getenv("CTRADER_REJECT_SUBMIN_STOP", "true").lower() == "true"
+
+    @classmethod
+    def validate_protective_geometry(
+        cls,
+        symbol: str,
+        entry: float,
+        natural_stop_loss: Optional[float],
+        natural_take_profit: Optional[float],
+        clamped_stop_loss: Optional[float],
+        clamped_take_profit: Optional[float],
+        direction: Optional[str] = None,
+    ) -> Optional[tuple[Optional[float], Optional[float]]]:
+        """Validate clamped SL/TP against strategy-designed geometry.
+
+        Returns the (sl, tp) pair to trade, or None to veto the entry.
+
+        Rule A (sub-minimum stop): the strategy's natural stop sits inside the
+        broker minimum distance, so the clamp had to invent a wider stop the
+        strategy never designed for. The setup needs precision the broker
+        cannot express — skip it.
+
+        Rule B (effective R:R): after clamping, reward:risk must still meet
+        MIN_EFFECTIVE_RR. The clamp widens tight stops AND tight targets to
+        the same minimum, which produced the 1:1 churn cohort. We never widen
+        the TP to compensate — the TP encodes the strategy thesis (mean,
+        measured move), moving it breaks the thesis. Reject instead.
+        """
+        if not entry or clamped_stop_loss is None or clamped_take_profit is None:
+            return clamped_stop_loss, clamped_take_profit
+
+        entry_f = float(entry)
+        pip = max(float(cls.pip_size_for(symbol)), 1e-9)
+        min_dist = cls.min_protective_distance(symbol, entry_f)
+
+        # Rule A — natural stop inside broker minimum
+        if cls.REJECT_SUBMIN_STOP and natural_stop_loss is not None:
+            natural_sl_dist = abs(float(natural_stop_loss) - entry_f)
+            # tolerance: half a pip of rounding slack
+            if 0 < natural_sl_dist < (min_dist - 0.5 * pip):
+                logger.info(
+                    "%s geometry veto: natural stop %.5f is %.1f pips from entry, "
+                    "inside broker minimum %.1f pips — setup too tight to express",
+                    symbol, float(natural_stop_loss),
+                    natural_sl_dist / pip, min_dist / pip,
+                )
+                return None
+
+        # Rule B — effective R:R after clamp
+        sl_dist = abs(float(clamped_stop_loss) - entry_f)
+        tp_dist = abs(float(clamped_take_profit) - entry_f)
+        if sl_dist > 0:
+            eff_rr = tp_dist / sl_dist
+            if eff_rr < cls.MIN_EFFECTIVE_RR:
+                logger.info(
+                    "%s geometry veto: post-clamp R:R %.2f < %.2f "
+                    "(SL %.1f pips, TP %.1f pips) — refusing 1:1 coin-flip",
+                    symbol, eff_rr, cls.MIN_EFFECTIVE_RR,
+                    sl_dist / pip, tp_dist / pip,
+                )
+                return None
+
+        return clamped_stop_loss, clamped_take_profit
+
     @staticmethod
     def merge_symbol_catalog(
         defaults: Dict[str, int],
@@ -1517,6 +1588,24 @@ class CTraderService(BrokerService):
                 tp_units = self.relative_stop_units(float(current_price), float(take_profit_price), digits)
                 if tp_units > 0:
                     order_req.relativeTakeProfit = tp_units
+
+            # Final geometry gate at execution price: entry drift between scan
+            # and fill can shrink one leg and break the designed R:R even
+            # though both levels passed validation at scan time.
+            if current_price and stop_loss_price and take_profit_price:
+                sl_d = abs(float(stop_loss_price) - float(current_price))
+                tp_d = abs(float(take_profit_price) - float(current_price))
+                if sl_d > 0 and (tp_d / sl_d) < self.MIN_EFFECTIVE_RR:
+                    logger.critical(
+                        f"Refusing {ct_symbol} entry: effective R:R {tp_d / sl_d:.2f} < "
+                        f"{self.MIN_EFFECTIVE_RR:.2f} at execution price {current_price} "
+                        f"(entry drift broke geometry)"
+                    )
+                    return {
+                        "status": "error",
+                        "error": "effective R:R below minimum at execution price",
+                        "symbol": ct_symbol,
+                    }
 
             event = threading.Event()
             result = {"status": "pending"}

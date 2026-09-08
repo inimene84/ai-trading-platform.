@@ -78,9 +78,11 @@ async def test_scan_markets_skips_symbols_without_enough_bars():
 @pytest.mark.asyncio
 async def test_macro_sell_candidate_has_stop_above_entry():
     """A short with its stop below entry never caps the loss."""
+    # Volatility must clear the broker minimum stop (10 pips) after the
+    # 1.2x ATR multiplier, else the geometry veto correctly rejects the trade.
     bearish = [
-        {"close": 1.10 - i * 0.0005, "high": 1.10 - i * 0.0005 + 0.0001,
-         "low": 1.10 - i * 0.0005 - 0.0001, "volume": 100}
+        {"close": 1.10 - i * 0.001, "high": 1.10 - i * 0.001 + 0.0002,
+         "low": 1.10 - i * 0.001 - 0.0002, "volume": 100}
         for i in range(30)
     ]
     calendar = {"events": [{"event": "NFP", "currency": "USD", "impact": "high"}]}
