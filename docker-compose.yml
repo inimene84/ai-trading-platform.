@@ -227,6 +227,39 @@ services:
       options:
         max-size: 10m
         max-file: 3
+  searxng-valkey:
+    image: docker.io/valkey/valkey:8-alpine
+    container_name: ai-trading-searxng-valkey
+    command: valkey-server --save 30 1 --loglevel warning
+    restart: unless-stopped
+    networks:
+      - trading-net
+    volumes:
+      - searxng-valkey-data:/data
+  searxng:
+    image: ghcr.io/searxng/searxng:2026.9.8-3fdc6d753
+    container_name: ai-trading-searxng
+    restart: unless-stopped
+    depends_on:
+      - searxng-valkey
+    ports:
+      - "127.0.0.1:8888:8080"
+    environment:
+      SEARXNG_BASE_URL: ${SEARXNG_BASE_URL:-http://ai-trading-searxng:8080/}
+      SEARXNG_SECRET: ${SEARXNG_SECRET:-local-searxng-secret}
+      SEARXNG_VALKEY_URL: redis://searxng-valkey:6379/0
+    volumes:
+      - ./searxng/core-config:/etc/searxng:rw
+      - searxng-cache:/var/cache/searxng
+    networks:
+      - trading-net
+      - n8n_default
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
   kronos-infer:
     build:
       context: ./kronos-infer
@@ -266,3 +299,5 @@ volumes:
   app-logs:
   influxdb-storage:
   kronos-model-cache:
+  searxng-cache:
+  searxng-valkey-data:

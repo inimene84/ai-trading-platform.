@@ -77,7 +77,8 @@ for f in \
   "${WORKFLOW_DIR}/01_market_scanner_workflow.json" \
   "${WORKFLOW_DIR}/02_news_macro_scanner_workflow.json" \
   "${WORKFLOW_DIR}/03_execution_scheduler_workflow.json" \
-  "${WORKFLOW_DIR}/04_forex_scanner_workflow.json"
+  "${WORKFLOW_DIR}/04_forex_scanner_workflow.json" \
+  "${WORKFLOW_DIR}/06_searxng_search_workflow.json"
 do
   if [[ ! -f "${f}" ]]; then
     echo "ERROR: missing ${f}"

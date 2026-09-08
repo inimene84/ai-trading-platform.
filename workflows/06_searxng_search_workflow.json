@@ -1,0 +1,117 @@
+{
+  "name": "06 - SearXNG Private Web Search",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "6a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c06",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "q1",
+              "name": "query",
+              "value": "={{ $json.query || 'self-hosted vector database' }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "6b2c3d4e-5f6a-7b8c-9d0e-1f2a3b4c5d07",
+      "name": "Default Query",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [480, 300]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "http://ai-trading-searxng:8080/search",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "q",
+              "value": "={{ $json.query }}"
+            },
+            {
+              "name": "format",
+              "value": "json"
+            },
+            {
+              "name": "language",
+              "value": "en"
+            },
+            {
+              "name": "categories",
+              "value": "general"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 25000
+        }
+      },
+      "id": "6c3d4e5f-6a7b-8c9d-0e1f-2a3b4c5d6e08",
+      "name": "HTTP: SearXNG JSON",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [720, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const payload = items[0].json || {};\nconst results = (payload.results || []).slice(0, 8).map((r) => ({\n  title: r.title,\n  url: r.url,\n  content: r.content,\n  engine: r.engine,\n}));\nreturn [{\n  json: {\n    query: payload.query,\n    number_of_results: payload.number_of_results,\n    results,\n  },\n}];"
+      },
+      "id": "6d4e5f6a-7b8c-9d0e-1f2a-3b4c5d6e7f09",
+      "name": "Map title/url/content",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [960, 300]
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Default Query",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Default Query": {
+      "main": [
+        [
+          {
+            "node": "HTTP: SearXNG JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP: SearXNG JSON": {
+      "main": [
+        [
+          {
+            "node": "Map title/url/content",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
