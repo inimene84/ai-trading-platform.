@@ -113,5 +113,6 @@ services:
       - N8N_SANDBOX_SERVICE_URL=http://sandbox-api:8080
       - N8N_SANDBOX_SERVICE_API_KEY=${N8N_SANDBOX_SERVICE_API_KEY}
       - N8N_INSTANCE_AI_SEARXNG_URL=${N8N_INSTANCE_AI_SEARXNG_URL:-http://ai-trading-searxng:8080}
-      - N8N_INSTANCE_AI_MODEL=${N8N_INSTANCE_AI_MODEL:-anthropic/claude-opus-4-8}
-      - N8N_INSTANCE_AI_MODEL_API_KEY=${N8N_INSTANCE_AI_MODEL_API_KEY:-}
+      # Do not set N8N_INSTANCE_AI_MODEL here. n8n treats that env var as
+      # environment-managed and rejects UI saves with
+      # "Cannot update environment-managed fields: modelName".

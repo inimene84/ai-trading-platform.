@@ -94,4 +94,4 @@ docker compose logs sandbox-api 2>&1 | grep -i runner | tail -10 || true
 echo "--- n8n healthz ---"
 curl -sf http://127.0.0.1:5678/healthz
 echo
-echo "Done. Add N8N_INSTANCE_AI_MODEL_API_KEY in ${ENV_FILE} (or the n8n AI settings UI) to turn Assistant on."
+echo "Done. Set the model in n8n → Settings → AI Assistant (do not set N8N_INSTANCE_AI_MODEL in .env or the UI cannot save the name)."
