@@ -1,0 +1,31 @@
+# Internal SearXNG for n8n / LiteLLM / custom agents.
+# https://docs.searxng.org/admin/settings/
+#
+# JSON must be listed under search.formats or /search?format=json returns 403.
+# Limiter stays off: this instance is bound to 127.0.0.1 + trading-net only.
+# Enabling the bot limiter would block non-browser JSON clients.
+
+use_default_settings: true
+
+general:
+  instance_name: "QuantumTrade SearXNG"
+  enable_metrics: false
+
+search:
+  safe_search: 0
+  autocomplete: ""
+  default_lang: "en"
+  formats:
+    - html
+    - json
+
+server:
+  limiter: false
+  public_instance: false
+  image_proxy: false
+  method: "GET"
+  # Overridden by SEARXNG_SECRET at runtime.
+  secret_key: "change-me-via-SEARXNG_SECRET"
+
+valkey:
+  url: redis://searxng-valkey:6379/0
