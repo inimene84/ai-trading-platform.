@@ -1,0 +1,25 @@
+title = "quantumtrade-pro"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "burned-admin-fallback"
+description = "Hardcoded admin API fallback previously shipped in the frontend"
+regex = '''39b2487d5386c4fd52e258721a2170915797f7280b8b0afc'''
+tags = ["key", "quantumtrade"]
+
+[[allowlists]]
+description = "Documented placeholders and the scanner's own deny-list"
+paths = [
+  '''(^|/)\.env\.example$''',
+  '''(^|/)n8n/\.env\.example$''',
+  '''(^|/)scripts/ci/forbidden_substrings\.txt$''',
+  '''(^|/)\.gitleaks\.toml$''',
+]
+regexTarget = "match"
+regexes = [
+  '''your_[A-Za-z0-9_]+_here''',
+  '''change-me-strong-password''',
+  '''sk-local-litellm-key''',
+]
