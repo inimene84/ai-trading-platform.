@@ -70,3 +70,37 @@ def test_paper_startup_allows_missing_admin_token(monkeypatch):
     for name in ("ADMIN_API_KEY", "API_AUTH_TOKEN", "BACKEND_API_KEY"):
         monkeypatch.delenv(name, raising=False)
     validate_live_startup_security()
+
+
+def test_jesse_and_finmem_routes_are_sensitive():
+    assert is_sensitive_request(_req("POST", "/jesse/sync")) is True
+    assert is_sensitive_request(_req("POST", "/jesse/finmem/ingest")) is True
+    assert is_sensitive_request(_req("POST", "/jesse/finmem/evaluate")) is True
+    assert is_sensitive_request(_req("GET", "/jesse/ml-predict")) is True
+    assert is_sensitive_request(_req("GET", "/api/jesse/status")) is True
+
+
+def test_jesse_unauthenticated_requests_blocked(monkeypatch):
+    from starlette.testclient import TestClient
+    from backend.main import app
+
+    monkeypatch.setenv("ADMIN_API_KEY", "test-secret-key")
+    client = TestClient(app, raise_server_exceptions=False)
+
+    # Missing token -> 401
+    r_sync = client.post("/jesse/sync", json={})
+    assert r_sync.status_code == 401
+
+    r_ingest = client.post("/jesse/finmem/ingest", json={"symbol": "BTC-USDT", "layer": "shallow", "content": "news"})
+    assert r_ingest.status_code == 401
+
+    r_eval = client.post("/jesse/finmem/evaluate", json={"symbol": "BTC-USDT"})
+    assert r_eval.status_code == 401
+
+    r_predict = client.get("/jesse/ml-predict?symbol=BTC-USDT")
+    assert r_predict.status_code == 401
+
+    # Wrong token -> 403
+    r_bad = client.post("/jesse/sync", json={}, headers={"X-API-Key": "wrong-key"})
+    assert r_bad.status_code == 403
+

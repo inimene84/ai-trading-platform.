@@ -114,7 +114,7 @@ services:
       KIE_MODEL: gpt-5-6-terra
       KIE_OPUS_MODEL: ${KIE_OPUS_MODEL:-gpt-5-6-terra}
       LITELLM_MODEL_FALLBACK: true
-      LITELLM_MASTER_KEY: ${LITELLM_API_KEY:-sk-local-litellm-key}
+      LITELLM_MASTER_KEY: ${LITELLM_API_KEY:?LITELLM_API_KEY must be set}
     command: --config /tmp/litellm-config.yaml --port 4000
     logging:
       driver: json-file
@@ -135,7 +135,7 @@ services:
     ports:
       - "127.0.0.1:6333:6333" # local diagnostics; backend uses Docker network
     environment:
-      QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY:-local-qdrant-key}
+      QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY:?QDRANT_API_KEY must be set}
     volumes:
       - ./qdrant-storage:/qdrant/storage
     networks:
@@ -146,7 +146,7 @@ services:
     environment:
       - DOCKER_INFLUXDB_INIT_MODE=setup
       - DOCKER_INFLUXDB_INIT_USERNAME=admin
-      - DOCKER_INFLUXDB_INIT_PASSWORD=${INFLUXDB_ADMIN_PASSWORD:-quantum12345}
+      - DOCKER_INFLUXDB_INIT_PASSWORD=${INFLUXDB_ADMIN_PASSWORD:?INFLUXDB_ADMIN_PASSWORD must be set}
       - DOCKER_INFLUXDB_INIT_ORG=hedge-fund
       - DOCKER_INFLUXDB_INIT_BUCKET=news-sentiment
       - DOCKER_INFLUXDB_INIT_RETENTION=7d
@@ -164,7 +164,7 @@ services:
     container_name: ai-trading-nginx
     restart: unless-stopped
     ports:
-      - 8081:80
+      - "127.0.0.1:8081:80"
     volumes:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
       - ./frontend/dist:/usr/share/nginx/html:ro
@@ -188,7 +188,7 @@ services:
       - MCP_TRANSPORT=http
       - MCP_HOST=0.0.0.0
       - MCP_PORT=9100
-      - MCP_API_TOKEN=${ADMIN_API_KEY:-local-admin-key}
+      - MCP_API_TOKEN=${ADMIN_API_KEY:?ADMIN_API_KEY must be set}
       - SCRAPLING_RESEARCH_URL=http://ai-trading-scrapling:8080
     networks:
       - trading-net
@@ -205,11 +205,11 @@ services:
     env_file:
       - .env
     environment:
-      SCRAPLING_MCP_AUTH_TOKEN: ${ADMIN_API_KEY:-local-admin-key}
-      ADMIN_API_KEY: ${ADMIN_API_KEY:-local-admin-key}
+      SCRAPLING_MCP_AUTH_TOKEN: ${ADMIN_API_KEY:?ADMIN_API_KEY must be set}
+      ADMIN_API_KEY: ${ADMIN_API_KEY:?ADMIN_API_KEY must be set}
       BACKEND_BASE_URL: http://ai-trading-backend:8000
       BACKEND_API_PREFIX: /api
-      SCRAPLING_INGEST_ENABLED: ${SCRAPLING_INGEST_ENABLED:-true}
+      SCRAPLING_INGEST_ENABLED: ${SCRAPLING_INGEST_ENABLED:-false}
       SCRAPLING_INGEST_INTERVAL_SEC: ${SCRAPLING_INGEST_INTERVAL_SEC:-3600}
       JBLANKED_API_KEY: ${JBLANKED_API_KEY:-}
       CALENDAR_JSON_URL: ${CALENDAR_JSON_URL:-}

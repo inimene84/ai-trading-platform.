@@ -28,23 +28,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Fail closed if SSH key is missing
+      - name: Fail closed if SSH secrets are missing
         env:
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
         run: |
-          if [ -z "$SSH_PRIVATE_KEY" ]; then
-            echo "::error::SSH_PRIVATE_KEY secret is not configured in GitHub repo settings. Configure it under Settings → Secrets and variables → Actions, or run the deploy manually on the VPS."
+          if [ -z "$SSH_PRIVATE_KEY" ] || [ -z "$SSH_HOST" ] || [ -z "$SSH_USER" ]; then
+            echo "::error::SSH_PRIVATE_KEY, SSH_HOST, and SSH_USER secrets must be configured in GitHub repo settings (Settings → Secrets and variables → Actions)."
             exit 1
           fi
           mkdir -p ~/.ssh
           printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H "${{ secrets.SSH_HOST || '72.60.18.113' }}" >> ~/.ssh/known_hosts 2>/dev/null || true
+          ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
 
       - name: Deploy to VPS
         env:
-          SSH_HOST: ${{ secrets.SSH_HOST || '72.60.18.113' }}
-          SSH_USER: ${{ secrets.SSH_USER || 'root' }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
         run: |
           ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new \
             "${SSH_USER}@${SSH_HOST}" 'bash -s' << 'REMOTE'

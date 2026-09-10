@@ -213,6 +213,14 @@ class JesseBridgeService:
         trail_atr_mult: float = 1.6,
     ) -> Dict[str, Any]:
         """Apply validated quant strategy parameters directly to active RiskConfig."""
+        if os.getenv("JESSE_SYNC_TO_LIVE", "false").lower() != "true":
+            logger.info("JESSE_SYNC_TO_LIVE is disabled — strategy sync is a no-op")
+            return {
+                "status": "blocked",
+                "message": "JESSE_SYNC_TO_LIVE is disabled; sync is a no-op",
+                "synced": False,
+            }
+
         import re
         from backend.services.risk_config import refresh_risk_config
 

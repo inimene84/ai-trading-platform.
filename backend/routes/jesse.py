@@ -140,18 +140,32 @@ async def get_finmem_status(symbol: str = Query("BTC-USDT")) -> Dict[str, Any]:
 @router.post("/finmem/evaluate")
 async def evaluate_finmem(req: FinMemEvalRequest = FinMemEvalRequest()) -> Dict[str, Any]:
     """Trigger FINMEM immediate reflection (layered memory recall + LLM decision)."""
-    from backend.services.finmem_service import finmem_service
-    from backend.services.jesse_bridge import jesse_bridge
+    import os
+    if os.getenv("FINMEM_ENABLED", "false").lower() != "true":
+        raise HTTPException(
+            status_code=503,
+            detail="FINMEM evaluation is disabled (FINMEM_ENABLED=false)"
+        )
 
-    # Fetch recent candles from Jesse DB / Bridge
+    from backend.services.finmem_service import finmem_service
+
+    # Fetch recent candles from Binance market data
+    bars = []
     try:
-        # Use existing candles from broker or Jesse
-        from backend.services.market_data import market_data
-        bars = await market_data.get_candles(req.symbol.replace("-", ""), req.timeframe, limit=50)
-        if not bars:
-            bars = [{"close": 78400.0, "open": 78200.0, "high": 78500.0, "low": 78100.0, "volume": 1000.0}]
-    except Exception:
-        bars = [{"close": 78400.0, "open": 78200.0, "high": 78500.0, "low": 78100.0, "volume": 1000.0}]
+        from backend.services.binance_market_data import binance_market_data
+        clean_sym = req.symbol.replace("-", "").upper()
+        bars = await binance_market_data.get_klines(clean_sym, interval=req.timeframe, limit=50)
+    except Exception as e:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Failed to fetch market data for {req.symbol} (fail-closed): {e}"
+        )
+
+    if not bars:
+        raise HTTPException(
+            status_code=503,
+            detail=f"No market data bars available for {req.symbol} — fail closed (synthetic prices prohibited)"
+        )
 
     dec = await finmem_service.immediate_reflect(req.symbol, bars)
     return {

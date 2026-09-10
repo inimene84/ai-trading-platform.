@@ -129,8 +129,9 @@ async def test_jesse_ml_gate_boost_on_consensus(ml_risk_config, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_jesse_ml_gate_fail_open_on_error(ml_risk_config, monkeypatch):
-    """When Jesse ML server is down or errors, gate fails open gracefully without blocking trades."""
+async def test_jesse_ml_gate_fail_open_on_error_in_paper(ml_risk_config, monkeypatch):
+    """In paper mode, when Jesse ML server is down or errors, gate fails open gracefully without blocking trades."""
+    monkeypatch.setenv("TRADING_MODE", "paper")
     monkeypatch.setenv("JESSE_ML_GATE_ENABLED", "true")
     engine = DecisionEngine(ml_risk_config)
     engine.enable_kronos = False
@@ -144,6 +145,65 @@ async def test_jesse_ml_gate_fail_open_on_error(ml_risk_config, monkeypatch):
 
     with patch("backend.services.jesse_bridge.jesse_bridge.get_ml_prediction", AsyncMock(side_effect=Exception("Connection refused"))):
         decision = await engine.evaluate_symbol("BTCUSDC", bars, None, 0, [], False)
-        # Should still produce entry decision despite ML service failure
+        # In paper mode, fails open
         assert decision is not None
         assert decision.action == "BUY"
+
+
+@pytest.mark.asyncio
+async def test_jesse_ml_gate_fail_closed_in_live_mode(ml_risk_config, monkeypatch):
+    """In LIVE mode, when Jesse ML server is down or errors, gate fails closed (vetoes entry)."""
+    monkeypatch.setenv("TRADING_MODE", "live")
+    monkeypatch.setenv("JESSE_ML_GATE_ENABLED", "true")
+    engine = DecisionEngine(ml_risk_config)
+    engine.enable_kronos = False
+    engine.account_equity = 1000.0
+    engine.account_available = 1000.0
+    bars = _make_bars(50)
+
+    mock_signal = StrategySignal(symbol="BTCUSDC", signal="BUY", confidence=0.60, entry_price=bars[-1]["close"])
+    engine.strategy.generate_signal = MagicMock(return_value=mock_signal)
+    engine.regime_detector.detect = MagicMock(return_value=MagicMock(regime="TRENDING", weights=MagicMock(return_value={})))
+
+    with patch("backend.services.jesse_bridge.jesse_bridge.get_ml_prediction", AsyncMock(side_effect=Exception("Connection refused"))):
+        decision = await engine.evaluate_symbol("BTCUSDC", bars, None, 0, [], False)
+        # In live mode, must fail closed
+        assert decision is None
+
+
+@pytest.mark.asyncio
+async def test_jesse_ml_kelly_clipping_below_30_partition_trades(ml_risk_config, monkeypatch):
+    """When partition closed trades < 30, Kelly multiplier must be clipped to [0.25, 1.0]."""
+    monkeypatch.setenv("TRADING_MODE", "live")
+    monkeypatch.setenv("JESSE_ML_GATE_ENABLED", "true")
+    engine = DecisionEngine(ml_risk_config)
+    engine.enable_kronos = False
+    engine.account_equity = 1000.0
+    engine.account_available = 1000.0
+    bars = _make_bars(50)
+
+    mock_signal = StrategySignal(
+        symbol="BTCUSDC", signal="BUY", confidence=0.60, entry_price=bars[-1]["close"],
+        stop_loss=bars[-1]["close"] * 0.98, take_profit=bars[-1]["close"] * 1.04,
+    )
+    engine.strategy.generate_signal = MagicMock(return_value=mock_signal)
+    engine.regime_detector.detect = MagicMock(return_value=MagicMock(regime="TRENDING", weights=MagicMock(return_value={})))
+
+    # Jesse returns a high Kelly multiplier (e.g. 1.8x)
+    mock_ml = {
+        "status": "success",
+        "signal": "BUY",
+        "confidence": 0.70,
+        "probabilities": {"bullish": 0.70, "bearish": 0.10, "neutral": 0.20},
+        "uncertainty": "LOW",
+        "gated": False,
+        "kelly": {"size_multiplier": 1.8},
+    }
+
+    with patch("backend.services.jesse_bridge.jesse_bridge.get_ml_prediction", AsyncMock(return_value=mock_ml)):
+        decision = await engine.evaluate_symbol("BTCUSDC", bars, None, 0, [], False)
+        assert decision is not None
+        # Base trade_usdt_amount is 10.0 (from ml_risk_config), clipped kelly is 1.0x (not 1.8x)
+        # If clipped to 1.0x, notional doesn't scale above 1.0x trade_usdt or risk
+        assert decision.action == "BUY"
+

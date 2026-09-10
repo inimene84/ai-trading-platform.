@@ -517,9 +517,11 @@ class FinMemService:
         Gathers current market facts, closing price differences, and 3-period momentum.
         """
         if not bars:
-            return {"latest_close": 0.0, "momentum_3d": 0.0, "volatility": 0.0}
+            raise ValueError(f"Valid candle bars required for FINMEM observation of {symbol} (got empty bars) — fail closed")
 
-        closes = [float(b["close"]) for b in bars]
+        closes = [float(b["close"]) for b in bars if b.get("close") is not None]
+        if not closes or closes[-1] <= 0:
+            raise ValueError(f"Valid positive close price required for FINMEM observation of {symbol} — fail closed")
         latest_close = closes[-1]
 
         # 3-period momentum: log return over last 3 bars

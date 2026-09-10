@@ -30,7 +30,11 @@ def _snapshot_risk_equity(snapshot: PortfolioSnapshot | None) -> float:
 
 
 def _filter_snapshots_for_risk(rows: list[PortfolioSnapshot]) -> list[PortfolioSnapshot]:
-    """Scope snapshot rows to active broker and trading mode when partitioned."""
+    """Scope snapshot rows to active broker and trading mode when partitioned.
+    
+    In live mode, strictly enforce mode='live' and match broker/account_id.
+    Never fallback to paper or unpartitioned rows in live mode.
+    """
     active = _active_broker_name()
     aliases = {
         "ctrader": {"ctrader", "ctrader:paper", "ic", "icmarkets"},
@@ -38,12 +42,36 @@ def _filter_snapshots_for_risk(rows: list[PortfolioSnapshot]) -> list[PortfolioS
     }
     wanted = aliases.get(active, {active})
     current_mode = get_trading_mode().value if hasattr(get_trading_mode(), "value") else str(get_trading_mode())
+    is_live = (current_mode.lower() == "live")
+    active_account = os.getenv("CTRADER_ACCOUNT_ID") if active == "ctrader" else None
 
-    scoped = [
-        r for r in rows
-        if (not getattr(r, "broker", None) or getattr(r, "broker", "").lower() in wanted)
-        and (not getattr(r, "mode", None) or getattr(r, "mode", "").lower() == current_mode.lower())
-    ]
+    scoped = []
+    for r in rows:
+        row_broker = (getattr(r, "broker", None) or "").lower()
+        row_mode = (getattr(r, "mode", None) or "").lower()
+        row_account = getattr(r, "account_id", None)
+
+        if is_live:
+            # In live mode, strict matching: mode must be explicitly 'live', never null or paper
+            if row_mode != "live":
+                continue
+            if row_broker and row_broker not in wanted:
+                continue
+            if active_account and row_account and str(row_account).strip() != str(active_account).strip():
+                continue
+            scoped.append(r)
+        else:
+            # In paper/backtest mode:
+            if row_mode and row_mode != current_mode.lower() and row_mode != "paper":
+                continue
+            if row_broker and row_broker not in wanted:
+                continue
+            if active_account and row_account and str(row_account).strip() != str(active_account).strip():
+                continue
+            scoped.append(r)
+
+    if is_live:
+        return scoped
     return scoped if scoped else rows
 
 

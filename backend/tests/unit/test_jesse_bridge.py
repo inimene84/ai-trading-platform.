@@ -16,10 +16,11 @@ def client():
 
 
 def test_jesse_bridge_sync_parameters(tmp_path, monkeypatch):
-    """Test sync_strategy_to_risk_config updates environment and reloads RiskConfig."""
+    """Test sync_strategy_to_risk_config updates environment and reloads RiskConfig when JESSE_SYNC_TO_LIVE=true."""
     dummy_env = tmp_path / ".env"
     dummy_env.write_text("SL_ATR_MULT=1.0\nTP_ATR_MULT=2.5\nTRAIL_ACTIVATION_ATR=1.5\nTRAIL_ATR_MULT=0.8\n")
     monkeypatch.setenv("ENV_FILE_PATH", str(dummy_env))
+    monkeypatch.setenv("JESSE_SYNC_TO_LIVE", "true")
 
     service = JesseBridgeService()
     result = service.sync_strategy_to_risk_config(
@@ -43,6 +44,24 @@ def test_jesse_bridge_sync_parameters(tmp_path, monkeypatch):
     assert "TRAIL_ATR_MULT=1.4" in content
 
 
+def test_jesse_bridge_sync_blocked_when_flag_disabled(tmp_path, monkeypatch):
+    """When JESSE_SYNC_TO_LIVE is false (default), sync is blocked and does not touch RiskConfig."""
+    dummy_env = tmp_path / ".env"
+    dummy_env.write_text("SL_ATR_MULT=1.0\nTP_ATR_MULT=2.5\n")
+    monkeypatch.setenv("ENV_FILE_PATH", str(dummy_env))
+    monkeypatch.setenv("JESSE_SYNC_TO_LIVE", "false")
+
+    service = JesseBridgeService()
+    result = service.sync_strategy_to_risk_config(sl_atr_mult=3.0, tp_atr_mult=6.0)
+
+    assert result["status"] == "blocked"
+    assert result["synced"] is False
+    # Content must NOT have changed
+    content = dummy_env.read_text()
+    assert "SL_ATR_MULT=1.0" in content
+    assert "SL_ATR_MULT=3.0" not in content
+
+
 @pytest.mark.asyncio
 async def test_jesse_bridge_get_status_fallback():
     """Test get_status returns unavailable when Jesse server cannot be reached."""
@@ -54,10 +73,11 @@ async def test_jesse_bridge_get_status_fallback():
 
 
 def test_jesse_sync_route(client, monkeypatch, tmp_path):
-    """Test /api/jesse/sync endpoint with admin API key."""
+    """Test /api/jesse/sync endpoint with admin API key when JESSE_SYNC_TO_LIVE=true."""
     dummy_env = tmp_path / ".env"
     dummy_env.write_text("SL_ATR_MULT=1.0\nTP_ATR_MULT=2.0\n")
     monkeypatch.setenv("ENV_FILE_PATH", str(dummy_env))
+    monkeypatch.setenv("JESSE_SYNC_TO_LIVE", "true")
 
     api_key = os.getenv("ADMIN_API_KEY", "test_key")
     monkeypatch.setenv("ADMIN_API_KEY", api_key)
@@ -77,6 +97,34 @@ def test_jesse_sync_route(client, monkeypatch, tmp_path):
     assert data["status"] == "synced"
     assert data["sl_atr_mult"] == 2.25
     assert data["tp_atr_mult"] == 5.0
+
+
+def test_finmem_evaluate_fails_closed_when_disabled_or_no_bars(client, monkeypatch):
+    """FINMEM evaluation must fail closed (503) when FINMEM_ENABLED=false or market data fails."""
+    api_key = os.getenv("ADMIN_API_KEY", "test_key")
+    monkeypatch.setenv("ADMIN_API_KEY", api_key)
+
+    # 1. Disabled via FINMEM_ENABLED=false
+    monkeypatch.setenv("FINMEM_ENABLED", "false")
+    res_disabled = client.post(
+        "/api/jesse/finmem/evaluate",
+        headers={"x-api-key": api_key, "Content-Type": "application/json"},
+        json={"symbol": "BTC-USDT"},
+    )
+    assert res_disabled.status_code == 503
+    assert "disabled" in res_disabled.json()["detail"]
+
+    # 2. Enabled but market data unavailable -> 503 (fail closed, no 78400 dummy prices)
+    monkeypatch.setenv("FINMEM_ENABLED", "true")
+    from backend.services.binance_market_data import binance_market_data
+    with patch.object(binance_market_data, "get_klines", AsyncMock(return_value=[])):
+        res_no_data = client.post(
+            "/api/jesse/finmem/evaluate",
+            headers={"x-api-key": api_key, "Content-Type": "application/json"},
+            json={"symbol": "BTC-USDT"},
+        )
+        assert res_no_data.status_code == 503
+        assert "fail closed" in res_no_data.json()["detail"]
 
 
 @pytest.mark.asyncio

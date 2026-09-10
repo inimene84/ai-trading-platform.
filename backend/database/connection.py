@@ -78,6 +78,19 @@ def init_db_schema():
                     conn.execute(text("ALTER TABLE portfolio_snapshots ADD COLUMN account_id VARCHAR(50);"))
                 if "mode" not in cols_snap:
                     conn.execute(text("ALTER TABLE portfolio_snapshots ADD COLUMN mode VARCHAR(20) DEFAULT 'paper';"))
+                # Backfill legacy rows with NULL mode to 'paper'
+                conn.execute(text("UPDATE trades SET mode = 'paper' WHERE mode IS NULL;"))
+                conn.execute(text("UPDATE portfolio_snapshots SET mode = 'paper' WHERE mode IS NULL;"))
+                conn.commit()
+            except Exception:
+                pass
+    else:
+        # Non-sqlite (e.g. Postgres)
+        from sqlalchemy import text
+        with engine.connect() as conn:
+            try:
+                conn.execute(text("UPDATE trades SET mode = 'paper' WHERE mode IS NULL;"))
+                conn.execute(text("UPDATE portfolio_snapshots SET mode = 'paper' WHERE mode IS NULL;"))
                 conn.commit()
             except Exception:
                 pass

@@ -176,6 +176,15 @@ class CTraderToken(Base):
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
 
+def _default_snapshot_mode() -> str:
+    try:
+        from backend.services.trading_mode import get_trading_mode
+        m = get_trading_mode()
+        return m.value if hasattr(m, "value") else str(m)
+    except Exception:
+        return "paper"
+
+
 class PortfolioSnapshot(Base):
     """Portfolio state snapshots for equity curve tracking"""
     __tablename__ = "portfolio_snapshots"
@@ -190,7 +199,12 @@ class PortfolioSnapshot(Base):
     cycle_number = Column(Integer, nullable=True)
     broker = Column(String(50), nullable=True, default="ctrader", index=True)
     account_id = Column(String(50), nullable=True, index=True)
-    mode = Column(String(20), nullable=True, default="paper", index=True)
+    mode = Column(String(20), nullable=True, default=_default_snapshot_mode, index=True)
+
+    def __init__(self, **kwargs):
+        if "mode" not in kwargs or kwargs["mode"] is None:
+            kwargs["mode"] = _default_snapshot_mode()
+        super().__init__(**kwargs)
 
 
 # ═══ Paper Trading Persistence Models ═══ (Fincept Port A)

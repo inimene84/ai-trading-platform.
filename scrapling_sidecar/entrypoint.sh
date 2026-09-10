@@ -9,7 +9,7 @@ fi
 
 uv run python /opt/scrapling-sidecar/research_api.py &
 
-if [ "${SCRAPLING_INGEST_ENABLED:-true}" = "true" ]; then
+if [ "${SCRAPLING_INGEST_ENABLED:-false}" = "true" ]; then
   uv run python /opt/scrapling-sidecar/ingest.py &
 fi
 

@@ -769,26 +769,27 @@ async def analyze_symbol(
 
     # FINMEM Cognitive Agent (Stevens Institute of Technology / arXiv:2311.13743v2)
     # Stratified layered memory (shallow/intermediate/deep) + self-adaptive dynamic character
-    try:
-        from backend.services.finmem_service import finmem_service
-        finmem_dec = await finmem_service.immediate_reflect(symbol, bars, external_context=metrics)
-        sig = "bullish" if finmem_dec.action == "BUY" else ("bearish" if finmem_dec.action == "SELL" else "neutral")
-        opinions.append(AgentOpinion(
-            agent="finmem_cognitive_agent",
-            signal=sig,
-            confidence=finmem_dec.confidence,
-            reasoning=f"[{finmem_dec.risk_character.upper()}] {finmem_dec.reasoning}",
-            metadata={
-                "action": finmem_dec.action,
-                "character": finmem_dec.risk_character,
-                "cited_ids": finmem_dec.cited_memory_ids,
-                "retrieved_count": finmem_dec.retrieved_memory_count,
-                "latency_ms": finmem_dec.latency_ms,
-            },
-        ))
-        logger.info(f"[{symbol}] FINMEM Cognitive Agent: {finmem_dec.action} (conf={finmem_dec.confidence:.2f}, char={finmem_dec.risk_character})")
-    except Exception as e:
-        logger.warning(f"FINMEM opinion failed for {symbol}: {e}")
+    if os.getenv("FINMEM_ENABLED", "false").lower() == "true":
+        try:
+            from backend.services.finmem_service import finmem_service
+            finmem_dec = await finmem_service.immediate_reflect(symbol, bars, external_context=metrics)
+            sig = "bullish" if finmem_dec.action == "BUY" else ("bearish" if finmem_dec.action == "SELL" else "neutral")
+            opinions.append(AgentOpinion(
+                agent="finmem_cognitive_agent",
+                signal=sig,
+                confidence=finmem_dec.confidence,
+                reasoning=f"[{finmem_dec.risk_character.upper()}] {finmem_dec.reasoning}",
+                metadata={
+                    "action": finmem_dec.action,
+                    "character": finmem_dec.risk_character,
+                    "cited_ids": finmem_dec.cited_memory_ids,
+                    "retrieved_count": finmem_dec.retrieved_memory_count,
+                    "latency_ms": finmem_dec.latency_ms,
+                },
+            ))
+            logger.info(f"[{symbol}] FINMEM Cognitive Agent: {finmem_dec.action} (conf={finmem_dec.confidence:.2f}, char={finmem_dec.risk_character})")
+        except Exception as e:
+            logger.warning(f"FINMEM opinion failed for {symbol}: {e}")
 
     # Aggregate
     opinion = _aggregate_opinions(symbol, opinions, kronos_result, social_result, alerts)

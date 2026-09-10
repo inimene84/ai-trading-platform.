@@ -475,3 +475,46 @@ def test_risk_guard_enforces_sandbox_drawdown_when_explicitly_configured(db_sess
         enforce_risk_limits(db_session, cfg, [], snap_low)
 
 
+def test_filter_snapshots_strict_partitioning_live_vs_paper(monkeypatch):
+    from backend.services.risk_guard import _filter_snapshots_for_risk
+    from backend.database.models import PortfolioSnapshot
+
+    snap_paper = PortfolioSnapshot(id=1, broker="ctrader", mode="paper", total_value=100000.0, cash=100000.0)
+    snap_live = PortfolioSnapshot(id=2, broker="ctrader", mode="live", total_value=500.0, cash=500.0)
+    snap_binance = PortfolioSnapshot(id=3, broker="binance_futures", mode="live", total_value=1000.0, cash=1000.0)
+    rows = [snap_paper, snap_live, snap_binance]
+
+    # When live and ctrader
+    monkeypatch.setenv("TRADING_MODE", "live")
+    monkeypatch.setenv("ACTIVE_BROKER", "ctrader")
+    filtered = _filter_snapshots_for_risk(rows)
+    assert len(filtered) == 1
+    assert filtered[0].id == 2
+    assert filtered[0].mode == "live"
+
+    # When live and no live snapshots exist, must return empty list (no fallback to paper)
+    filtered_no_live = _filter_snapshots_for_risk([snap_paper])
+    assert filtered_no_live == []
+
+    # When paper mode, paper snapshot is returned
+    monkeypatch.setenv("TRADING_MODE", "paper")
+    filtered_paper = _filter_snapshots_for_risk(rows)
+    assert any(s.id == 1 for s in filtered_paper)
+
+
+def test_filter_snapshots_account_id_isolation(monkeypatch):
+    from backend.services.risk_guard import _filter_snapshots_for_risk
+    from backend.database.models import PortfolioSnapshot
+
+    snap_acc1 = PortfolioSnapshot(id=1, broker="ctrader", account_id="12345", mode="live")
+    snap_acc2 = PortfolioSnapshot(id=2, broker="ctrader", account_id="99999", mode="live")
+
+    monkeypatch.setenv("TRADING_MODE", "live")
+    monkeypatch.setenv("ACTIVE_BROKER", "ctrader")
+    monkeypatch.setenv("CTRADER_ACCOUNT_ID", "12345")
+
+    filtered = _filter_snapshots_for_risk([snap_acc1, snap_acc2])
+    assert len(filtered) == 1
+    assert filtered[0].account_id == "12345"
+
+

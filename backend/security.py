@@ -23,6 +23,7 @@ SENSITIVE_PREFIXES = (
 )
 SENTRY_PREFIXES = ("/sentry",)
 TRADING_PREFIXES = ("/trading", "/api/trading")
+JESSE_PREFIXES = ("/jesse", "/api/jesse")
 PUBLIC_TRADING_PATHS = {
     "/trading/strategies",
     "/api/trading/strategies",
@@ -57,6 +58,10 @@ def is_sensitive_request(request: Request) -> bool:
         if path in PUBLIC_TRADING_PATHS:
             return False
         # Protect operational data (positions, balances, status, history) as well as loop controls.
+        return True
+
+    if path.startswith(JESSE_PREFIXES):
+        # Protect quant parameters, FINMEM memory ingestion/evaluation, and inference.
         return True
 
     return method not in {"GET", "HEAD"}

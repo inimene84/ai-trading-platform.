@@ -156,7 +156,7 @@ services:
     container_name: ai-trading-nginx
     restart: unless-stopped
     ports:
-      - 8081:80
+      - "127.0.0.1:8081:80"
     volumes:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
       - ./frontend/dist:/usr/share/nginx/html:ro
@@ -278,7 +278,7 @@ services:
       ADMIN_API_KEY: ${ADMIN_API_KEY:?ADMIN_API_KEY must be set}
       BACKEND_BASE_URL: http://ai-trading-backend:8000
       BACKEND_API_PREFIX: /api
-      SCRAPLING_INGEST_ENABLED: ${SCRAPLING_INGEST_ENABLED:-true}
+      SCRAPLING_INGEST_ENABLED: ${SCRAPLING_INGEST_ENABLED:-false}
       SCRAPLING_INGEST_INTERVAL_SEC: ${SCRAPLING_INGEST_INTERVAL_SEC:-3600}
       JBLANKED_API_KEY: ${JBLANKED_API_KEY:-}
       CALENDAR_JSON_URL: ${CALENDAR_JSON_URL:-}

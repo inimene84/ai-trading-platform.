@@ -4,7 +4,7 @@ from typing import Optional, Dict, Any, List, Never
 from dataclasses import dataclass
 
 from backend.services.risk_config import RiskConfig
-from backend.services.trading_mode import TradingMode, get_trading_mode
+from backend.services.trading_mode import TradingMode, get_trading_mode, live_exchange_orders_allowed
 from backend.strategies.combined import CombinedStrategy
 from backend.strategies.market_regime import MarketRegimeDetector
 from backend.services.opinion_layer import analyze_symbol as opinion_analyze
@@ -590,8 +590,19 @@ class DecisionEngine:
                     if signal.confidence < self.config.min_signal_strength:
                         self._record_eval(symbol, signal.signal, signal.confidence, "confidence reduced below threshold by Jesse ML gate")
                         return None
+                else:
+                    if live_exchange_orders_allowed():
+                        err = ml_res.get("error") or "Jesse ML status not success"
+                        logger.error(f"[{symbol}] Jesse ML gate returned non-success in LIVE mode ({err}) — fail closed: vetoing {signal.signal}")
+                        self._record_eval(symbol, signal.signal, signal.confidence, f"vetoed by Jesse ML error in LIVE mode ({err})")
+                        return None
+                    logger.debug(f"[{symbol}] Jesse ML returned non-success in paper mode ({ml_res.get('error')}) — skipping gate")
             except Exception as e:
-                logger.debug(f"[{symbol}] Jesse ML gate evaluation notice (fail-open): {e}")
+                if live_exchange_orders_allowed():
+                    logger.error(f"[{symbol}] Jesse ML gate failed in LIVE mode ({e}) — fail closed: vetoing {signal.signal}")
+                    self._record_eval(symbol, signal.signal, signal.confidence, f"vetoed by Jesse ML failure in LIVE mode ({e})")
+                    return None
+                logger.debug(f"[{symbol}] Jesse ML gate evaluation notice (fail-open in paper): {e}")
 
         # 5. AI Opinion Layer — multi-agent weighted consensus
         if self.config.enable_personas:
@@ -720,6 +731,39 @@ class DecisionEngine:
         # SL distance aren't usable. Pyramid layers keep their fixed notional.
         trade_usdt = self.config.pyramid_usdt_per_layer if is_pyramid else self.config.trade_usdt_amount
         kelly_mult = getattr(signal, "kelly_multiplier", None)
+
+        if kelly_mult is not None and kelly_mult > 0:
+            # Query partition closed trade count: clip to [0.25, 1.0] until >= 30 trades
+            closed_count = 0
+            try:
+                from backend.database.connection import SessionLocal
+                from backend.database.models import Trade
+                from sqlalchemy import func
+                db = SessionLocal()
+                try:
+                    active_broker = os.getenv("ACTIVE_BROKER", "ctrader").lower()
+                    current_mode = get_trading_mode().value if hasattr(get_trading_mode(), "value") else str(get_trading_mode())
+                    q = db.query(func.count(Trade.id)).filter(Trade.status.in_(["closed", "exit"]))
+                    if active_broker == "ctrader":
+                        q = q.filter(Trade.broker.in_(["ctrader", "ctrader:paper", "ic", "icmarkets"]))
+                    elif active_broker in {"binance", "binance_futures"}:
+                        q = q.filter(Trade.broker.in_(["binance", "binance_futures", "binanceusdm"]))
+                    q = q.filter(Trade.mode == current_mode.lower())
+                    closed_count = q.scalar() or 0
+                finally:
+                    db.close()
+            except Exception as e:
+                logger.debug(f"Could not query partition closed trade count: {e}")
+                closed_count = 0
+
+            if closed_count < 30:
+                clipped = max(0.25, min(1.0, float(kelly_mult)))
+                if clipped != float(kelly_mult):
+                    logger.info(
+                        f"[{symbol}] Kelly multiplier clipped {kelly_mult:.2f}x -> {clipped:.2f}x "
+                        f"(partition closed trades {closed_count} < 30)"
+                    )
+                kelly_mult = clipped
 
         # Apply Kelly sizing to baseline notional for primary entries
         if not is_pyramid and kelly_mult is not None and kelly_mult > 0:

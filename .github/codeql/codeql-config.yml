@@ -1,0 +1,13 @@
+name: "QuantumTrade CodeQL Configuration"
+
+paths:
+  - backend
+  - frontend/src
+  - mcp_server
+  - scrapling_sidecar
+
+paths-ignore:
+  - "**/*.spec.ts"
+  - "**/*.spec.js"
+  - "backend/tests"
+  - "scratch"
