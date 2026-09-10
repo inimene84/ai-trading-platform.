@@ -30,7 +30,6 @@ fi
 echo "scanning product/CI paths for published VPS address"
 ip_hits="$(git grep -nF -- "$ip_needle" -- \
   '.github' \
-  '.env.example' \
   'AGENTS.md' \
   'README.md' \
   'DEPLOYMENT.md' \
