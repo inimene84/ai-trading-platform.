@@ -341,6 +341,15 @@ class TradeMemoryService:
                 collection_name=self.collection,
                 points=[PointStruct(id=point_id, vector=vec, payload=payload)],
             )
+
+            # Notify FINMEM agent feedback loop for character adaptation & memory promotion
+            try:
+                from backend.services.finmem_service import finmem_service
+                cited = ctx.get("finmem_cited_ids") or []
+                finmem_service.record_trade_feedback(symbol, pnl, cited)
+            except Exception as e:
+                logger.debug(f"FINMEM trade feedback notice: {e}")
+
             return point_id
         except Exception as e:
             logger.warning(f"TradeMemory: record_trade failed for {symbol}: {e}")

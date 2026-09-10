@@ -609,6 +609,12 @@ class DecisionEngine:
                 if opinion:
                     self._record_eval(symbol, opinion.direction, opinion.confidence,
                                       "AI opinion evaluated")
+                    # Capture FINMEM cited memory IDs for downstream attribution and promotion
+                    for a_op in getattr(opinion, "agent_opinions", []):
+                        if a_op.agent == "finmem_cognitive_agent":
+                            cited = (a_op.metadata or {}).get("cited_ids") or []
+                            if cited:
+                                setattr(signal, "finmem_cited_ids", cited)
                 if opinion and opinion.confidence < self.config.ai_analysis_threshold:
                     # Strategy can override weak AI if its own confidence is high enough
                     if signal.confidence > (self.config.ai_analysis_threshold + self.config.opinion_override_margin):

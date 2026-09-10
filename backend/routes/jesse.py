@@ -105,3 +105,79 @@ async def post_ml_prediction(req: MLPredictionRequest = MLPredictionRequest()) -
         raise HTTPException(status_code=500, detail=res.get("error"))
     return res
 
+
+# ── FINMEM Cognitive Agent Routes (Stevens Institute / arXiv:2311.13743v2) ───
+
+class FinMemEvalRequest(BaseModel):
+    symbol: str = "BTC-USDT"
+    timeframe: str = "1h"
+
+
+class FinMemIngestRequest(BaseModel):
+    symbol: str = "BTC-USDT"
+    layer: str = "shallow"  # "shallow" | "intermediate" | "deep"
+    content: str
+    source_type: str = "news"
+    base_importance: Optional[float] = None
+
+
+@router.get("/finmem/status")
+async def get_finmem_status(symbol: str = Query("BTC-USDT")) -> Dict[str, Any]:
+    """Inspect active character setting, rolling return, and memory state for a symbol."""
+    from backend.services.finmem_service import finmem_service
+    char = finmem_service.get_character(symbol)
+    return {
+        "status": "ok",
+        "symbol": symbol,
+        "risk_mode": char.risk_mode,
+        "active_inclination": char.current_inclination,
+        "rolling_returns": char.rolling_returns,
+        "cumulative_return": sum(char.rolling_returns),
+        "collection": finmem_service.memory.collection,
+    }
+
+
+@router.post("/finmem/evaluate")
+async def evaluate_finmem(req: FinMemEvalRequest = FinMemEvalRequest()) -> Dict[str, Any]:
+    """Trigger FINMEM immediate reflection (layered memory recall + LLM decision)."""
+    from backend.services.finmem_service import finmem_service
+    from backend.services.jesse_bridge import jesse_bridge
+
+    # Fetch recent candles from Jesse DB / Bridge
+    try:
+        # Use existing candles from broker or Jesse
+        from backend.services.market_data import market_data
+        bars = await market_data.get_candles(req.symbol.replace("-", ""), req.timeframe, limit=50)
+        if not bars:
+            bars = [{"close": 78400.0, "open": 78200.0, "high": 78500.0, "low": 78100.0, "volume": 1000.0}]
+    except Exception:
+        bars = [{"close": 78400.0, "open": 78200.0, "high": 78500.0, "low": 78100.0, "volume": 1000.0}]
+
+    dec = await finmem_service.immediate_reflect(req.symbol, bars)
+    return {
+        "status": "success",
+        "symbol": dec.symbol,
+        "action": dec.action,
+        "confidence": dec.confidence,
+        "risk_character": dec.risk_character,
+        "reasoning": dec.reasoning,
+        "cited_memory_ids": dec.cited_memory_ids,
+        "retrieved_memory_count": dec.retrieved_memory_count,
+        "momentum_3d": dec.momentum_3d,
+        "latency_ms": dec.latency_ms,
+    }
+
+
+@router.post("/finmem/ingest")
+async def ingest_finmem_memory(req: FinMemIngestRequest) -> Dict[str, Any]:
+    """Ingest external financial insight into Shallow, Intermediate, or Deep memory layer."""
+    from backend.services.finmem_service import finmem_service
+    mem_id = await finmem_service.memory.store_memory(
+        symbol=req.symbol,
+        layer=req.layer,
+        content=req.content,
+        source_type=req.source_type,
+        base_importance=req.base_importance,
+    )
+    return {"status": "stored", "memory_id": mem_id, "layer": req.layer, "symbol": req.symbol}
+
