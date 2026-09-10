@@ -221,6 +221,27 @@ def _directional_exposure_usdt(open_trades: list[Trade]) -> float:
     return total
 
 
+def is_drawdown_suppressed_in_testing() -> bool:
+    """True when running in sandbox/testing mode and drawdown halt should be suppressed.
+
+    Checks:
+    - Explicit DISABLE_DRAWDOWN_IN_TESTING=true or TESTING_MODE=true
+    - cTrader sandbox or paper mode (unless ENFORCE_SANDBOX_DRAWDOWN=true)
+    - TRADING_MODE is paper or backtest (unless ENFORCE_TESTING_DRAWDOWN=true)
+    """
+    if os.getenv("DISABLE_DRAWDOWN_IN_TESTING", "false").lower() == "true":
+        return True
+    if os.getenv("TESTING_MODE", "false").lower() == "true":
+        return True
+    if os.getenv("CTRADER_ENV", "").lower() == "sandbox" and os.getenv("ENFORCE_SANDBOX_DRAWDOWN", "false").lower() != "true":
+        return True
+    if os.getenv("CTRADER_PAPER_MODE", "false").lower() == "true":
+        return True
+    if get_trading_mode() in (TradingMode.PAPER, TradingMode.BACKTEST) and os.getenv("ENFORCE_TESTING_DRAWDOWN", "false").lower() != "true":
+        return True
+    return False
+
+
 def enforce_risk_limits(
     db: Session,
     cfg: RiskConfig,
@@ -323,10 +344,17 @@ def enforce_risk_limits(
             if current_value < peak_value:
                 drawdown_pct = ((peak_value - current_value) / peak_value) * 100
                 if drawdown_pct > cfg.max_portfolio_drawdown_pct:
-                    raise RiskBreach(
+                    msg = (
                         f"Max portfolio drawdown exceeded: {drawdown_pct:.2f}% > {cfg.max_portfolio_drawdown_pct}% "
                         f"(Peak: ${peak_value:.2f}, Current: ${current_value:.2f})"
                     )
+                    # Allow disabling drawdown halt when testing or in sandbox
+                    if is_drawdown_suppressed_in_testing():
+                        logger.warning(
+                            f"[RISK GUARD] %s — testing/sandbox active: drawdown halt suppressed", msg
+                        )
+                    else:
+                        raise RiskBreach(msg)
 
         # 4. Max daily loss — relative to the first snapshot of today (UTC).
         #    Disable entirely with max_daily_loss_pct >= 100

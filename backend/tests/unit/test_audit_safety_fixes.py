@@ -124,7 +124,7 @@ def test_already_flat_requires_verified_zero_qty(monkeypatch):
     assert "live qty" in result["message"]
 
 
-def test_paper_close_requires_price_and_records_pnl():
+def test_paper_close_requires_price_and_records_pnl(monkeypatch):
     UnifiedTrading._instance = None
     engine = PaperTradingEngine()
     pid = engine.create_portfolio("reuse-test", 10_000.0, leverage=1.0)
@@ -133,6 +133,8 @@ def test_paper_close_requires_price_and_records_pnl():
         quantity=1.0, price=2000.0,
     ))
     assert open_res.success
+    from backend.services.binance_futures_service import binance_futures_broker
+    monkeypatch.setattr(binance_futures_broker, "get_exit_price", lambda sym: None)
     rejected = engine.place_order(pid, UnifiedOrder(
         symbol="ETHUSDT", side=OrderSide.SELL, order_type=OrderType.MARKET,
         quantity=1.0, reduce_only=True,

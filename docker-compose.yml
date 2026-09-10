@@ -97,6 +97,7 @@ services:
       - app-logs:/app/logs
       - ./.env:/app/.env
       - ./backend:/app/backend
+      - ./scrapling_sidecar:/app/scrapling_sidecar
     networks:
       - trading-net
   litellm:

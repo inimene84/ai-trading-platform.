@@ -128,7 +128,7 @@ class RiskConfig(BaseSettings):
     max_portfolio_drawdown_pct: float = PydanticField(
         default=20.0,
         validation_alias=AliasChoices(
-            "max_portfolio_drawdown_pct", "RISK_MAX_DRAWDOWN_PCT"
+            "max_portfolio_drawdown_pct", "RISK_MAX_DRAWDOWN_PCT", "RISK_MAX_PORTFOLIO_DRAWDOWN_PCT"
         ),
     )
     max_daily_loss_pct: float = PydanticField(

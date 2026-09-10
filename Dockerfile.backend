@@ -24,8 +24,7 @@ RUN uv pip install --system --no-cache -r requirements.txt \
 # Copy application code
 COPY backend/ ./backend/
 COPY scripts/ ./scripts/
-COPY scrapling_sidecar/__init__.py ./scrapling_sidecar/__init__.py
-COPY scrapling_sidecar/url_guard.py ./scrapling_sidecar/url_guard.py
+COPY scrapling_sidecar/ ./scrapling_sidecar/
 COPY README.md .
 
 # Create data dirs

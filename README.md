@@ -1,145 +1,227 @@
-# QuantumTrade Pro — AI Hedge Fund Platform
+# QuantumTrade Pro — Institutional Quantitative Trading Platform
 
-An AI-powered multi-asset trading platform with real-time data, multi-agent analysis, workflow automation, backtesting, and risk management.
+<div align="center">
 
-> **Note:** This project began as a fork of `virattt/ai-hedge-fund` but has been heavily customized. It now includes extensive additional features such as Binance and cTrader integrations, Kronos workflow support, n8n webhook pipelines, InfluxDB time-series storage, and Qdrant vector database integration for news and sentiment analysis. This is a fully independent and expanded project.
+![QuantumTrade Pro Butterfly Architecture](docs/assets/butterfly_architecture_map.jpg)
 
-## System Architecture & Lifecycle
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+[![Python 3.11](https://img.shields.io/badge/python-3.11-blue.svg)](https://www.python.org/downloads/)
+[![Docker Compose](https://img.shields.io/badge/docker-compose-2496ED?logo=docker&logoColor=white)](docker-compose.yml)
+[![FastAPI](https://img.shields.io/badge/FastAPI-005571?logo=fastapi)](https://fastapi.tiangolo.com)
+[![Qdrant Vector DB](https://img.shields.io/badge/Qdrant-v1.14.1-red.svg)](https://qdrant.tech/)
+[![Tests Passing](https://img.shields.io/badge/tests-82%20passed-success)](backend/tests/)
+[![Security: Hardened](https://img.shields.io/badge/security-hardened%20%7C%20fail--closed-emerald)](backend/security.py)
 
-QuantumTrade Pro is engineered as a highly resilient, multi-layered AI-powered trading platform. The architecture comprises asynchronous background pollers, serialized execution loops, multi-agent consensus networks, and automated risk enforcement gates.
+**Autonomous Multi-Broker Quantitative Execution Engine with Conformal ML Gating, FINMEM Stratified Memory, and Fail-Closed Risk Enforcers.**
 
-### Comprehensive Architecture Map
+[Architecture](#butterfly-architecture-map) • [Quant Stack](#institutional-quant-stack) • [Risk & Safety](#fail-closed-safety-stack) • [Deployment](#quickstart--production-deployment) • [API & Telemetry](#api-telemetry--monitoring)
+
+</div>
+
+---
+
+## Overview
+
+**QuantumTrade Pro** is an institutional-grade algorithmic trading and risk execution system designed for continuous 24/7 autonomous operation across **Binance Futures** (crypto perpetuals) and **cTrader** (institutional FX and metals).
+
+Evolving beyond simple rule-based bots or conversational agent experiments, the platform implements a **rigorous quantitative pipeline**:
+- **Execution Architecture**: Non-blocking asynchronous event loop with serialized per-symbol execution locks and GTX maker order routing.
+- **Fail-Closed Safety**: Double-locked live deployment authorization, rolling drawdown halts, exchange clamp validation, and strict book partitioning (`broker + account_id + mode`).
+- **Conformal Machine Learning**: LightGBM meta-labeling trained on Triple-Barrier events with purged cross-validation, sample uniqueness weighting, and split-conformal uncertainty intervals.
+- **Cognitive Memory Layer**: Stratified FINMEM vector memory in Qdrant across shallow (14d), intermediate (90d), and deep (365d) reflection horizons.
+
+---
+
+## Butterfly Architecture Map
+
+The system is organized into a balanced, symmetric **Butterfly Architecture**:
+- **Left Wing (Intelligent Signal & Ingestion)**: Alternative news feeds, sentiment analysis, Qdrant vector retrieval, FINMEM stratified memory, Kronos time-series forecasting, and Jesse ML meta-models.
+- **Central Core (Fail-Closed Risk & Execution Hub)**: Dual-mode session routing, rolling-peak drawdown gates, directional exposure caps, min-edge fee filters, and affirmative live guards.
+- **Right Wing (Multi-Broker Execution & Active Management)**: GTX maker routing on Binance, FIX/OpenAPI dispatch on cTrader, dynamic ATR trailing stops, and startup exchange SL/TP restoration.
 
 ```mermaid
-graph TB
-    subgraph Startup["FastAPI Startup (main.py)"]
-        M[main.py] --> WP[Wallet Poller]
-        M --> OP[Order Poller]
-        M --> UT[Unified Trading Router]
-        M --> TL[Trading Loop]
-        M --> SL[Sentiment Loop]
-        M --> TM[Trade Memory Recorder]
-        M --> SM[Skill Miner]
+flowchart LR
+    %% Styles
+    classDef leftWing fill:#0f172a,stroke:#06b6d4,stroke-width:2px,color:#f8fafc;
+    classDef centerCore fill:#1e1b4b,stroke:#a855f7,stroke-width:3px,color:#f8fafc;
+    classDef rightWing fill:#0f172a,stroke:#10b981,stroke-width:2px,color:#f8fafc;
+    classDef storage fill:#022c22,stroke:#059669,stroke-width:1px,color:#f8fafc;
+
+    subgraph LeftWing["🦋 LEFT WING — Signals & Ingestion"]
+        direction TB
+        NEWS["Alternative Feeds<br/>(NewsAPI, Fred, CryptoCompare)"]:::leftWing
+        QD_NEWS[("Qdrant Vector DB<br/>crypto-news (1536-dim)")]:::storage
+        FINMEM["FINMEM Engine<br/>(Shallow / Med / Deep Memory)"]:::leftWing
+        REGIME["Market Regime Classifier<br/>(Trending / Ranging / Volatile)"]:::leftWing
+        KRONOS["Kronos Sidecar<br/>(Time-Series Foundation Model)"]:::leftWing
+        JESSE_ML["Jesse ML Meta-Labeling<br/>(LightGBM + Conformal Gating)"]:::leftWing
+
+        NEWS --> QD_NEWS
+        QD_NEWS --> FINMEM
+        REGIME --> FINMEM
     end
 
-    subgraph TradingCycle["Trading Cycle (every 15m)"]
-        TL --> RG[Risk Guard]
-        RG --> KS[Kill Switch]
-        KS --> PM[Position Manager<br>Emergency Exits]
-        PM --> SYNC[Broker Sync]
-        SYNC --> GATE[Margin Gate]
-        GATE --> SQG[Symbol Quality Gate]
-        SQG --> PS["_process_symbol() × N"]
+    subgraph CenterCore["⚡ CORE HUB — Hardened Fail-Closed Risk"]
+        direction TB
+        LIVE_GATE{"Double-Lock Guard<br/>CONFIRM_LIVE_DEPLOY + Auth"}:::centerCore
+        RISK_GUARD["Risk Guard Enforcer<br/>(Rolling Peak Drawdown & Daily Loss)"]:::centerCore
+        BOOK_PART["Book Partitioning<br/>(Broker + Account + Mode)"]:::centerCore
+        DECISION["Decision Engine<br/>(Combined Alpha Strategy)"]:::centerCore
+        MIN_EDGE["Fee Min-Edge & Geometry Gate<br/>(ATR > 3× Fees, SL Clamp Check)"]:::centerCore
+        EXEC_LOCK["Async Execution Mutex<br/>(Prevents Concurrent Dispatches)"]:::centerCore
+
+        LIVE_GATE --> RISK_GUARD
+        RISK_GUARD --> BOOK_PART
+        BOOK_PART --> DECISION
+        DECISION --> MIN_EDGE
+        MIN_EDGE --> EXEC_LOCK
     end
 
-    subgraph PerSymbol["Per-Symbol Pipeline"]
-        PS --> DE[Decision Engine]
-        DE --> STR[Combined Strategy<br>5 sub-strategies]
-        DE --> KRO[Kronos Foundation Model]
-        DE --> OL[Opinion Layer<br>8+ agents]
-        DE --> RR[LLM Risk Reviewer]
-        DE --> ORD[Order Execution]
-        ORD --> BFS[Binance Futures Service]
+    subgraph RightWing["🦋 RIGHT WING — Execution & Venue Management"]
+        direction TB
+        ROUTER["Unified Order Router<br/>(Live / Paper Parallel)"]:::rightWing
+        BINANCE["Binance Futures Service<br/>(Maker GTX Post-Only)"]:::rightWing
+        CTRADER["cTrader Service<br/>(FIX / OpenAPI Execution)"]:::rightWing
+        ATR_TRAIL["Dynamic ATR Trailing Stop<br/>(High-Water Mark Tracking)"]:::rightWing
+        RECON["Exchange SL/TP Reconciler<br/>(Startup Protection Restore)"]:::rightWing
+
+        ROUTER --> BINANCE
+        ROUTER --> CTRADER
+        BINANCE --> ATR_TRAIL
+        CTRADER --> ATR_TRAIL
+        BINANCE --> RECON
+        CTRADER --> RECON
     end
 
-    subgraph Storage["Data Layer"]
-        PG[(PostgreSQL<br>Trades, Signals, Snapshots)]
-        IDB[(InfluxDB<br>Time-series metrics)]
-        QD[(Qdrant<br>Vector store: news + trade memory)]
+    %% Interconnections
+    JESSE_ML --> DECISION
+    KRONOS --> DECISION
+    FINMEM --> DECISION
+    REGIME --> DECISION
+
+    EXEC_LOCK --> ROUTER
+
+    %% Storage connections
+    subgraph Persistence["State & Metrics"]
+        SQL[(SQLite / PostgreSQL<br/>Trades & Partitioned Snapshots)]:::storage
+        INFLUX[(InfluxDB v2<br/>Telemetry & Equity Curves)]:::storage
     end
 
-    BFS --> PG
-    TL --> IDB
-    OL --> QD
+    BOOK_PART -.-> SQL
+    ROUTER -.-> SQL
+    RISK_GUARD -.-> INFLUX
 ```
 
 ---
 
-### Core Architectural Layers
+## Trading Cockpit & Risk Center
 
-#### 1. FastAPI Application Lifecycle & Reliability
-- **Lifespan Manager**: Startup and shutdown events are managed by a FastAPI `lifespan` context manager.
-- **Task Restart Supervisor**: Background tasks (wallet poller, order poller, main trading loop, sentiment loop, trade-memory recorder, and skill miner) are scheduled under an auto-restart supervisor. If any background task crashes with an unhandled exception, it is logged and automatically restarted after a 10-second delay, preventing silent failures.
-- **Graceful Shutdown**: On application termination, all supervised tasks are cleanly cancelled and awaited.
+<div align="center">
 
-#### 2. Hard Safety Gates & Risk Management
-Before any trading logic evaluates a market, the loop enforces a **fail-closed stack of 9 safety gates**:
-1. **Risk Guard**: Monitors rolling-window drawdown, daily loss limits, and max open positions.
-2. **Kill Switch**: Hard stops all trading if account equity drops below a flat threshold (default $65).
-3. **Emergency Position Manager**: Reviews open trades against live broker mark prices before position synchronization.
-4. **Broker Position Sync**: Serializes database trades with actual exchange-held positions.
-5. **Position Manager Exits**: Evaluates AI technical opinions to trigger early exits.
-6. **Margin Gate**: Skips entry pipeline if available margin falls below a safety floor (default $5).
-7. **Symbol Quality Gate**: Blocks blacklisted symbols and enforces a minimum $50M daily volume floor.
-8. **Per-Symbol Engine**: Evaluates strategy signals, foundation models, and LLM vetoes.
-9. **Execution Lock**: Serializes order placement across parallel symbol scans to prevent race conditions.
+![Trading Cockpit Interface](docs/assets/quantumtrade_cockpit_dashboard.jpg)
 
-#### 3. Per-Symbol Decision Pipeline
-Each symbol is analyzed through a multi-tiered pipeline:
-- **Combined Strategy**: Evaluates 5 technical sub-strategies (trend following, momentum, mean reversion, volatility, and statistical arbitrage) to generate a base signal.
-- **Kronos Foundation Model**: Runs a deep-learning time-series forecasting model to boost, dampen, or veto the signal.
-- **AI Opinion Layer**: A weighted consensus network aggregating 8+ distinct analytical agents (technical analysis, foundation model, social sentiment, news archives, macro indexes, semantic trade memory, and skill miner).
-- **LLM Risk Reviewer**: A final, fail-open LLM agent that acts as a Chief Risk Officer, validating the trade size, SL/TP levels, and market context before signing off on order execution.
+*Real-time multi-asset telemetry, conformal prediction uncertainty intervals, and fail-closed risk gauges.*
 
-#### 4. Dual-Mode Order Router & Brokers
-- **Unified Trading Engine**: A thread-safe order router that manages both paper trading and live execution.
-- **Paper Fill Engine**: Simulates a realistic order book with transaction fees, margin tracking, and real-time P&L calculation.
-- **Exchange Integration**: Interfaces directly with Binance Futures (USDT-M and USDC-M perpetuals) and cTrader (Forex/CFDs) using native APIs, native SL/TP placement, and hedge-mode safety guards.
+</div>
 
 ---
 
-## Quickstart
+## Institutional Quant Stack
 
-### Prerequisites
-- **Python 3.11+** with [Poetry](https://python-poetry.org/)
-- **Node.js 18+** with npm
+The platform embeds financial machine learning practices inspired by Marcos López de Prado:
 
-### 1. Clone & configure
+### 1. Robust Validation Metrics
+- **Deflated Sharpe Ratio (DSR)**: Corrects for selection bias under multiple testing, non-normal return distributions (skewness/kurtosis), and track-record length ($DSR > 0.95$ threshold required for deployment).
+- **Combinatorially Symmetric Cross-Validation (CSCV)**: Evaluates the Probability of Backtest Overfitting ($PBO < 0.30$), ensuring strategies do not memorize historical noise.
+- **Purged K-Fold with Temporal Embargo**: Eliminates information leakage across non-independent financial observations.
+
+### 2. Triple-Barrier Labeling & Conformal Meta-Models
+- **Triple Barrier Method**: Signals are labeled using dynamic upper take-profit, lower stop-loss (volatility-adjusted via ATR), and time-out horizontal barriers.
+- **Sample Uniqueness Concurrency Weighting**: Overlapping trade windows are down-weighted by inverse concurrency to eliminate label redundancy.
+- **Split-Conformal Uncertainty Gating**: Calibrated LightGBM models output non-conformity scores; candidates with excessive prediction intervals are vetoed before touching capital.
+- **Fractional Kelly Sizing**: Allocations scale proportionally to model edge and uncertainty while strictly capping max directional exposure.
+
+### 3. FINMEM Stratified Vector Memory
+- **Stratified Storage in Qdrant**:
+  - *Shallow Tier* ($Q=14$ days, decay factor $\alpha=0.900$): Tracks high-frequency market regimes and short-term volatility shocks.
+  - *Intermediate Tier* ($Q=90$ days, decay factor $\alpha=0.967$): Captures quarterly macro rotations, central bank cycles, and earnings seasons.
+  - *Deep Tier* ($Q=365$ days, decay factor $\alpha=0.988$): Retains historical structural extremes, flash crashes, and liquidity regimes.
+- **Dynamic Cognitive Persona Switching**: Automatically modulates between *Risk-Seeking* and *Risk-Averse* behavioral profiles depending on market condition consensus and trailing drawdown.
+
+---
+
+## Fail-Closed Safety Stack
+
+| Safety Layer | Implementation | Fail-Safe Behavior |
+|---|---|---|
+| **Live Deploy Double-Lock** | `CONFIRM_LIVE_DEPLOY=true` + `ADMIN_API_KEY` | Refuses process startup if either flag or authentication token is missing. |
+| **API Boundary Lockdown** | Constant-time HMAC on all `/trading/*` routes | Blocks unauthorized information dumps of positions, balances, or bot telemetry (401/403). |
+| **Image Worker Ceiling** | Dockerfile CMD set to `--workers 1` | Prevents split-brain loops, duplicate pyramid maps, and concurrency collisions. |
+| **Fail-Safe Testnet Fallback** | Compose default `${BINANCE_TESTNET:-true}` | If `.env` omits the testnet flag, the platform defaults to simulated execution. |
+| **Rolling Peak Drawdown** | Lookback window of 72 hours (configurable) | Halts new entries when equity drops below limit (20%) in live production; safely suppressed during testing/sandbox (`DISABLE_DRAWDOWN_IN_TESTING=true` or sandbox broker). Exits continue running. |
+| **Multi-Broker Isolation** | `broker + account_id + mode` partitioning | Paper Binance fills never alter cTrader live equity or trip live risk boundaries. |
+| **Maker GTX Execution** | Post-only orders with market fallback | Captures maker rebates (0.02% vs 0.05% taker fees); cancels orders that would cross the spread. |
+| **Broker Clamp Guard** | Minimum stop-pip distance & effective R:R gate | Rejects trade setups whose planned risk:reward is crushed by broker-enforced minimum stops. |
+
+---
+
+## Quickstart & Production Deployment
+
+### 1. Prerequisites
+- Docker 24.0+ & Docker Compose v2+
+- Node.js 18+ (for local frontend cockpit development)
+- Python 3.11+ (for local scripts or backtest runners)
+
+### 2. Environment Setup
 ```bash
-git clone <your-repo-url> ai-trading-platform
+# Clone the repository
+git clone https://github.com/inimene84/ai-trading-platform.git
 cd ai-trading-platform
+
+# Copy example environment configuration
 cp .env.example .env
-# Edit .env — add your API keys
+
+# Generate a strong 256-bit Admin API Key
+python3 -c "import secrets; print('ADMIN_API_KEY=' + secrets.token_hex(32))" >> .env
 ```
 
-### 2. Run
-**Windows:**
-```cmd
-run.bat
-```
-
-**Linux / macOS:**
+### 3. Launch Services via Docker Compose
 ```bash
-chmod +x run.sh
-./run.sh
+# Launch core platform: backend, litellm, and nginx proxy
+docker compose up -d
+
+# Check running container health
+docker compose ps
 ```
 
-This installs dependencies and starts both services:
-- **Frontend:** http://localhost:3000
-- **Backend API:** http://localhost:8080
-- **API Docs:** http://localhost:8080/docs
-
-### 3. Manual start (alternative)
+### 4. Verify System Health
 ```bash
-# Terminal 1 — Backend
-poetry install
-poetry run uvicorn backend.main:app --reload --host 127.0.0.1 --port 8080
+# Public health check
+curl -s http://localhost:8001/health
 
-# Terminal 2 — Frontend
-cd frontend
-npm install
-npm run dev
+# Authenticated trading status check
+curl -s -H "X-API-Key: YOUR_ADMIN_API_KEY" http://localhost:8001/trading/status
 ```
 
-## Key Features
-- 🤖 **Multi-agent AI analysis** — 12+ analyst personas (Buffett, Munger, Druckenmiller, etc.)
-- 📊 **Real-time dashboard** — TradingView charts, order book, portfolio tracking
-- 🔄 **Automated trading loop** — configurable interval, multi-symbol support
-- 🧪 **Backtesting engine** — historical simulation with performance metrics
-- 🔗 **Broker integrations** — cTrader (Forex/CFD), Binance (Crypto), and more
-- 📱 **Alerts** — Telegram, InfluxDB, and n8n webhook integrations
-- ⚡ **AI workflow builder** — Visual drag-and-drop strategy editor
+---
+
+## API, Telemetry & Monitoring
+
+- **REST API & Documentation**: Available at `http://localhost:8001/docs` (OpenAPI) and `http://localhost:8001/redoc`.
+- **Grafana Dashboards**: Port `3000` (time-series PnL, open margin, trade duration, Sharpe ratio).
+- **InfluxDB v2 Metrics**: Port `8086` (bucket: `news-sentiment`, `trading-system`).
+- **Qdrant Vector Console**: Port `6333` (collections: `crypto-news`, `trade-memory`, `finmem-memory`).
+- **Telegram Watchdog**: Real-time push notifications on entry fills, trailing stop activations, and risk halts.
+
+---
+
+## Repository Hygiene & Upstream Attribution
+
+- **License**: Distributed under the [Apache License 2.0](LICENSE).
+- **Original Fork Attribution**: This platform originated as a fork of [`virattt/ai-hedge-fund`](https://github.com/virattt/ai-hedge-fund) (Copyright 2024 virattt and contributors). It has been completely rebuilt as an institutional-grade, multi-broker automated algorithmic execution system.
+
+---
 
 ## Disclaimer
 
-This project is for **educational and research purposes only**. Not intended for real trading. No warranties or guarantees. Consult a financial advisor for investment decisions.
+This software is for **research, educational, and quantitative development purposes only**. Algorithmic trading in leveraged perpetual futures, foreign exchange, and derivative contracts involves substantial risk of loss. Past backtested performance is not indicative of future results. No financial advice or warranties are provided.

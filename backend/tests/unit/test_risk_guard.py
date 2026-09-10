@@ -390,3 +390,88 @@ def test_risk_guard_allows_20_positions_across_dual_brokers(db_session, monkeypa
     with pytest.raises(RiskBreach, match="Max open positions exceeded: 21 > 20"):
         enforce_risk_limits(db_session, cfg, trades, None)
 
+
+def test_risk_guard_suppresses_drawdown_when_testing_flag_enabled(db_session, monkeypatch):
+    monkeypatch.setenv("DISABLE_DRAWDOWN_IN_TESTING", "true")
+    cfg = RiskConfig(
+        max_position_risk_pct=1.0,
+        max_portfolio_drawdown_pct=20.0,
+        max_daily_loss_pct=100.0,
+        max_open_positions=10,
+        sl_cooldown_minutes=30
+    )
+    snap_peak = PortfolioSnapshot(
+        total_value=10000.0,
+        cash=10000.0,
+        timestamp=datetime.now(timezone.utc) - timedelta(hours=3)
+    )
+    db_session.add(snap_peak)
+    snap_low = PortfolioSnapshot(
+        total_value=7500.0,  # 25% drawdown > 20%
+        cash=7500.0,
+        timestamp=datetime.now(timezone.utc)
+    )
+    db_session.add(snap_low)
+    db_session.commit()
+
+    # Should not raise RiskBreach because DISABLE_DRAWDOWN_IN_TESTING is true
+    enforce_risk_limits(db_session, cfg, [], snap_low)
+
+
+def test_risk_guard_suppresses_drawdown_in_ctrader_sandbox(db_session, monkeypatch):
+    monkeypatch.setenv("CTRADER_ENV", "sandbox")
+    monkeypatch.setenv("DISABLE_DRAWDOWN_IN_TESTING", "false")
+    cfg = RiskConfig(
+        max_position_risk_pct=1.0,
+        max_portfolio_drawdown_pct=20.0,
+        max_daily_loss_pct=100.0,
+        max_open_positions=10,
+        sl_cooldown_minutes=30
+    )
+    snap_peak = PortfolioSnapshot(
+        total_value=1000.0,
+        cash=1000.0,
+        timestamp=datetime.now(timezone.utc) - timedelta(hours=3)
+    )
+    db_session.add(snap_peak)
+    snap_low = PortfolioSnapshot(
+        total_value=750.0,  # 25% drawdown > 20%
+        cash=750.0,
+        timestamp=datetime.now(timezone.utc)
+    )
+    db_session.add(snap_low)
+    db_session.commit()
+
+    # Sandbox suppresses drawdown halt so tests/demos are not locked out
+    enforce_risk_limits(db_session, cfg, [], snap_low)
+
+
+def test_risk_guard_enforces_sandbox_drawdown_when_explicitly_configured(db_session, monkeypatch):
+    monkeypatch.setenv("CTRADER_ENV", "sandbox")
+    monkeypatch.setenv("ENFORCE_SANDBOX_DRAWDOWN", "true")
+    monkeypatch.setenv("DISABLE_DRAWDOWN_IN_TESTING", "false")
+    cfg = RiskConfig(
+        max_position_risk_pct=1.0,
+        max_portfolio_drawdown_pct=20.0,
+        max_daily_loss_pct=100.0,
+        max_open_positions=10,
+        sl_cooldown_minutes=30
+    )
+    snap_peak = PortfolioSnapshot(
+        total_value=1000.0,
+        cash=1000.0,
+        timestamp=datetime.now(timezone.utc) - timedelta(hours=3)
+    )
+    db_session.add(snap_peak)
+    snap_low = PortfolioSnapshot(
+        total_value=750.0,  # 25% drawdown > 20%
+        cash=750.0,
+        timestamp=datetime.now(timezone.utc)
+    )
+    db_session.add(snap_low)
+    db_session.commit()
+
+    with pytest.raises(RiskBreach, match="drawdown exceeded"):
+        enforce_risk_limits(db_session, cfg, [], snap_low)
+
+

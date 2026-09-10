@@ -31,3 +31,7 @@ def clean_trading_mode_for_tests(monkeypatch):
     monkeypatch.setenv("PAPER_TRADING", "false")
     monkeypatch.setenv("DRY_RUN_ALL", "false")
     monkeypatch.setenv("BINANCE_PAPER_PARALLEL", "false")
+    monkeypatch.setenv("CTRADER_ENV", "live")
+    monkeypatch.setenv("CTRADER_PAPER_MODE", "false")
+    monkeypatch.setenv("DISABLE_DRAWDOWN_IN_TESTING", "false")
+    monkeypatch.setenv("TESTING_MODE", "false")
