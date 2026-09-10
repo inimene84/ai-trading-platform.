@@ -58,3 +58,50 @@ async def run_validation_simulation(req: ValidationBacktestRequest) -> Dict[str,
     if res.get("status") == "error":
         raise HTTPException(status_code=500, detail=res.get("error"))
     return res
+
+
+class MLPredictionRequest(BaseModel):
+    symbol: str = "BTC-USDT"
+    timeframe: str = "1h"
+    model_type: str = "lightgbm"
+    threshold: float = 0.45
+
+
+@router.get("/ml-models")
+async def get_ml_models() -> Dict[str, Any]:
+    """List available trained Machine Learning model artifacts and cache status."""
+    return await jesse_bridge.get_ml_models()
+
+
+@router.get("/ml-predict")
+async def get_ml_prediction(
+    symbol: str = Query("BTC-USDT"),
+    timeframe: str = Query("1h"),
+    model_type: str = Query("lightgbm"),
+    threshold: float = Query(0.45),
+) -> Dict[str, Any]:
+    """Query real-time Machine Learning prediction and probabilities via GET."""
+    res = await jesse_bridge.get_ml_prediction(
+        symbol=symbol,
+        timeframe=timeframe,
+        model_type=model_type,
+        threshold=threshold,
+    )
+    if res.get("status") == "error":
+        raise HTTPException(status_code=500, detail=res.get("error"))
+    return res
+
+
+@router.post("/ml-predict")
+async def post_ml_prediction(req: MLPredictionRequest = MLPredictionRequest()) -> Dict[str, Any]:
+    """Query real-time Machine Learning prediction and probabilities via POST."""
+    res = await jesse_bridge.get_ml_prediction(
+        symbol=req.symbol,
+        timeframe=req.timeframe,
+        model_type=req.model_type,
+        threshold=req.threshold,
+    )
+    if res.get("status") == "error":
+        raise HTTPException(status_code=500, detail=res.get("error"))
+    return res
+

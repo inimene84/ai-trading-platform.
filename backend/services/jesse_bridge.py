@@ -17,6 +17,8 @@ logger = logging.getLogger(__name__)
 
 JESSE_API_URL = os.getenv("JESSE_API_URL", "http://jesse-app:9000")
 JESSE_LOCAL_URL = os.getenv("JESSE_LOCAL_URL", "http://127.0.0.1:9000")
+JESSE_ML_URL = os.getenv("JESSE_ML_URL", "http://jesse-app:9003")
+JESSE_ML_LOCAL_URL = os.getenv("JESSE_ML_LOCAL_URL", "http://127.0.0.1:9003")
 JESSE_PASSWORD = os.getenv("JESSE_PASSWORD", "QuantumTrading2026!")
 
 
@@ -24,6 +26,7 @@ class JesseBridgeService:
     def __init__(self):
         self._token: Optional[str] = None
         self._base_url = JESSE_API_URL
+        self._ml_url = JESSE_ML_URL
 
     async def _resolve_url(self) -> str:
         """Dynamically detect if internal Docker hostname or local loopback is reachable."""
@@ -37,6 +40,19 @@ class JesseBridgeService:
             except Exception:
                 continue
         return self._base_url
+
+    async def _resolve_ml_url(self) -> str:
+        """Detect reachable ML inference endpoint (internal docker vs host loopback)."""
+        for url in [self._ml_url, JESSE_ML_LOCAL_URL]:
+            try:
+                async with httpx.AsyncClient(timeout=2.0) as client:
+                    res = await client.get(f"{url}/health")
+                    if res.status_code == 200:
+                        self._ml_url = url
+                        return url
+            except Exception:
+                continue
+        return self._ml_url
 
     async def get_token(self) -> Optional[str]:
         if self._token:
@@ -251,6 +267,45 @@ class JesseBridgeService:
             "trail_activation_atr": cfg.trail_activation_atr,
             "trail_atr_mult": cfg.trail_atr_mult,
         }
+
+    async def get_ml_prediction(
+        self,
+        symbol: str = "BTC-USDT",
+        timeframe: str = "1h",
+        model_type: str = "lightgbm",
+        threshold: float = 0.45,
+    ) -> Dict[str, Any]:
+        """Fetch ultra-low-latency real-time ML direction prediction and probabilities."""
+        base_ml = await self._resolve_ml_url()
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                res = await client.post(
+                    f"{base_ml}/predict",
+                    json={
+                        "symbol": symbol,
+                        "timeframe": timeframe,
+                        "model_type": model_type,
+                        "threshold": threshold,
+                    },
+                )
+                if res.status_code == 200:
+                    return res.json()
+                return {"status": "error", "error": f"ML server returned HTTP {res.status_code}: {res.text}"}
+        except Exception as e:
+            logger.error(f"Failed to query ML prediction endpoint: {e}")
+            return {"status": "error", "error": str(e)}
+
+    async def get_ml_models(self) -> Dict[str, Any]:
+        """Fetch status and list of trained ML model artifacts."""
+        base_ml = await self._resolve_ml_url()
+        try:
+            async with httpx.AsyncClient(timeout=3.0) as client:
+                res = await client.get(f"{base_ml}/health")
+                if res.status_code == 200:
+                    return res.json()
+                return {"status": "error", "error": f"ML server returned HTTP {res.status_code}"}
+        except Exception as e:
+            return {"status": "error", "error": str(e)}
 
 
 jesse_bridge = JesseBridgeService()

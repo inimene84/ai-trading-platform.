@@ -77,3 +77,79 @@ def test_jesse_sync_route(client, monkeypatch, tmp_path):
     assert data["status"] == "synced"
     assert data["sl_atr_mult"] == 2.25
     assert data["tp_atr_mult"] == 5.0
+
+
+@pytest.mark.asyncio
+async def test_jesse_bridge_get_ml_prediction():
+    """Test get_ml_prediction communicates with ML inference server."""
+    mock_prediction = {
+        "status": "success",
+        "symbol": "BTC-USDT",
+        "timeframe": "1h",
+        "signal": "BUY",
+        "confidence": 0.58,
+        "probabilities": {"bullish": 0.58, "bearish": 0.12, "neutral": 0.30},
+        "latest_close": 78500.0,
+        "model": "BTC-USDT_1h_lightgbm.joblib",
+        "latency_ms": 12.5,
+    }
+
+    service = JesseBridgeService()
+    with patch.object(service, "get_ml_prediction", AsyncMock(return_value=mock_prediction)):
+        res = await service.get_ml_prediction("BTC-USDT", "1h", "lightgbm", 0.45)
+        assert res["status"] == "success"
+        assert res["signal"] == "BUY"
+        assert res["confidence"] == 0.58
+
+
+def test_jesse_ml_predict_routes(client, monkeypatch):
+    """Test /api/jesse/ml-predict (GET and POST) and /api/jesse/ml-models."""
+    api_key = os.getenv("ADMIN_API_KEY", "test_key")
+    monkeypatch.setenv("ADMIN_API_KEY", api_key)
+
+    mock_prediction = {
+        "status": "success",
+        "symbol": "BTC-USDT",
+        "timeframe": "1h",
+        "signal": "BUY",
+        "confidence": 0.58,
+        "probabilities": {"bullish": 0.58, "bearish": 0.12, "neutral": 0.30},
+        "latest_close": 78500.0,
+        "model": "BTC-USDT_1h_lightgbm.joblib",
+        "latency_ms": 12.5,
+    }
+
+    mock_models = {
+        "status": "ok",
+        "cached_models": ["BTC-USDT_1h_lightgbm"],
+        "available_models": ["BTC-USDT_1h_lightgbm.joblib"],
+    }
+
+    with patch.object(jesse_bridge, "get_ml_prediction", AsyncMock(return_value=mock_prediction)), \
+         patch.object(jesse_bridge, "get_ml_models", AsyncMock(return_value=mock_models)):
+
+        # 1. GET /api/jesse/ml-predict
+        res_get = client.get(
+            "/api/jesse/ml-predict?symbol=BTC-USDT&timeframe=1h",
+            headers={"x-api-key": api_key},
+        )
+        assert res_get.status_code == 200
+        assert res_get.json()["signal"] == "BUY"
+
+        # 2. POST /api/jesse/ml-predict
+        res_post = client.post(
+            "/api/jesse/ml-predict",
+            headers={"x-api-key": api_key, "Content-Type": "application/json"},
+            json={"symbol": "BTC-USDT", "timeframe": "1h", "threshold": 0.5},
+        )
+        assert res_post.status_code == 200
+        assert res_post.json()["confidence"] == 0.58
+
+        # 3. GET /api/jesse/ml-models
+        res_models = client.get(
+            "/api/jesse/ml-models",
+            headers={"x-api-key": api_key},
+        )
+        assert res_models.status_code == 200
+        assert "BTC-USDT_1h_lightgbm.joblib" in res_models.json()["available_models"]
+
