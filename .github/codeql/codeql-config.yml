@@ -1,0 +1,20 @@
+name: quantumtrade-pro
+
+queries:
+  - uses: security-extended
+
+paths:
+  - backend
+  - frontend/src
+  - mcp_server
+  - scrapling_sidecar
+
+paths-ignore:
+  - frontend/dist
+  - "**/node_modules"
+  - backend/tests
+  - docs
+  - scripts
+  - n8n
+  - workflows
+  - scratch

@@ -1,0 +1,4 @@
+# Working-tree deny list for scripts/ci/secret_guards.sh
+# Keep the full burned values here only. The guard script excludes this file.
+39b2487d5386c4fd52e258721a2170915797f7280b8b0afc
+72.60.18.113

@@ -1,9 +1,7 @@
 name: VPS Deploy
 
 # Manual-only deploy for a LIVE real-money trading system.
-# Deliberately NOT triggered on push to main — a production deploy must be an
-# explicit, typed operator action. Protects against accidental deploys when the
-# SSH_PRIVATE_KEY secret is later configured.
+# Deliberately NOT triggered on push to main.
 on:
   workflow_dispatch:
     inputs:
@@ -12,7 +10,6 @@ on:
         required: true
         default: "no"
 
-# Never run two deploys at once — a rolling restart must be serialized.
 concurrency:
   group: vps-deploy
   cancel-in-progress: false
@@ -20,33 +17,53 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    # Optional: gate behind a GitHub `production` environment with required
-    # reviewers (Settings → Environments → production → Required reviewers).
     environment: production
     if: ${{ github.event.inputs.confirm == 'DEPLOY' }}
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Fail closed if SSH key is missing
+      - name: Fail closed if deploy secrets are missing
         env:
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
         run: |
-          if [ -z "$SSH_PRIVATE_KEY" ]; then
-            echo "::error::SSH_PRIVATE_KEY secret is not configured in GitHub repo settings. Configure it under Settings → Secrets and variables → Actions, or run the deploy manually on the VPS."
+          set -euo pipefail
+          missing=0
+          if [ -z "${SSH_PRIVATE_KEY:-}" ]; then
+            echo "::error::SSH_PRIVATE_KEY is not configured."
+            missing=1
+          fi
+          if [ -z "${SSH_HOST:-}" ]; then
+            echo "::error::SSH_HOST is not configured (no hardcoded host fallback)."
+            missing=1
+          fi
+          if [ -z "${SSH_USER:-}" ]; then
+            echo "::error::SSH_USER is not configured (no root fallback)."
+            missing=1
+          fi
+          if [ "$missing" -ne 0 ]; then
+            echo "Configure Settings → Secrets and variables → Actions, or deploy on the VPS."
             exit 1
           fi
           mkdir -p ~/.ssh
           printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H "${{ secrets.SSH_HOST || '72.60.18.113' }}" >> ~/.ssh/known_hosts 2>/dev/null || true
+          if [ -n "${{ secrets.SSH_KNOWN_HOSTS }}" ]; then
+            printf '%s\n' "${{ secrets.SSH_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+            chmod 644 ~/.ssh/known_hosts
+          else
+            echo "::error::SSH_KNOWN_HOSTS is required. Pin the host key; do not use accept-new."
+            exit 1
+          fi
 
       - name: Deploy to VPS
         env:
-          SSH_HOST: ${{ secrets.SSH_HOST || '72.60.18.113' }}
-          SSH_USER: ${{ secrets.SSH_USER || 'root' }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
         run: |
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new \
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes \
             "${SSH_USER}@${SSH_HOST}" 'bash -s' << 'REMOTE'
           set -euo pipefail
           PROJECT_DIR="${PROJECT_DIR:-/root/ai-trading-platform-v3}"
