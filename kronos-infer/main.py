@@ -155,16 +155,33 @@ def _infer_bar_freq(x_ts) -> pd.Timedelta:
     return pd.Timedelta(hours=1)
 
 
+def _synthetic_timestamps(lookback: int, freq: str = "1h"):
+    return pd.date_range(end=pd.Timestamp.utcnow(), periods=lookback, freq=freq)
+
+
 def _build_timestamps(df: pd.DataFrame, lookback: int, pred_len: int):
-    if "date" in df.columns and df["date"].notna().any():
+    """Build x/y timestamps; never return NaT (empty bar dates used to 500)."""
+    x_ts = None
+    if "date" in df.columns:
         try:
-            x_ts = pd.to_datetime(df["date"].iloc[-lookback:], utc=True).reset_index(drop=True)
+            parsed = pd.to_datetime(
+                df["date"].iloc[-lookback:], utc=True, errors="coerce",
+            ).reset_index(drop=True)
+            if len(parsed) == lookback and parsed.notna().all():
+                x_ts = parsed
         except Exception:
-            x_ts = pd.date_range(end=pd.Timestamp.utcnow(), periods=lookback, freq="1h")
-    else:
-        x_ts = pd.date_range(end=pd.Timestamp.utcnow(), periods=lookback, freq="1h")
+            x_ts = None
+    if x_ts is None:
+        x_ts = _synthetic_timestamps(lookback)
+
     last_ts = x_ts.iloc[-1] if hasattr(x_ts, "iloc") else x_ts[-1]
+    if pd.isna(last_ts):
+        x_ts = _synthetic_timestamps(lookback)
+        last_ts = x_ts[-1]
+
     freq = _infer_bar_freq(x_ts)
+    if freq is None or pd.isna(freq) or freq <= pd.Timedelta(0):
+        freq = pd.Timedelta(hours=1)
     y_ts = pd.date_range(start=last_ts, periods=pred_len + 1, freq=freq)[1:]
     return pd.Series(x_ts), pd.Series(y_ts)
 

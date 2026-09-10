@@ -1,0 +1,559 @@
+{
+  "id": "5B1ldyGeS9G5x1cG",
+  "name": "Futures Trade Tracker with Profit/Loss Monitoring + Alerts",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {
+        "operation": "download",
+        "fileId": {
+          "__rl": true,
+          "mode": "url",
+          "value": "https://drive.google.com/file/d/xxxxxxxxxxxxxxx/view"
+        },
+        "options": {}
+      },
+      "id": "3aa09357-6cf7-4a7f-aa39-434ca60d21dd",
+      "name": "Google Drive",
+      "type": "n8n-nodes-base.googleDrive",
+      "position": [
+        176,
+        2304
+      ],
+      "typeVersion": 3
+    },
+    {
+      "parameters": {
+        "dataType": "binary",
+        "loader": "epubLoader",
+        "options": {}
+      },
+      "id": "2f8cd00a-86ed-4586-b3cc-ab2c08429400",
+      "name": "Default Data Loader",
+      "type": "@n8n/n8n-nodes-langchain.documentDefaultDataLoader",
+      "position": [
+        592,
+        2528
+      ],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "content": "# INSERTING\n\n- it's important to use the same embedding model when for any interaction with your vector database (inserting, upserting and retrieval)",
+        "height": 820.5109034066329,
+        "width": 749.1276349295781
+      },
+      "id": "d140760c-be00-48d3-b319-72e81cbcd371",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        96,
+        2144
+      ],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "content": "# UPSERTING\n",
+        "height": 534.0012007720542,
+        "width": 873.9739981925188,
+        "color": 3
+      },
+      "id": "c6fbb636-9a92-4f3e-998e-98e39e292c95",
+      "name": "Sticky Note1",
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -816,
+        2992
+      ],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "content": "# PREPARATION (in Supabase)\n\n- your database needs the extension 'pgvector' enabled -> select Database > Extension > Search for 'vector'\n- make sure you have a table that has the following columns (if not, use the query below in the Supabase SQL Editor)\n\n```\nALTER TABLE \"YOUR TABLE NAME\"\nADD COLUMN embedding VECTOR(1536), // check which number of dimensions you need (depends on the embed model)\nADD COLUMN metadata JSONB,\nADD COLUMN content TEXT;\n```\n\n- make sure you have the right policies set -> select Authentication > Policies\n- make sure you have the custom function `match_documents` set up in Supabase -> This is needed for the Vector Store Node (as query name) \n(if not, use the query below in the Supabase SQL Editor to create that function)\n- make sure you check the size of the AI model as it should be the same vector size for the table \n(e.g. OpenAI's Text-Embedding-3-Small uses 1536)\n\n```\nCREATE OR REPLACE FUNCTION public.match_documents(\n filter JSONB,\n match_count INT,\n query_embedding VECTOR(1536) // should match same dimensions as from insertion\n)\nRETURNS TABLE (\n id BIGINT,\n content TEXT,\n metadata JSONB,\n embedding VECTOR(1536), // should match same dimensions as from insertion\n similarity FLOAT\n)\nLANGUAGE plpgsql AS $$\nBEGIN\n RETURN QUERY\n SELECT\n v.id,\n v.content,\n v.metadata,\n v.embedding,\n 1 - (v.embedding <=> match_documents.query_embedding) AS similarity\n FROM \"YOUR TABLE NAME\" v\n WHERE v.metadata @> filter\n ORDER BY v.embedding <=> match_documents.query_embedding\n LIMIT match_count;\nEND;\n$$\n;\n```\n",
+        "height": 821.787041589866,
+        "width": 876.5116990000852,
+        "color": 4
+      },
+      "id": "75568ffd-c3fc-4414-9ec6-03a136399e6d",
+      "name": "Sticky Note2",
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        -816,
+        2144
+      ],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "content": "# RETRIEVAL",
+        "height": 821.9537074055816,
+        "width": 810.9488123113013,
+        "color": 5
+      },
+      "id": "65243520-7f7f-4f14-a5a2-c3a1e22ce14e",
+      "name": "Sticky Note3",
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        864,
+        2144
+      ],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "c2ca2eb0-29c7-4c14-b873-e5ef1a6eae5d",
+      "name": "Question and Answer Chain",
+      "type": "@n8n/n8n-nodes-langchain.chainRetrievalQa",
+      "position": [
+        1152,
+        2288
+      ],
+      "typeVersion": 1.3
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "9f5f47bf-bd52-4c66-bead-2aa8eb2bcc3d",
+      "name": "OpenAI Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "position": [
+        1072,
+        2464
+      ],
+      "typeVersion": 1,
+      "credentials": {
+        "openAiApi": {
+          "id": "dBuMjEdKFegyty18",
+          "name": "OpenAI account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "topK": 10
+      },
+      "id": "bd2ad5e7-7b6b-4dea-99bc-90f6ce34a4f0",
+      "name": "Vector Store Retriever",
+      "type": "@n8n/n8n-nodes-langchain.retrieverVectorStore",
+      "position": [
+        1232,
+        2464
+      ],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "68b48849-4dd3-489a-aeb6-6436fbb38aa8",
+      "name": "Recursive Character Text Splitter1",
+      "type": "@n8n/n8n-nodes-langchain.textSplitterRecursiveCharacterTextSplitter",
+      "position": [
+        592,
+        2688
+      ],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "440fc115-ccae-4e30-85a5-501d0617b2cf",
+              "name": "output",
+              "type": "string",
+              "value": "={{ $json.response.text }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "e5af6f83-e4f5-42a1-afdb-fb2f1d04b329",
+      "name": "Customize Response",
+      "type": "n8n-nodes-base.set",
+      "position": [
+        1488,
+        2288
+      ],
+      "notesInFlow": true,
+      "typeVersion": 3.4,
+      "notes": "output || text"
+    },
+    {
+      "parameters": {
+        "public": true,
+        "initialMessages": "=Hi there! \ud83d\ude4f\n\nYou can ask me anything about Venerable Geshe Kelsang Gyatso's Book - 'How To Transform Your Life'\n\nWhat would you like to know? ",
+        "options": {
+          "responseMode": "lastNode"
+        }
+      },
+      "id": "c4be0a49-361b-4b78-b734-b75191307794",
+      "name": "When chat message received",
+      "type": "@n8n/n8n-nodes-langchain.chatTrigger",
+      "position": [
+        944,
+        2288
+      ],
+      "webhookId": "d7431c58-89aa-4d70-b5bd-044be981b3a9",
+      "typeVersion": 1.1
+    },
+    {
+      "parameters": {
+        "tableName": {
+          "__rl": true,
+          "mode": "list",
+          "value": "Kadampa",
+          "cachedResultName": "Kadampa"
+        },
+        "options": {
+          "queryName": "match_documents"
+        }
+      },
+      "id": "2379f6f4-49ad-4387-b798-8db31aa11c79",
+      "name": "Retrieve by Query",
+      "type": "@n8n/n8n-nodes-langchain.vectorStoreSupabase",
+      "position": [
+        1168,
+        2624
+      ],
+      "typeVersion": 1,
+      "credentials": {
+        "supabaseApi": {
+          "id": "ePZRpZhEMwautIGP",
+          "name": "Supabase account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "a1212212-7505-4729-b2de-4ce3cb33844c",
+      "name": "Embeddings OpenAI Retrieval",
+      "type": "@n8n/n8n-nodes-langchain.embeddingsOpenAi",
+      "position": [
+        1168,
+        2784
+      ],
+      "typeVersion": 1,
+      "credentials": {
+        "openAiApi": {
+          "id": "dBuMjEdKFegyty18",
+          "name": "OpenAI account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": "text-embedding-3-small",
+        "options": {}
+      },
+      "id": "97ccb6af-1707-4d4e-a5c8-1b3b6bf690ec",
+      "name": "Embeddings OpenAI Insertion",
+      "type": "@n8n/n8n-nodes-langchain.embeddingsOpenAi",
+      "position": [
+        384,
+        2528
+      ],
+      "typeVersion": 1,
+      "credentials": {
+        "openAiApi": {
+          "id": "dBuMjEdKFegyty18",
+          "name": "OpenAI account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "={\n \"Date\": \"{{ $now.format('dd MMM yyyy') }}\",\n \"Time\": \"{{ $now.format('HH:mm ZZZZ z') }}\"\n}\n",
+        "options": {}
+      },
+      "id": "226785a8-12e0-43c6-abe4-ee41ba0891b8",
+      "name": "Placeholder (File/Content to Upsert)",
+      "type": "n8n-nodes-base.set",
+      "position": [
+        -640,
+        3152
+      ],
+      "typeVersion": 3.4
+    },
+    {
+      "parameters": {
+        "model": "text-embedding-3-small",
+        "options": {}
+      },
+      "id": "c226cbb9-75a0-4296-9159-66c9edebee0a",
+      "name": "Embeddings OpenAI Upserting",
+      "type": "@n8n/n8n-nodes-langchain.embeddingsOpenAi",
+      "position": [
+        -416,
+        3312
+      ],
+      "typeVersion": 1,
+      "credentials": {
+        "openAiApi": {
+          "id": "dBuMjEdKFegyty18",
+          "name": "OpenAI account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "insert",
+        "tableName": {
+          "__rl": true,
+          "mode": "list",
+          "value": "Kadampa",
+          "cachedResultName": "Kadampa"
+        },
+        "options": {}
+      },
+      "id": "8c456816-05a7-40cb-8fc9-ebf9cda7efe6",
+      "name": "Insert Documents",
+      "type": "@n8n/n8n-nodes-langchain.vectorStoreSupabase",
+      "position": [
+        384,
+        2304
+      ],
+      "typeVersion": 1,
+      "credentials": {
+        "supabaseApi": {
+          "id": "ePZRpZhEMwautIGP",
+          "name": "Supabase account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "n8n",
+        "returnAll": true
+      },
+      "id": "a66792b0-1b5f-4875-af43-c92107f6ec44",
+      "name": "Retrieve Rows from Table",
+      "type": "n8n-nodes-base.supabase",
+      "position": [
+        1424,
+        2768
+      ],
+      "typeVersion": 1,
+      "credentials": {
+        "supabaseApi": {
+          "id": "ePZRpZhEMwautIGP",
+          "name": "Supabase account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "# DELETION\n\nAt the moment n8n does not have a built-in Supabase Node to delete records in a Vector Database. For this you would typically use the HTTP Request node to make an authorized API call to Supabase. \n\n## HTTP Request Node\n\nUse this node to send a DELETE request to your Supabase instance.\n\n- Supabase API Endpoint: Use the appropriate URL for your Supabase project. The endpoint will typically look like this: [https://<your-supabase-ref>.supabase.co/rest/v1/<your-vector-table>](https://supabase.com/docs/guides/api). Replace `<your-supabase-ref>` and `<your-vector-table>` with your details.\n### HEADERS:\n- apikey: Your Supabase API key.\n- Authorization: Bearer token with your Supabase JWT.\n- Query Parameters: Use query parameters to specify which record(s) to delete. For example, `?id=eq.<your-record-id>` where `<your-record-id>` is the specific record ID you want to delete \n(You can also reference back to the **Retrieve Rows From Table** Node to get the ID dynamically)\n\nEnsure you have the necessary permissions set up in Supabase to delete records through the API.\n\nPlease refer to the official n8n documentation for more detailed information on using the [HTTP Request Node](https://docs.n8n.io/integrations/builtin/core-nodes/n8n-nodes-base.httprequest/).\n\n_Note:_ Deleting records is a sensitive operation, so make sure that your permissions are correctly configured and that you are targeting the correct records to avoid unwanted data loss.",
+        "height": 537.3056597675153,
+        "width": 1587.0771183771394,
+        "color": 6
+      },
+      "id": "b72bfe06-cbc9-437f-97a1-4cc06cf5b3d6",
+      "name": "Sticky Note4",
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        96,
+        2992
+      ],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "mode": "update",
+        "tableName": {
+          "__rl": true,
+          "mode": "list",
+          "value": "n8n",
+          "cachedResultName": "n8n"
+        },
+        "id": "1",
+        "options": {
+          "queryName": "match_documents"
+        }
+      },
+      "id": "64d0dea0-1031-463c-ab96-95df69e580bf",
+      "name": "Update Documents",
+      "type": "@n8n/n8n-nodes-langchain.vectorStoreSupabase",
+      "position": [
+        -432,
+        3152
+      ],
+      "typeVersion": 1,
+      "credentials": {
+        "supabaseApi": {
+          "id": "ePZRpZhEMwautIGP",
+          "name": "Supabase account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Google Drive": {
+      "main": [
+        [
+          {
+            "node": "Insert Documents",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Question and Answer Chain",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Retrieve by Query": {
+      "ai_vectorStore": [
+        [
+          {
+            "node": "Vector Store Retriever",
+            "type": "ai_vectorStore",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Default Data Loader": {
+      "ai_document": [
+        [
+          {
+            "node": "Insert Documents",
+            "type": "ai_document",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Vector Store Retriever": {
+      "ai_retriever": [
+        [
+          {
+            "node": "Question and Answer Chain",
+            "type": "ai_retriever",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Question and Answer Chain": {
+      "main": [
+        [
+          {
+            "node": "Customize Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "When chat message received": {
+      "main": [
+        [
+          {
+            "node": "Question and Answer Chain",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Embeddings OpenAI Insertion": {
+      "ai_embedding": [
+        [
+          {
+            "node": "Insert Documents",
+            "type": "ai_embedding",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Embeddings OpenAI Retrieval": {
+      "ai_embedding": [
+        [
+          {
+            "node": "Retrieve by Query",
+            "type": "ai_embedding",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Embeddings OpenAI Upserting": {
+      "ai_embedding": [
+        [
+          {
+            "node": "Update Documents",
+            "type": "ai_embedding",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Recursive Character Text Splitter1": {
+      "ai_textSplitter": [
+        [
+          {
+            "node": "Default Data Loader",
+            "type": "ai_textSplitter",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Placeholder (File/Content to Upsert)": {
+      "main": [
+        [
+          {
+            "node": "Update Documents",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "none",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": true,
+    "binaryMode": "separate",
+    "timeSavedMode": "fixed",
+    "errorWorkflow": "IA5EABIICsmC65Yj",
+    "timezone": "Europe/Tallinn"
+  },
+  "staticData": {
+    "node:Every 5 Minutes": {
+      "recurrenceRules": []
+    },
+    "node:Every 5 Minutes1": {
+      "recurrenceRules": []
+    }
+  },
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "pinData": {},
+  "versionId": "317abf48-a954-48a6-a1d6-2e32c2965022",
+  "activeVersionId": null,
+  "triggerCount": 1
+}

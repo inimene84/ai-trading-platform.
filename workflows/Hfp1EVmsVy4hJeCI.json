@@ -1,0 +1,750 @@
+{
+  "id": "Hfp1EVmsVy4hJeCI",
+  "name": "15 - QuantumTrade OmniRoute Research (Webhook)",
+  "active": true,
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "qt-omni-kie-research",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "wh-1c019f5d",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        288,
+        304
+      ],
+      "webhookId": "qt-omni-kie-research"
+    },
+    {
+      "parameters": {
+        "content": "## QuantumTrade OmniRoute Research (Webhook)\n\n**Base:** `https://omni.allikas.online`\n**Auth:** credential **OmniRoute Trading v3** (`OmniRtTradV3n801`) httpBearerAuth\n\n### Model routing (Trading v3)\n- **kie/*** offline for Trading v3 \u2014 do NOT pin kie ids\n- **TRIAGE/speed:** `auto/fast`\n- **DEEP/quality:** `auto/best-chat`\n\n### Enrichment (QT creds)\n- Tavily Search QT \u2192 `Tavily account QT`\n- SerpAPI News QT \u2192 `SerpAPI QT HTTP`\n- Jina Search QT \u2192 `Jina AI`\n- Firecrawl Direct QT \u2192 `Firecrawl QT`\n- CMC Quotes QT \u2192 `CMC QT` (market context)\n- OmniRoute Brave/Firecrawl/Chat stay on OmniRoute Trading v3\n- Apify not wired (no news actor configured)\n\n\n### Scrapling\nTop brief URL fetched via `http://ai-trading-scrapling:8080/fetch` (cred Scrapling QT) before chat.",
+        "height": 888,
+        "width": 828,
+        "color": 5
+      },
+      "id": "st-2b20c5d3",
+      "name": "Routing Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -704,
+        -48
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = $input.first().json || {};\nconst body = raw.body && typeof raw.body === 'object' ? raw.body : raw;\nconst query = String(body.query || body.topic || body.q || '').trim()\n  || 'bitcoin OR ethereum OR crypto OR blockchain news';\nconst mode = String(body.mode || 'auto').toLowerCase() === 'deep' ? 'deep' : 'auto';\nlet max_results = parseInt(body.max_results, 10);\nif (!Number.isFinite(max_results) || max_results < 1) max_results = 15;\nif (max_results > 25) max_results = 25;\nreturn [{ json: { query, mode, max_results, triage_model: 'auto/fast', deep_model: 'auto/best-chat' } }];\n"
+      },
+      "id": "cd-f175ab6a",
+      "name": "Normalize Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        512,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://omni.allikas.online/v1/search",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ query: $json.query, provider: 'brave-search', search_type: 'news', max_results: $json.max_results || 15, stream: false }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          },
+          "timeout": 60000
+        }
+      },
+      "id": "hb-1e3fb856",
+      "name": "OmniRoute Brave Search",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        736,
+        304
+      ],
+      "credentials": {
+        "httpBearerAuth": {
+          "id": "OmniRtTradV3n801",
+          "name": "OmniRoute Trading v3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://omni.allikas.online/v1/search",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ query: $('Normalize Input').item.json.query, provider: 'firecrawl', search_type: 'news', max_results: $('Normalize Input').item.json.max_results || 15, stream: false }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          },
+          "timeout": 60000
+        }
+      },
+      "id": "hf-6547256b",
+      "name": "OmniRoute Firecrawl Search",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        864,
+        304
+      ],
+      "credentials": {
+        "httpBearerAuth": {
+          "id": "OmniRtTradV3n801",
+          "name": "OmniRoute Trading v3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "function extractHits(j) {\n  const hits = [];\n  const pools = [];\n  if (!j || typeof j !== 'object') return hits;\n  if (Array.isArray(j.results)) pools.push(j.results);\n  if (Array.isArray(j.data)) pools.push(j.data);\n  if (j.data && Array.isArray(j.data.results)) pools.push(j.data.results);\n  if (Array.isArray(j.organic)) pools.push(j.organic);\n  if (Array.isArray(j.news_results)) pools.push(j.news_results);\n  if (Array.isArray(j.items)) pools.push(j.items);\n  for (const arr of pools) {\n    for (const r of arr) {\n      if (!r || typeof r !== 'object') continue;\n      const title = String(r.title || r.name || '').trim();\n      const url = String(r.url || r.link || r.href || '').trim();\n      const snippet = String(r.snippet || r.description || r.content || r.summary || r.markdown || '').trim().slice(0, 280);\n      if (title || url) hits.push({ title, url, snippet });\n    }\n  }\n  return hits;\n}\nfunction safe(name) {\n  try { return $(name).first().json || {}; } catch (e) { return {}; }\n}\nconst cfg = $('Normalize Input').first().json || {};\nconst sources = [\n  'OmniRoute Brave Search',\n  'OmniRoute Firecrawl Search',\n  'Tavily Search QT',\n  'SerpAPI News QT',\n  'Jina Search QT',\n  'Firecrawl Direct QT',\n];\nconst seen = new Set();\nconst hits = [];\nfor (const name of sources) {\n  for (const h of extractHits(safe(name))) {\n    const key = (h.url || h.title).toLowerCase();\n    if (!key || seen.has(key)) continue;\n    seen.add(key);\n    hits.push(h);\n  }\n}\nconst cmc = safe('CMC Quotes QT');\nlet market = null;\ntry {\n  const d = (cmc.data || cmc);\n  market = {};\n  for (const sym of ['BTC','ETH','SOL']) {\n    const row = d[sym];\n    if (!row) continue;\n    const q = (row.quote && row.quote.USD) || {};\n    market[sym] = {\n      price: q.price,\n      change_24h: q.percent_change_24h,\n      market_cap: q.market_cap,\n    };\n  }\n  if (!Object.keys(market).length) market = null;\n} catch (e) { market = null; }\nconst max = cfg.max_results || 15;\nconst brief = hits.slice(0, max);\nconst model = cfg.mode === 'deep' ? (cfg.deep_model || 'auto/best-chat') : (cfg.triage_model || 'auto/fast');\nreturn [{ json: {\n  query: cfg.query, mode: cfg.mode, model, hit_count: brief.length, brief, market,\n}}];\n"
+      },
+      "id": "cm-313321c7",
+      "name": "Merge Search Brief",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2192,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const j = $input.first().json || {};\nconst system = `You are a crypto/markets research analyst. Given a query, a compact news brief (titles/urls/snippets), optional CMC spot context, and optional Scrapling page extract, return ONLY raw JSON (no markdown fences):\n{\"summary\":\"<2-4 sentences>\",\"bullets\":[\"...\"],\"sources\":[{\"title\":\"...\",\"url\":\"...\"}],\"confidence\":0.0,\"followups\":[\"...\"],\"market_note\":\"<one line or empty>\"}\nRules: ground claims in the brief/extract; if thin evidence, lower confidence and say so; prefer diverse sources; confidence is 0-1; market_note only if CMC context present.`;\nconst user = JSON.stringify({\n  query: j.query, mode: j.mode, model: j.model, hit_count: j.hit_count, brief: j.brief,\n  market: j.market || null,\n  scrapling: j.scrapling ? { url: j.scrapling.url, content: String(j.scrapling.content||\"\").slice(0,6000) } : null,\n});\nconst chat_payload = {\n  model: j.model || 'gemini-2.0-flash',\n  temperature: j.mode === 'deep' ? 0.2 : 0.35,\n  stream: false,\n  messages: [ { role: 'system', content: system }, { role: 'user', content: user } ],\n};\nreturn [{ json: { ...j, chat_payload } }];\n"
+      },
+      "id": "cb-254b1144",
+      "name": "Build Chat Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3200,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://omni.allikas.online/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.chat_payload) }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          },
+          "timeout": 90000
+        }
+      },
+      "id": "hc-8ce5db26",
+      "name": "OmniRoute Chat",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3472,
+        304
+      ],
+      "credentials": {
+        "httpBearerAuth": {
+          "id": "OmniRtTradV3n801",
+          "name": "OmniRoute Trading v3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const j = $input.first().json || {};\nlet content = '';\nif (j.choices && j.choices[0] && j.choices[0].message) {\n  content = String(j.choices[0].message.content || '');\n} else if (j.output) { content = String(j.output); }\nelse if (j.text) { content = String(j.text); }\nelse if (j.data && j.data.choices && j.data.choices[0] && j.data.choices[0].message) {\n  content = String(j.data.choices[0].message.content || '');\n}\nlet parsed = null;\ntry {\n  let txt = content.replace(/^```json\\s*/i, '').replace(/```$/i, '').trim();\n  const si = txt.indexOf('{');\n  const ei = txt.lastIndexOf('}');\n  if (si > -1 && ei > si) parsed = JSON.parse(txt.slice(si, ei + 1));\n} catch (e) {}\nconst prev = $('Build Chat Payload').first().json || {};\nconst result = parsed && typeof parsed === 'object' ? parsed : {\n  summary: content.slice(0, 2000) || 'No model content',\n  bullets: [],\n  sources: (prev.brief || []).slice(0, 5).map(h => ({ title: h.title, url: h.url })),\n  confidence: 0.2,\n  followups: [],\n  parse_error: true,\n};\nresult.meta = { query: prev.query, mode: prev.mode, model: prev.model, hit_count: prev.hit_count, workflow: '15-qt-omni-research' };\nreturn [{ json: result }];\n"
+      },
+      "id": "co-53237f17",
+      "name": "Normalize JSON Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3664,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {}
+      },
+      "id": "rw-00883699",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        3872,
+        288
+      ]
+    },
+    {
+      "parameters": {
+        "query": "={{ $('Normalize Input').item.json.query }}",
+        "options": {
+          "topic": "news",
+          "search_depth": "basic",
+          "max_results": 10,
+          "time_range": "week"
+        }
+      },
+      "id": "tavily-0264216f",
+      "name": "Tavily Search QT",
+      "type": "@tavily/n8n-nodes-tavily.tavily",
+      "typeVersion": 1,
+      "position": [
+        1088,
+        304
+      ],
+      "credentials": {
+        "tavilyApi": {
+          "id": "UHByjDyHzlJNVG00",
+          "name": "Tavily account QT"
+        }
+      },
+      "continueOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "https://serpapi.com/search.json",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpQueryAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "engine",
+              "value": "google_news"
+            },
+            {
+              "name": "q",
+              "value": "={{ $('Normalize Input').item.json.query }}"
+            },
+            {
+              "name": "num",
+              "value": "10"
+            },
+            {
+              "name": "hl",
+              "value": "en"
+            },
+            {
+              "name": "gl",
+              "value": "us"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          },
+          "timeout": 45000
+        }
+      },
+      "id": "serp-1fb54aa3",
+      "name": "SerpAPI News QT",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1312,
+        304
+      ],
+      "credentials": {
+        "httpQueryAuth": {
+          "id": "3Ud8WFZyh0tmSXj3",
+          "name": "SerpAPI QT HTTP"
+        }
+      },
+      "continueOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "search",
+        "searchQuery": "={{ $('Normalize Input').item.json.query }}",
+        "options": {},
+        "requestOptions": {}
+      },
+      "id": "jina-dc2af9a1",
+      "name": "Jina Search QT",
+      "type": "n8n-nodes-base.jinaAi",
+      "typeVersion": 1,
+      "position": [
+        1520,
+        304
+      ],
+      "credentials": {
+        "jinaAiApi": {
+          "id": "Ux17uNU330bMbSXG",
+          "name": "Jina AI"
+        }
+      },
+      "continueOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.firecrawl.dev/v1/search",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={ JSON.stringify({ query: $('Normalize Input').item.json.query, limit: 10 }) }",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          },
+          "timeout": 60000
+        }
+      },
+      "id": "fcd-b433045b",
+      "name": "Firecrawl Direct QT",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1744,
+        304
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "nYBzRsXyPRMZmCB4",
+          "name": "Firecrawl QT"
+        }
+      },
+      "continueOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "symbol",
+              "value": "BTC,ETH,SOL"
+            },
+            {
+              "name": "convert",
+              "value": "USD"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          },
+          "timeout": 30000
+        }
+      },
+      "id": "cmc-e6ca1145",
+      "name": "CMC Quotes QT",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1968,
+        304
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "fToVIx7c2EALHAhR",
+          "name": "CMC QT"
+        }
+      },
+      "continueOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const j=$input.first().json||{};\nconst brief=Array.isArray(j.brief)?j.brief:[];\nconst top=brief.find(h=>h && String(h.url||\"\").startsWith(\"http\")) || null;\nreturn [{json:{...j, scrapling_url: top?top.url:null, scrapling_title: top?top.title:null}}];"
+      },
+      "id": "pick-fe5a7b3d",
+      "name": "Pick Top URL for Scrapling",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2400,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "1",
+              "leftValue": "={{ $json.scrapling_url }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if15-c197489b",
+      "name": "Has Scrapling URL?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        2592,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://ai-trading-scrapling:8080/fetch",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ url: $json.scrapling_url, mode: \"http\", extraction_type: \"markdown\" }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          },
+          "timeout": 90000
+        }
+      },
+      "id": "sc15-273dc271",
+      "name": "Scrapling Top URL QT",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2816,
+        208
+      ],
+      "credentials": {
+        "httpBearerAuth": {
+          "id": "5zsyuVRVlidofvho",
+          "name": "Scrapling Research"
+        }
+      },
+      "continueOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "let base={};\ntry { base=$(\"Pick Top URL for Scrapling\").first().json||{}; } catch(e) { base=$input.first().json||{}; }\nlet scrap={};\ntry { scrap=$(\"Scrapling Top URL QT\").first().json||{}; } catch(e) {}\nconst content=(typeof scrap.content===\"string\")?scrap.content.slice(0,12000):null;\nreturn [{json:{...base, scrapling: content?{url:scrap.url||base.scrapling_url, status:scrap.status, content_len:content.length, content}:null}}];"
+      },
+      "id": "att-63717e12",
+      "name": "Attach Scrapling Content",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3040,
+        304
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Normalize Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Input": {
+      "main": [
+        [
+          {
+            "node": "OmniRoute Brave Search",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OmniRoute Brave Search": {
+      "main": [
+        [
+          {
+            "node": "OmniRoute Firecrawl Search",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OmniRoute Firecrawl Search": {
+      "main": [
+        [
+          {
+            "node": "Tavily Search QT",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Search Brief": {
+      "main": [
+        [
+          {
+            "node": "Pick Top URL for Scrapling",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Chat Payload": {
+      "main": [
+        [
+          {
+            "node": "OmniRoute Chat",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OmniRoute Chat": {
+      "main": [
+        [
+          {
+            "node": "Normalize JSON Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize JSON Output": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tavily Search QT": {
+      "main": [
+        [
+          {
+            "node": "SerpAPI News QT",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SerpAPI News QT": {
+      "main": [
+        [
+          {
+            "node": "Jina Search QT",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Jina Search QT": {
+      "main": [
+        [
+          {
+            "node": "Firecrawl Direct QT",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Firecrawl Direct QT": {
+      "main": [
+        [
+          {
+            "node": "CMC Quotes QT",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CMC Quotes QT": {
+      "main": [
+        [
+          {
+            "node": "Merge Search Brief",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pick Top URL for Scrapling": {
+      "main": [
+        [
+          {
+            "node": "Has Scrapling URL?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Scrapling URL?": {
+      "main": [
+        [
+          {
+            "node": "Scrapling Top URL QT",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Attach Scrapling Content",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Scrapling Top URL QT": {
+      "main": [
+        [
+          {
+            "node": "Attach Scrapling Content",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Attach Scrapling Content": {
+      "main": [
+        [
+          {
+            "node": "Build Chat Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": true,
+    "binaryMode": "separate"
+  },
+  "staticData": null,
+  "meta": null,
+  "pinData": {},
+  "versionId": "ef0fc571-41f3-47c5-883d-b6c46166827e",
+  "activeVersionId": "ef0fc571-41f3-47c5-883d-b6c46166827e",
+  "triggerCount": 1
+}

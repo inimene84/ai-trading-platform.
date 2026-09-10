@@ -75,7 +75,7 @@ class SignalCandidateEngine:
             },
         }
         self.execution_config: Dict[str, Any] = {
-            "forex_only": os.getenv("CTRADER_FOREX_ONLY", "true").lower() == "true",
+            "forex_only": os.getenv("CTRADER_FOREX_ONLY", "false").lower() == "true",
             "max_open_ctrader_positions": int(
                 os.getenv("CTRADER_MAX_OPEN_POSITIONS")
                 or os.getenv("MAX_CTRADER_POSITIONS")
@@ -85,11 +85,15 @@ class SignalCandidateEngine:
             "max_ctrader_lots": float(os.getenv("CTRADER_MAX_LOTS", "0.10")),
             "max_metal_lots": float(os.getenv("CTRADER_MAX_METAL_LOTS", "0.01")),
             "one_position_per_symbol": os.getenv("CTRADER_ONE_POSITION_PER_SYMBOL", "true").lower() == "true",
-            "include_metals": os.getenv("CTRADER_INCLUDE_METALS", "false").lower() == "true",
+            "include_metals": os.getenv("CTRADER_INCLUDE_METALS", "true").lower() == "true",
             "max_same_base": int(os.getenv("CTRADER_MAX_SAME_BASE", "2")),
             "max_currency_exposure": int(os.getenv("CTRADER_MAX_CURRENCY_EXPOSURE", "2")),
             "max_candidates": int(os.getenv("CTRADER_MAX_CANDIDATES", "200")),
         }
+        self._symbol_cooldowns: Dict[str, float] = {}
+        self.cooldown_duration_sec: int = int(os.getenv("SYMBOL_COOLDOWN_MINUTES", "45")) * 60
+        self.momentum_min_adx: float = float(os.getenv("MOMENTUM_MIN_ADX", "22.0"))
+
         # High-impact calendar currencies map to the liquid FX pair, never gold.
         # NZD OCR / AUD GDP used to become XAUUSD SELL and n8n retried forever.
         self.MACRO_CURRENCY_PAIRS: Dict[str, str] = {
@@ -103,14 +107,35 @@ class SignalCandidateEngine:
             "CHF": "USDCHF",
         }
 
+    def set_symbol_cooldown(self, symbol: str, duration_sec: Optional[int] = None) -> None:
+        """Lock out a symbol from opening new positions after a stop-out or adverse exit."""
+        duration = duration_sec if duration_sec is not None else self.cooldown_duration_sec
+        expiry = time.time() + max(0, duration)
+        sym = str(symbol or "").upper()
+        self._symbol_cooldowns[sym] = expiry
+        logger.info(
+            f"[{sym}] Cooldown activated until "
+            f"{datetime.fromtimestamp(expiry, tz=timezone.utc).isoformat()} ({duration/60:.1f}m)"
+        )
+
+    def is_symbol_cooling_down(self, symbol: str) -> bool:
+        sym = str(symbol or "").upper()
+        expiry = self._symbol_cooldowns.get(sym)
+        if not expiry:
+            return False
+        if time.time() < expiry:
+            return True
+        self._symbol_cooldowns.pop(sym, None)
+        return False
+
     # ── P1: FX pre-execution timing gate ────────────────────────────────────
     # FX entries historically bypassed every quality gate the DecisionEngine
     # path enforces (Kronos veto, heuristic timing) — measured live win rate
-    # on 2026-09-08 was 20%. FX_KRONOS_GATE=shadow (default) logs vetoes on
-    # the candidate without blocking; =enforce blocks; =off disables.
+    # on 2026-09-08 was 20%. FX_KRONOS_GATE=enforce (default) blocks trades
+    # when Kronos predicts opposite/neutral; =shadow logs vetoes without blocking; =off disables.
     @staticmethod
     def _fx_gate_mode() -> str:
-        return os.getenv("FX_KRONOS_GATE", "shadow").strip().lower()
+        return os.getenv("FX_KRONOS_GATE", "enforce").strip().lower()
 
     @staticmethod
     def _fade_h1_filter_enabled() -> bool:
@@ -485,10 +510,39 @@ class SignalCandidateEngine:
         trend = "BULLISH" if ema_fast > ema_slow else "BEARISH" if ema_fast < ema_slow else "NEUTRAL"
         volatility_pct = (atr / last_close) * 100 if last_close > 0 else 0.1
 
+        # ADX calculation (14 period)
+        adx = 0.0
+        if len(bars) >= 15:
+            try:
+                import pandas as pd
+                s_high = pd.Series(highs, dtype=float)
+                s_low = pd.Series(lows, dtype=float)
+                s_close = pd.Series(closes, dtype=float)
+                up_move = s_high.diff()
+                down_move = -s_low.diff()
+                plus_dm = up_move.where((up_move > down_move) & (up_move > 0), 0.0)
+                minus_dm = down_move.where((down_move > up_move) & (down_move > 0), 0.0)
+                tr = pd.concat([
+                    s_high - s_low,
+                    (s_high - s_close.shift()).abs(),
+                    (s_low - s_close.shift()).abs(),
+                ], axis=1).max(axis=1)
+                period = min(14, len(bars) - 1)
+                atr_s = tr.ewm(span=period, adjust=False).mean()
+                plus_di = 100 * plus_dm.ewm(span=period, adjust=False).mean() / (atr_s + 1e-9)
+                minus_di = 100 * minus_dm.ewm(span=period, adjust=False).mean() / (atr_s + 1e-9)
+                dx = (100 * (plus_di - minus_di).abs() / (plus_di + minus_di + 1e-9))
+                adx_val = dx.ewm(span=period, adjust=False).mean()
+                adx = float(adx_val.iloc[-1])
+            except Exception as err:
+                logger.debug(f"ADX computation fallback: {err}")
+                adx = 25.0
+
         return {
             "last_close": last_close,
             "atr": round(atr, 5),
             "rsi": round(rsi, 2),
+            "adx": round(adx, 2),
             "ema_fast": round(ema_fast, 5),
             "ema_slow": round(ema_slow, 5),
             "trend": trend,
@@ -502,8 +556,16 @@ class SignalCandidateEngine:
         if not self.timing_config["strategies_enabled"].get("momentum", True):
             return None
 
-        # Bullish momentum: EMA trend is BULLISH + RSI between 55 and 70 (healthy impulse)
-        # Bearish momentum: EMA trend is BEARISH + RSI between 30 and 45
+        # Check ADX / Chop filter: do not trade momentum breakouts during low-ADX range/consolidation
+        adx_val = float(features.get("adx", 0.0))
+        if adx_val < self.momentum_min_adx:
+            logger.info(
+                f"[{symbol}] MOMENTUM veto: ADX {adx_val:.1f} < {self.momentum_min_adx} indicates choppy/ranging market"
+            )
+            return None
+
+        # Bullish momentum: EMA trend is BULLISH + RSI between 52 and 72 (healthy impulse)
+        # Bearish momentum: EMA trend is BEARISH + RSI between 28 and 48
         direction = None
         if features["trend"] == "BULLISH" and 52 <= features["rsi"] <= 72:
             direction = "BUY"
@@ -511,6 +573,19 @@ class SignalCandidateEngine:
             direction = "SELL"
 
         if not direction:
+            return None
+
+        # Higher-timeframe trend alignment: never trade M5 momentum against H1 trend
+        h1_trend = features.get("h1_trend")
+        if h1_trend == "BEARISH" and direction == "BUY":
+            logger.info(
+                f"[{symbol}] MOMENTUM veto: BUY impulse against H1 BEARISH trend"
+            )
+            return None
+        if h1_trend == "BULLISH" and direction == "SELL":
+            logger.info(
+                f"[{symbol}] MOMENTUM veto: SELL impulse against H1 BULLISH trend"
+            )
             return None
 
         price = features["last_close"]
@@ -531,7 +606,7 @@ class SignalCandidateEngine:
             "take_profit": tp,
             "timing_mode": TimingMode.POST_REACTION,
             "confidence": 0.82,
-            "reason": f"M5 {direction} momentum confirmed. RSI {features['rsi']} aligned with {features['trend']} trend.",
+            "reason": f"M5 {direction} momentum confirmed. RSI {features['rsi']} aligned with {features['trend']} trend (ADX {adx_val:.1f}).",
         }
 
     # ── Strategy 2: Fade (Contrarian Mean-Reversion) ─────────────────────────
@@ -745,6 +820,11 @@ class SignalCandidateEngine:
 
         for sym in universe:
             try:
+                if self.is_symbol_cooling_down(sym):
+                    logger.info(
+                        f"[{sym}] Skipping candidate generation — symbol is in post-loss cooldown"
+                    )
+                    continue
                 asset_class = classify_symbol(sym)
                 if asset_class == "metal" and not self.execution_config.get("include_metals"):
                     continue
@@ -780,27 +860,28 @@ class SignalCandidateEngine:
                 for ev in evaluators:
                     raw_signal = ev(sym, features, broker)
                     if raw_signal:
-                        sl, tp = CTraderService.clamp_protective_prices(
-                            sym,
-                            raw_signal["entry_price"],
-                            raw_signal.get("stop_loss"),
-                            raw_signal.get("take_profit"),
-                            direction=raw_signal.get("direction"),
-                        )
-                        # P0: veto geometry the broker clamp deformed into a
-                        # 1:1 (or worse) coin-flip instead of executing it.
-                        validated = CTraderService.validate_protective_geometry(
-                            sym,
-                            raw_signal["entry_price"],
-                            raw_signal.get("stop_loss"),
-                            raw_signal.get("take_profit"),
-                            sl,
-                            tp,
-                            direction=raw_signal.get("direction"),
-                        )
-                        if validated is None:
-                            continue  # next strategy may produce valid geometry
-                        raw_signal["stop_loss"], raw_signal["take_profit"] = validated
+                        if broker == "ctrader":
+                            sl, tp = CTraderService.clamp_protective_prices(
+                                sym,
+                                raw_signal["entry_price"],
+                                raw_signal.get("stop_loss"),
+                                raw_signal.get("take_profit"),
+                                direction=raw_signal.get("direction"),
+                            )
+                            # P0: veto geometry the broker clamp deformed into a
+                            # 1:1 (or worse) coin-flip instead of executing it.
+                            validated = CTraderService.validate_protective_geometry(
+                                sym,
+                                raw_signal["entry_price"],
+                                raw_signal.get("stop_loss"),
+                                raw_signal.get("take_profit"),
+                                sl,
+                                tp,
+                                direction=raw_signal.get("direction"),
+                            )
+                            if validated is None:
+                                continue  # next strategy may produce valid geometry
+                            raw_signal["stop_loss"], raw_signal["take_profit"] = validated
                         size_data = self._calculate_size(sym, raw_signal["entry_price"], raw_signal["stop_loss"], broker)
 
                         # P1: Kronos + heuristic timing gate. Shadow mode logs
@@ -1122,6 +1203,14 @@ class SignalCandidateEngine:
             if now_ts > cand["latest_exec_at"]:
                 cand["status"] = CandidateStatus.EXPIRED
                 return {"success": False, "error": "Timing window expired."}
+
+        cand_sym = str(cand.get("symbol", "")).upper()
+        if not force and self.is_symbol_cooling_down(cand_sym):
+            return {
+                "success": False,
+                "skipped": True,
+                "error": f"Symbol {cand_sym} is in post-loss cooldown.",
+            }
 
         if self.execution_config.get("forex_only") and cand.get("broker") == "binance_futures":
             return {

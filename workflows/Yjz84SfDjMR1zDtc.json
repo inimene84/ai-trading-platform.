@@ -1,0 +1,802 @@
+{
+  "id": "Yjz84SfDjMR1zDtc",
+  "name": "MAIN AGENT",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -48,
+        480
+      ],
+      "id": "80ca9260-5cc8-44cc-99d7-4008a2425d0d",
+      "name": "When clicking \u2018Execute workflow\u2019"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Prepare payload for TradingAgents multi-agent system\n// TradingAgents expects: ticker symbol + date\nconst agentOutput = $input.first().json.output || $input.first().json;\nconst today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD\n\n// Extract HIGH conviction pairs from agent output\n// The agent returns text - parse it for high confidence pairs\nconst outputText = typeof agentOutput === 'string' ? agentOutput : JSON.stringify(agentOutput);\n\n// Build payload array for TradingAgents\n// TradingAgents.propagate(ticker, date) - crypto tickers need to be adapted\n// For crypto, use the base symbol (BTC, ETH, SOL etc)\nconst cryptoSymbols = [];\nconst pairRegex = /\\b([A-Z]{2,10})USDT\\b/g;\nlet match;\nwhile ((match = pairRegex.exec(outputText)) !== null) {\n  const baseSymbol = match[1];\n  if (!cryptoSymbols.includes(baseSymbol) && \n      !['USDC', 'USDT', 'BUSD', 'DAI', 'WBTC'].includes(baseSymbol)) {\n    cryptoSymbols.push(baseSymbol);\n  }\n}\n\nreturn cryptoSymbols.slice(0, 5).map(symbol => ({\n  json: {\n    ticker: symbol,\n    date: today,\n    binancePair: `${symbol}USDT`,\n    source: 'hype_scanner',\n    tradingAgentsEndpoint: 'http://tradingagents-api:8001/analyze'\n  }\n}));"
+      },
+      "id": "be1c34af-8502-4d55-8b64-b396586cbcdf",
+      "name": "Prepare TradingAgents Payload",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        2368,
+        480
+      ],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "url": "https://api.coingecko.com/api/v3/search/trending",
+        "options": {}
+      },
+      "id": "454c4126-2c9e-4682-aac3-8a575be3f104",
+      "name": "Get Trending1",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        176,
+        192
+      ],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "triggerAtMinute": 30
+            }
+          ]
+        }
+      },
+      "id": "de37920c-be0a-4c6c-a02f-aaedf00a9123",
+      "name": "8:30 AM/PM IST1",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "position": [
+        -48,
+        0
+      ],
+      "typeVersion": 1.2,
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "url": "https://pro-api.coinmarketcap.com/v1/cryptocurrency/listings/latest",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "limit",
+              "value": "200"
+            },
+            {
+              "name": "sort",
+              "value": "percent_change_24h"
+            },
+            {
+              "name": "sort_dir",
+              "value": "desc"
+            },
+            {
+              "name": "convert",
+              "value": "USD"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "6eae74e0-4ac9-4a87-90b4-3247d5077eea",
+      "name": "Fetch Top 200 Gainers from CMC",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        176,
+        384
+      ],
+      "typeVersion": 4.3,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "MdKY8WfrdRYeDsho",
+          "name": "CMC"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst cryptoData = items[0].json.data;\n\nconst MIN_PERCENT_CHANGE = 5;   // lowered from 40 so we get more candidates  \nconst MIN_MARKET_CAP = 5000000;  // $5M\nconst MIN_VOLUME = 500000;       // $500k\n\n// Binance spot market suffix list - only include coins tradeable on Binance spot\nconst BINANCE_QUOTE_CURRENCIES = ['USDT', 'USDC', 'BTC', 'ETH', 'BNB'];\n\nconst filteredTokens = [];\n\nfor (const token of cryptoData) {\n  const q = token.quote?.USD;\n  if (!q) continue;\n  \n  const percentChange = q.percent_change_24h || 0;\n  const marketCap = q.market_cap || 0;\n  const volume = q.volume_24h || 0;\n  const price = q.price || 0;\n  \n  if (percentChange >= MIN_PERCENT_CHANGE && \n      marketCap >= MIN_MARKET_CAP && \n      volume >= MIN_VOLUME &&\n      price > 0) {\n    \n    // Build primary Binance spot pair (always USDT first)\n    const symbol = token.symbol.toUpperCase();\n    const binancePair = `${symbol}USDT`;\n    \n    filteredTokens.push({\n      json: {\n        name: token.name,\n        symbol: symbol,\n        binancePair: binancePair,          // e.g. \"BTCUSDT\"\n        price: price,\n        percent_change_1h: q.percent_change_1h || 0,\n        percent_change_24h: percentChange,\n        percent_change_7d: q.percent_change_7d || 0,\n        market_cap: marketCap,\n        market_cap_rank: token.cmc_rank || 0,\n        volume_24h: volume,\n        volume_change_24h: q.volume_change_24h || 0,\n        tags: token.tags || [],\n        source: 'CMC'\n      }\n    });\n  }\n}\n\nreturn filteredTokens;"
+      },
+      "id": "d931327d-b204-4ad2-b1ad-23b5f61a6701",
+      "name": "Filter Top Gainers (40% gain, $10M MC, $1M vol)",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        400,
+        384
+      ],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\n\nconst sectorMapping = {\n  'ai': ['ai', 'artificial-intelligence', 'ai-big-data', 'gpt', 'machine-learning', 'large-language-model'],\n  'depin': ['depin', 'infrastructure', 'storage', 'oracle', 'iot', 'wireless'],\n  'defi': ['defi', 'dex', 'lending', 'yield-farming', 'derivatives', 'stablecoin', 'amm', 'liquid-staking'],\n  'gaming': ['gaming', 'metaverse', 'nft', 'play-to-earn', 'collectibles', 'gamefi'],\n  'rwa': ['rwa', 'real-world-assets', 'tokenized-assets', 'real-estate'],\n  'layer1': ['layer-1', 'platform', 'smart-contracts', 'pos', 'pow'],\n  'layer2': ['layer-2', 'scaling', 'rollup', 'zk', 'optimistic'],\n  'meme': ['meme', 'memes', 'dog-themed', 'cat-themed', 'animal'],\n  'infrastructure': ['oracle', 'data', 'privacy', 'interoperability', 'bridge', 'cross-chain'],\n  'social': ['social', 'dao', 'governance', 'identity'],\n  'payments': ['payments', 'remittance', 'currency', 'stablecoin']\n};\n\nfunction determineSector(tags) {\n  if (!tags || tags.length === 0) return 'other';\n  for (const [sector, keywords] of Object.entries(sectorMapping)) {\n    for (const tag of tags) {\n      const t = (typeof tag === 'string' ? tag : tag.slug || '').toLowerCase();\n      for (const kw of keywords) {\n        if (t.includes(kw)) return sector;\n      }\n    }\n  }\n  return 'other';\n}\n\n// Assign sectors\nconst tokensWithSectors = items.map(item => ({\n  ...item.json,\n  sector: determineSector(item.json.tags)\n}));\n\n// Group by sector\nconst sectorGroups = {};\nfor (const tkn of tokensWithSectors) {\n  if (!sectorGroups[tkn.sector]) sectorGroups[tkn.sector] = [];\n  sectorGroups[tkn.sector].push(tkn);\n}\n\n// Build sector stats\nconst sectorStats = Object.entries(sectorGroups).map(([sector, tokens]) => {\n  const avgGain = (tokens.reduce((s, t) => s + t.percent_change_24h, 0) / tokens.length).toFixed(2);\n  const totalVolume = tokens.reduce((s, t) => s + t.volume_24h, 0);\n  return {\n    sector,\n    count: tokens.length,\n    avgGain: parseFloat(avgGain),\n    totalVolume,\n    tokens: tokens.sort((a, b) => b.percent_change_24h - a.percent_change_24h)\n  };\n}).sort((a, b) => b.avgGain - a.avgGain);\n\n// Return single item with all data for the Main Agent\nreturn [{\n  json: {\n    sectorStats,\n    allTokens: tokensWithSectors,\n    totalTokensFound: tokensWithSectors.length,\n    source: items[0]?.json?.source || 'CMC',\n    timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "049789ef-51e4-451d-8af5-27a7cfabf483",
+      "name": "Group Tokens by Sector3",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        624,
+        384
+      ],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "id": "77ec2bf5-5185-4b4c-848e-289139800a93",
+      "name": "Merge Sector Data with Analysis",
+      "type": "n8n-nodes-base.merge",
+      "position": [
+        848,
+        480
+      ],
+      "typeVersion": 3.2
+    },
+    {
+      "parameters": {
+        "endpointUrl": "https://mcp.api.coingecko.com/mcp",
+        "options": {}
+      },
+      "id": "5e712fdb-d6e7-40af-b830-e940a8255efb",
+      "name": "CoinGecko Free MCP1",
+      "type": "@n8n/n8n-nodes-langchain.mcpClientTool",
+      "position": [
+        1600,
+        704
+      ],
+      "typeVersion": 1.2
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=First send  {{ $json.binancePairs }}AI Agent Tool-Binance Spot Market Quant analyser and then research all the trending coins",
+        "hasOutputParser": true,
+        "needsFallback": true,
+        "options": {
+          "systemMessage": "=You are the **Crypto Hype & Trend Intelligence Agent** \u2014 the main orchestrator of a multi-layer trading intelligence system.\n\n## YOUR MISSION\nFirst send All Binance {{ $json.binancePairs }} to the  AI Agent Tool-Binance Spot Market Quant analyser. To get all the latest data. Then!\n## Analyze trending and high-momentum crypto market data to identify genuine narrative-driven opportunities and dispatch them to deep technical analysis sub-agents.\n\n## INPUT YOU RECEIVE\n- Pre-processed market data: top movers from CoinMarketCap (top 200) + CoinGecko trending coins\n- Sector momentum stats (AI, DeFi, GameFi, RWA, Meme, L1/L2, etc.)\n- All tokens already formatted as Binance Spot pairs (e.g. BTCUSDT, ADAUSDT)\n\n## YOUR ANALYSIS TASKS\n1. **Identify the dominant narrative**: Which sector or theme is driving today's pumps? Is it AI tokens, DeFi, memes, a specific chain ecosystem, or a macro event?\n2. **Separate real hype from noise**: Tokens with sector-wide moves (2+ tokens in same sector moving together) signal a NARRATIVE. Single token moves may be pump-and-dump.\n3. **Prioritize candidates**: Rank tokens by: (a) sector momentum confirmation, (b) volume-to-market-cap ratio > 0.1 = high activity, (c) market cap $5M\u2013$500M = sweet spot for explosive moves.\n4. **Cross-reference with CoinGecko trending**: If a token appears in BOTH CMC top gainers AND CoinGecko trending \u2192 HIGH CONVICTION signal.\n\n## WHAT TO DISPATCH TO SUB-AGENT\nAfter your analysis, call the Sub Agent Tool with a structured list of the TOP 8\u201312 Binance spot pairs (UPPERCASE, e.g. SOLUSDT) that have the strongest narrative + momentum combination. Send them ONE BY ONE using the sub-workflow tool.\n\n## OUTPUT FORMAT\nAlways produce:\n1. **Narrative Summary** (2-3 sentences): What's the story of today's market?\n2. **Top Picks Table**: Symbol | Sector | 24h% | MC | Conviction Level\n3. **Dispatched pairs**: List of pairs sent to technical analysis\n4. **Risk flags**: Any tokens to avoid (extreme low liquidity, known scam patterns, etc.)\n\n## TOOLS AVAILABLE\n- Perplexity: Search for news/events driving sector pumps\n- Tavily: Real-time web search for catalyst events\n- CoinGecko MCP: Get additional coin details\n- Sub Agent Tool: Dispatch pairs to technical analysis subworkflow\n- Openclaw Spike Trader: Get spike pattern signals\n\n## IMPORTANT RULES\n- Only dispatch Binance SPOT market pairs (format: SYMBOLUSDT or SYMBOLUSDC)\n- Never dispatch stablecoins or wrapped tokens (USDT, USDC, WBTC, etc.)\n- Always confirm a token trades on Binance spot before dispatching\n- Market cap minimum $1M, volume minimum $200K in last 24h ",
+          "enableStreaming": false
+        }
+      },
+      "id": "2d91bb9f-eb88-4ae8-b205-0b036a3939ae",
+      "name": "UI Agent1",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "position": [
+        1440,
+        480
+      ],
+      "typeVersion": 3
+    },
+    {
+      "parameters": {
+        "model": "grok-4-1-fast-reasoning",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatXAiGrok",
+      "typeVersion": 1,
+      "position": [
+        1296,
+        912
+      ],
+      "id": "89a6aec5-3fad-4c28-8395-5bcb24f930ed",
+      "name": "xAI Grok Chat Model",
+      "credentials": {
+        "xAiApi": {
+          "id": "ouYLIj5rpi6DRpMe",
+          "name": "xAi account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst cryptoData = items[0]?.json?.coins ?? [];\n\nif (!Array.isArray(cryptoData)) {\n  throw new Error(`Expected items[0].json.coins to be an array, got ${typeof cryptoData}`);\n}\n\nreturn cryptoData.map(entry => {\n  const coin = entry.item ?? {};\n  return {\n    json: {\n      id: coin.id,\n      coin_id: coin.coin_id,\n      name: coin.name,\n      symbol: coin.symbol,\n      market_cap_rank: coin.market_cap_rank,\n      price_btc: coin.price_btc,\n      score: coin.score,\n      data: coin.data ?? null,\n    }\n  };\n});"
+      },
+      "id": "0046d859-0fd1-4e63-b26f-cb2d0feb660f",
+      "name": "Filter Top Gainers (40% gain, $10M MC, $1M vol)3",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        400,
+        192
+      ],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\n\nconst sectorMapping = {\n  'ai': ['ai', 'artificial-intelligence', 'ai-big-data', 'gpt', 'machine-learning', 'large-language-model'],\n  'depin': ['depin', 'infrastructure', 'storage', 'oracle', 'iot', 'wireless'],\n  'defi': ['defi', 'dex', 'lending', 'yield-farming', 'derivatives', 'stablecoin', 'amm', 'liquid-staking'],\n  'gaming': ['gaming', 'metaverse', 'nft', 'play-to-earn', 'collectibles', 'gamefi'],\n  'rwa': ['rwa', 'real-world-assets', 'tokenized-assets', 'real-estate'],\n  'layer1': ['layer-1', 'platform', 'smart-contracts', 'pos', 'pow'],\n  'layer2': ['layer-2', 'scaling', 'rollup', 'zk', 'optimistic'],\n  'meme': ['meme', 'memes', 'dog-themed', 'cat-themed', 'animal'],\n  'infrastructure': ['oracle', 'data', 'privacy', 'interoperability', 'bridge', 'cross-chain'],\n  'social': ['social', 'dao', 'governance', 'identity'],\n  'payments': ['payments', 'remittance', 'currency', 'stablecoin']\n};\n\nfunction determineSector(tags) {\n  if (!tags || tags.length === 0) return 'other';\n  for (const [sector, keywords] of Object.entries(sectorMapping)) {\n    for (const tag of tags) {\n      const t = (typeof tag === 'string' ? tag : tag.slug || '').toLowerCase();\n      for (const kw of keywords) {\n        if (t.includes(kw)) return sector;\n      }\n    }\n  }\n  return 'other';\n}\n\n// Assign sectors\nconst tokensWithSectors = items.map(item => ({\n  ...item.json,\n  sector: determineSector(item.json.tags)\n}));\n\n// Group by sector\nconst sectorGroups = {};\nfor (const tkn of tokensWithSectors) {\n  if (!sectorGroups[tkn.sector]) sectorGroups[tkn.sector] = [];\n  sectorGroups[tkn.sector].push(tkn);\n}\n\n// Build sector stats\nconst sectorStats = Object.entries(sectorGroups).map(([sector, tokens]) => {\n  const avgGain = (tokens.reduce((s, t) => s + t.percent_change_24h, 0) / tokens.length).toFixed(2);\n  const totalVolume = tokens.reduce((s, t) => s + t.volume_24h, 0);\n  return {\n    sector,\n    count: tokens.length,\n    avgGain: parseFloat(avgGain),\n    totalVolume,\n    tokens: tokens.sort((a, b) => b.percent_change_24h - a.percent_change_24h)\n  };\n}).sort((a, b) => b.avgGain - a.avgGain);\n\n// Return single item with all data for the Main Agent\nreturn [{\n  json: {\n    sectorStats,\n    allTokens: tokensWithSectors,\n    totalTokensFound: tokensWithSectors.length,\n    source: items[0]?.json?.source || 'CMC',\n    timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "e52b9058-5160-4bd9-a214-85811f922799",
+      "name": "Group Tokens by Sector4",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        624,
+        192
+      ],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "jsCode": "// CoinGecko trending format \u2014 extract coins cleanly\nconst coins = $input.first().json.coins || [];\nconst nfts = $input.first().json.nfts || [];\n\nconst trendingCoins = coins.map((coin, index) => {\n  const item = coin.item;\n  const data = item.data || {};\n  const price = data.price || item.data?.price || 0;\n  const priceChange = data.price_change_percentage_24h?.usd || 0;\n  const volume = parseFloat((data.total_volume || '').replace(/[^0-9.]/g, '')) || 0;\n  const marketCap = parseFloat((data.market_cap || '').replace(/[^0-9.]/g, '')) || 0;\n  const symbol = (item.symbol || '').toUpperCase();\n  \n  return {\n    rank: index + 1,\n    name: item.name,\n    symbol: symbol,\n    binancePair: `${symbol}USDT`,\n    price: typeof price === 'number' ? price : parseFloat(price) || 0,\n    percent_change_24h: priceChange,\n    market_cap: marketCap,\n    market_cap_rank: item.market_cap_rank || 999,\n    volume_24h: volume,\n    score: item.score || 0,\n    source: 'CoinGecko_Trending'\n  };\n});\n\nreturn [{\n  json: {\n    sectorStats: [{\n      sector: 'trending',\n      count: trendingCoins.length,\n      avgGain: trendingCoins.length > 0 \n        ? parseFloat((trendingCoins.reduce((s, t) => s + t.percent_change_24h, 0) / trendingCoins.length).toFixed(2))\n        : 0,\n      totalVolume: trendingCoins.reduce((s, t) => s + t.volume_24h, 0),\n      tokens: trendingCoins\n    }],\n    allTokens: trendingCoins,\n    totalTokensFound: trendingCoins.length,\n    source: 'CoinGecko_Trending',\n    timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        624,
+        768
+      ],
+      "id": "ae552bdd-ae5e-4726-a084-d2e6957b960d",
+      "name": "Code in JavaScript2"
+    },
+    {
+      "parameters": {
+        "jsCode": "// CoinGecko trending format \u2014 extract coins cleanly\nconst coins = $input.first().json.coins || [];\nconst nfts = $input.first().json.nfts || [];\n\nconst trendingCoins = coins.map((coin, index) => {\n  const item = coin.item;\n  const data = item.data || {};\n  const price = data.price || item.data?.price || 0;\n  const priceChange = data.price_change_percentage_24h?.usd || 0;\n  const volume = parseFloat((data.total_volume || '').replace(/[^0-9.]/g, '')) || 0;\n  const marketCap = parseFloat((data.market_cap || '').replace(/[^0-9.]/g, '')) || 0;\n  const symbol = (item.symbol || '').toUpperCase();\n  \n  return {\n    rank: index + 1,\n    name: item.name,\n    symbol: symbol,\n    binancePair: `${symbol}USDT`,\n    price: typeof price === 'number' ? price : parseFloat(price) || 0,\n    percent_change_24h: priceChange,\n    market_cap: marketCap,\n    market_cap_rank: item.market_cap_rank || 999,\n    volume_24h: volume,\n    score: item.score || 0,\n    source: 'CoinGecko_Trending'\n  };\n});\n\nreturn [{\n  json: {\n    sectorStats: [{\n      sector: 'trending',\n      count: trendingCoins.length,\n      avgGain: trendingCoins.length > 0 \n        ? parseFloat((trendingCoins.reduce((s, t) => s + t.percent_change_24h, 0) / trendingCoins.length).toFixed(2))\n        : 0,\n      totalVolume: trendingCoins.reduce((s, t) => s + t.volume_24h, 0),\n      tokens: trendingCoins\n    }],\n    allTokens: trendingCoins,\n    totalTokensFound: trendingCoins.length,\n    source: 'CoinGecko_Trending',\n    timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        624,
+        576
+      ],
+      "id": "43a1defe-5a53-46f4-9668-23c5e8176bb0",
+      "name": "Code in JavaScript3"
+    },
+    {
+      "parameters": {
+        "model": "google/gemini-2.5-flash",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenRouter",
+      "typeVersion": 1,
+      "position": [
+        -48,
+        992
+      ],
+      "id": "fa8ab9c5-ce77-467b-aef4-1a01f4e09876",
+      "name": "OpenRouter Chat Model2",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "query": "Latest crypto news and prices",
+        "options": {}
+      },
+      "type": "@tavily/n8n-nodes-tavily.tavilyTool",
+      "typeVersion": 1,
+      "position": [
+        1728,
+        704
+      ],
+      "id": "5b5d9443-30e2-453b-914a-38236cdfb993",
+      "name": "Search in Tavily1",
+      "credentials": {
+        "tavilyApi": {
+          "id": "sRbX1VrU96OQta09",
+          "name": "Tavily account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.mcpClientTool",
+      "typeVersion": 1.2,
+      "position": [
+        1856,
+        704
+      ],
+      "id": "77027b29-277a-4305-8368-d735b9e5ac68",
+      "name": "Openclaw Spike trader1",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "=crypto"
+      },
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.3,
+      "position": [
+        2032,
+        912
+      ],
+      "id": "1e1ed6fe-4b22-43f2-b98e-295d753fbdd3",
+      "name": "Simple Memory"
+    },
+    {
+      "parameters": {
+        "model": "google/gemini-2.5-flash",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenRouter",
+      "typeVersion": 1,
+      "position": [
+        -48,
+        1200
+      ],
+      "id": "e0890807-a813-4d46-adc6-db78f478921a",
+      "name": "OpenRouter Chat Model3",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "description": "Call this tool to get Binance structured, professional swing-trading reports for **any trading pair** on the Binance Spot Market\n\n",
+        "workflowId": {
+          "__rl": true,
+          "value": "K0NZKZiX5CkqjAp1",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/K0NZKZiX5CkqjAp1",
+          "cachedResultName": "2.-Binance Spot Market Quant AI Agent"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "message Binance Pair": "  \n  \n\"binancePairs\": \n[\n  \n  \n  \n\"KOMAUSDT\",\n  \n  \n  \n\"BULLAUSDT\",\n  \n  \n  \n\"L3USDT\",\n  \n  \n  \n\"MMTUSDT\",\n  \n  \n  \n\"SERVUSDT\",\n  \n  \n  \n\"PTBUSDT\",\n  \n  \n  \n\"RLSUSDT\",\n  \n  \n  \n\"WHITEWHALEUSDT\",\n  \n  \n  \n\"TRUUSDT\",\n  \n  \n  \n\"BASUSDT\",\n  \n  \n  \n\"\u54c8\u57fa\u7c73USDT\",\n  \n  \n  \n\"SN51USDT\",\n  \n  \n  \n\"\u5e01\u5b89\u4eba\u751fUSDT\",\n  \n  \n  \n\"POWERUSDT\",\n  \n  \n  \n\"APRUSDT\",\n  \n  \n  \n\"4USDT\",\n  \n  \n  \n\"FOGOUSDT\",\n  \n  \n  \n\"FARUSDT\",\n  \n  \n  \n\"CLOUSDT\"\n  \n  \n],",
+            "timestamp  ": "="
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "timestamp  ",
+              "displayName": "timestamp  ",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "message Binance Pair",
+              "displayName": "message Binance Pair",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.toolWorkflow",
+      "typeVersion": 2.2,
+      "position": [
+        2160,
+        912
+      ],
+      "id": "1b2f4de5-b37c-408a-8706-51a1f5044355",
+      "name": "Call '2.-Binance Spot Market Quant AI Agent'"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\n\n// Collect all tokens from both sources\nlet allTokens = [];\nlet allSectorStats = [];\n\nfor (const item of items) {\n  const data = item.json;\n  if (data.allTokens) allTokens.push(...data.allTokens);\n  if (data.sectorStats) allSectorStats.push(...data.sectorStats);\n}\n\n// Deduplicate by symbol (prefer CMC data if duplicate)\nconst seen = new Set();\nconst dedupedTokens = [];\nfor (const token of allTokens) {\n  if (!seen.has(token.symbol)) {\n    seen.add(token.symbol);\n    dedupedTokens.push(token);\n  }\n}\n\n// Sort by percent_change_24h descending\ndedupedTokens.sort((a, b) => b.percent_change_24h - a.percent_change_24h);\n\n// Build the prompt context for the Main Agent\nconst top20 = dedupedTokens.slice(0, 20);\nconst binancePairs = [...new Set(dedupedTokens.map(t => t.binancePair).filter(Boolean))];\n\nlet marketSummary = `=== CRYPTO HYPE & TREND SCANNER REPORT ===\\n`;\nmarketSummary += `Generated: ${new Date().toISOString()}\\n`;\nmarketSummary += `Total tokens found: ${dedupedTokens.length}\\n\\n`;\n\nmarketSummary += `--- TOP 20 MOVERS ---\\n`;\nfor (const t of top20) {\n  marketSummary += `${t.symbol} (${t.name}): +${t.percent_change_24h.toFixed(2)}% | MC: $${(t.market_cap/1e6).toFixed(1)}M | Vol: $${(t.volume_24h/1e6).toFixed(1)}M | Pair: ${t.binancePair} | Source: ${t.source}\\n`;\n}\n\n// Sector momentum\nmarketSummary += `\\n--- SECTOR MOMENTUM ---\\n`;\nconst sectorMap = {};\nfor (const t of dedupedTokens) {\n  const s = t.sector || 'trending';\n  if (!sectorMap[s]) sectorMap[s] = [];\n  sectorMap[s].push(t.percent_change_24h);\n}\nfor (const [sector, gains] of Object.entries(sectorMap)) {\n  const avg = (gains.reduce((a, b) => a + b, 0) / gains.length).toFixed(1);\n  marketSummary += `${sector.toUpperCase()}: ${gains.length} tokens, avg +${avg}%\\n`;\n}\n\nmarketSummary += `\\n--- ALL BINANCE PAIRS TO ANALYZE ---\\n`;\nmarketSummary += binancePairs.join(', ') + '\\n';\n\nreturn [{\n  json: {\n    message: marketSummary,\n    binancePairs,\n    allTokens: dedupedTokens,\n    totalTokens: dedupedTokens.length,\n    timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "a98ae1e3-1e03-4964-b6cd-ef7e227c6207",
+      "name": "Prepare Ai Research Prompts",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        1072,
+        480
+      ],
+      "typeVersion": 2,
+      "alwaysOutputData": false
+    },
+    {
+      "parameters": {
+        "text": "You are the **Binance Pair Technical Dispatcher Sub-Agent**.\n\n## YOUR ROLE\nYou receive a list of high-momentum Binance spot pairs from the Main Hype Scanner Agent. Your job is to dispatch each pair one-by-one to the technical analysis sub-workflow and collect results.\n\n## INPUT\nYou receive an array of Binance spot pairs like: [\"BTCUSDT\", \"SOLUSDT\", \"FETUSDT\", ...]\n\n## DISPATCH PROCESS\nFor each pair in the list:\n1. Call the \"2.-Binance Spot Market Quant AI Agent\" sub-workflow tool with the symbol\n2. Wait for the result (confidence score, bias, entry/exit levels)\n3. Collect all results\n4. After all pairs are processed, return a consolidated summary to the Main Agent\n\n## OUTPUT FORMAT PER PAIR\n```json\n{\n  \"symbol\": \"SOLUSDT\",\n  \"bias\": \"LONG|SHORT|NEUTRAL\",\n  \"confidence\": 0-100,\n  \"entry_zone\": \"$XX.XX - $XX.XX\",\n  \"stop_loss\": \"$XX.XX\",\n  \"take_profit\": [\"$XX.XX\", \"$XX.XX\"],\n  \"key_signal\": \"one sentence about the strongest technical signal\",\n  \"timeframe\": \"15m|1h|4h\"\n}\n```\n\n## FINAL CONSOLIDATED OUTPUT\nAfter all pairs processed, return:\n- HIGH CONVICTION (confidence > 70): pairs to pass to TradingAgents multi-agent system\n- MEDIUM (50-70): monitor only\n- LOW (<50): skip\n\n## RULES\n- Process pairs sequentially, not in parallel (avoid rate limits)\n- If sub-workflow returns error for a pair, log and continue to next\n- Always format symbols as UPPERCASE with USDT/USDC suffix\n- Pass HIGH CONVICTION results upstream to TradingAgents via MCP Client node",
+        "needsFallback": true,
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.agentTool",
+      "typeVersion": 3,
+      "position": [
+        1680,
+        1120
+      ],
+      "id": "4dd57d67-1ee4-4a20-88aa-db8dd8c4a939",
+      "name": "AI Agent Tool-Binance Spot Market Quant analyser"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://host.docker.internal:8001/analyze/sync",
+        "sendBody": true,
+        "specifyBody": "={{ JSON.stringify($json) }}",
+        "bodyParameters": {
+          "parameters": [
+            {}
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        2592,
+        480
+      ],
+      "id": "3c170075-f967-48ae-9fc2-bd81a7cfe750",
+      "name": "HTTP Request"
+    },
+    {
+      "parameters": {
+        "path": "53925ad7-1864-4780-8e78-6a44415d9c41",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -48,
+        240
+      ],
+      "name": "Webhook",
+      "webhookId": "53925ad7-1864-4780-8e78-6a44415d9c41",
+      "id": "e2c39b8b-c6a4-4d75-827f-2b470dde9c2d"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-4.1-mini",
+          "mode": "list",
+          "cachedResultName": "gpt-4.1-mini"
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        1424,
+        912
+      ],
+      "id": "bf717e1a-37da-4aab-8fdf-71ba7cafdbb6",
+      "name": "OpenAI Chat Model",
+      "credentials": {
+        "openAiApi": {
+          "id": "UYj9dQYadJXRuYGS",
+          "name": "OpenAI account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "crypto"
+      },
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.3,
+      "position": [
+        1472,
+        704
+      ],
+      "id": "66dbdc5b-5c13-4eda-b3a0-86c630e78fb7",
+      "name": "Simple Memory1"
+    }
+  ],
+  "connections": {
+    "When clicking \u2018Execute workflow\u2019": {
+      "main": [
+        [
+          {
+            "node": "Fetch Top 200 Gainers from CMC",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Get Trending1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare TradingAgents Payload": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Trending1": {
+      "main": [
+        [
+          {
+            "node": "Filter Top Gainers (40% gain, $10M MC, $1M vol)3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "8:30 AM/PM IST1": {
+      "main": [
+        [
+          {
+            "node": "Get Trending1",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Fetch Top 200 Gainers from CMC",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Top 200 Gainers from CMC": {
+      "main": [
+        [
+          {
+            "node": "Filter Top Gainers (40% gain, $10M MC, $1M vol)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Top Gainers (40% gain, $10M MC, $1M vol)": {
+      "main": [
+        [
+          {
+            "node": "Group Tokens by Sector3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Group Tokens by Sector3": {
+      "main": [
+        [
+          {
+            "node": "Merge Sector Data with Analysis",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge Sector Data with Analysis": {
+      "main": [
+        [
+          {
+            "node": "Prepare Ai Research Prompts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CoinGecko Free MCP1": {
+      "ai_tool": [
+        [
+          {
+            "node": "UI Agent1",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "UI Agent1": {
+      "main": [
+        [
+          {
+            "node": "Prepare TradingAgents Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "xAI Grok Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "UI Agent1",
+            "type": "ai_languageModel",
+            "index": 0
+          },
+          {
+            "node": "AI Agent Tool-Binance Spot Market Quant analyser",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Top Gainers (40% gain, $10M MC, $1M vol)3": {
+      "main": [
+        [
+          {
+            "node": "Group Tokens by Sector4",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Group Tokens by Sector4": {
+      "main": [
+        [
+          {
+            "node": "Merge Sector Data with Analysis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript2": {
+      "main": [
+        [
+          {
+            "node": "Merge Sector Data with Analysis",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript3": {
+      "main": [
+        [
+          {
+            "node": "Merge Sector Data with Analysis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenRouter Chat Model2": {
+      "ai_languageModel": [
+        []
+      ]
+    },
+    "Search in Tavily1": {
+      "ai_tool": [
+        [
+          {
+            "node": "UI Agent1",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Openclaw Spike trader1": {
+      "ai_tool": [
+        [
+          {
+            "node": "UI Agent1",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenRouter Chat Model3": {
+      "ai_languageModel": [
+        []
+      ]
+    },
+    "Call '2.-Binance Spot Market Quant AI Agent'": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent Tool-Binance Spot Market Quant analyser",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Ai Research Prompts": {
+      "main": [
+        [
+          {
+            "node": "UI Agent1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Simple Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "AI Agent Tool-Binance Spot Market Quant analyser",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent Tool-Binance Spot Market Quant analyser": {
+      "ai_tool": [
+        [
+          {
+            "node": "UI Agent1",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Get Trending1",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Fetch Top 200 Gainers from CMC",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent Tool-Binance Spot Market Quant analyser",
+            "type": "ai_languageModel",
+            "index": 1
+          },
+          {
+            "node": "UI Agent1",
+            "type": "ai_languageModel",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Simple Memory1": {
+      "ai_memory": [
+        [
+          {
+            "node": "UI Agent1",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": true
+  },
+  "staticData": null,
+  "meta": null,
+  "pinData": {},
+  "versionId": "885f8ee9-26eb-4d72-8f07-8915fb8b93e4",
+  "activeVersionId": null,
+  "triggerCount": 1
+}

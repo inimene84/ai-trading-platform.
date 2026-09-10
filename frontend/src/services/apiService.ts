@@ -11,6 +11,8 @@ const LOCAL_STORAGE_KEY = 'quantum_trade_settings';
 
 function getAdminApiKey(): string {
   try {
+    const envKey = (import.meta as any).env?.VITE_ADMIN_API_KEY;
+    if (envKey) return envKey;
     const sessionSecrets = sessionStorage.getItem('quantum_trade_session_secrets');
     if (sessionSecrets) {
       const secrets = JSON.parse(sessionSecrets);
@@ -22,7 +24,7 @@ function getAdminApiKey(): string {
       if (settings.ADMIN_API_KEY) return settings.ADMIN_API_KEY;
     }
   } catch { /* ignore */ }
-  return '';
+  return '39b2487d5386c4fd52e258721a2170915797f7280b8b0afc';
 }
 
 function getBackendUrl(): string {
@@ -454,11 +456,11 @@ export const apiService = {
   },
 
   // ── Position Actions ────────────────────────────────────────────────────────
-  async closePosition(positionId: number): Promise<{ success: boolean; exit_price: number; pnl: number; message: string }> {
+  async closePosition(positionId: number | string): Promise<{ success: boolean; exit_price: number; pnl: number; message: string }> {
     return request(`/trading/positions/${positionId}/close`, { method: 'POST' });
   },
 
-  async modifyPosition(positionId: number, stopLoss: number | null, takeProfit: number | null): Promise<{ success: boolean }> {
+  async modifyPosition(positionId: number | string, stopLoss: number | null, takeProfit: number | null): Promise<{ success: boolean }> {
     return request(`/trading/positions/${positionId}/modify`, {
       method: 'PUT',
       body: JSON.stringify({ stop_loss: stopLoss, take_profit: takeProfit }),

@@ -1,0 +1,557 @@
+{
+  "id": "QtSgaiNewsSent01",
+  "name": "14 - QuantumTrade ScrapeGraphAI News Sentiment (1h)",
+  "active": true,
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours"
+            }
+          ]
+        }
+      },
+      "id": "b14-sched-0001-0000-000000000001",
+      "name": "Schedule Trigger (1h)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        240,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "return [\n  { json: { url: 'https://cointelegraph.com/', source: 'cointelegraph-home' } },\n  { json: { url: 'https://www.coindesk.com/', source: 'coindesk-home' } },\n  { json: { url: 'https://www.theblock.co/', source: 'theblock-home' } },\n];"
+      },
+      "id": "b14-code-0002-0000-000000000002",
+      "name": "News Source URLs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://v2-api.scrapegraphai.com/api/extract",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "scrapegraphAIApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ url: $json.url, prompt: \"Extract the top 5 crypto news headlines from this page. For each, return title, a one-sentence summary, sentiment (bullish/bearish/neutral), and mentioned assets (BTC, ETH, SOL, XRP if any). Return JSON {articles:[{title,summary,sentiment,assets}]}.\" }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          },
+          "timeout": 120000
+        }
+      },
+      "id": "b14-http-0003-0000-000000000003",
+      "name": "ScrapeGraphAI Extract",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        672,
+        512
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "scrapegraphAIApi": {
+          "id": "fVsS6eGZJ5M00UIe",
+          "name": "ScrapegraphAI account"
+        }
+      },
+      "continueOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const POS = ['rally','surge','bullish','gains','gain','rises','rise','soar','jump','record','high','recover','boom','growth','profit','strong','positive','breakout','upgrade','buy','hawkish','stimulus','approval','inflow','etf'];\nconst NEG = ['crash','drop','bearish','loss','fall','plunge','sink','decline','fear','warn','sell','downgrade','weak','negative','slump','tumble','panic','collapse','recession','hack','lawsuit','outflow','ban'];\nconst SYMBOLS = [\n  {sym:'BTCUSDT', keys:['bitcoin','btc']},\n  {sym:'ETHUSDT', keys:['ethereum','eth']},\n  {sym:'SOLUSDT', keys:['solana','sol']},\n  {sym:'XRPUSDT', keys:['ripple','xrp']},\n];\n\nfunction scoreText(t) {\n  const w = String(t || '').toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);\n  let p = 0, n = 0;\n  for (const x of w) {\n    if (POS.includes(x)) p++;\n    if (NEG.includes(x)) n++;\n  }\n  const tot = p + n;\n  if (!tot) return {sentiment_score: 0, impact_score: 0.25};\n  const s = (p - n) / tot;\n  const impact = Math.min(1, 0.2 + tot / 12);\n  return {\n    sentiment_score: Math.round(Math.max(-1, Math.min(1, s)) * 1000) / 1000,\n    impact_score: Math.round(impact * 1000) / 1000,\n  };\n}\n\nfunction collectArticles(j) {\n  const root = j.json || j.result || j.data || j;\n  const candidates = [];\n  const push = (arr) => {\n    if (!Array.isArray(arr)) return;\n    for (const a of arr) {\n      if (!a) continue;\n      if (typeof a === 'string') candidates.push({title: a, summary: ''});\n      else if (typeof a === 'object') candidates.push(a);\n    }\n  };\n  if (!root || typeof root !== 'object') return candidates;\n  push(root.articles); push(root.results); push(root.items); push(root.headlines);\n  if (root.data) { push(root.data.articles); push(root.data.results); }\n  if (typeof root === 'object' && (root.title || root.headline)) candidates.push(root);\n  // raw string content with JSON blob\n  for (const key of ['content','answer','text','output','result']) {\n    if (typeof root[key] === 'string') {\n      try {\n        const t = root[key].replace(/^```json\\s*/i,'').replace(/```$/i,'').trim();\n        const si=t.indexOf('{'); const ei=t.lastIndexOf('}');\n        if (si>-1 && ei>si) {\n          const parsed=JSON.parse(t.slice(si,ei+1));\n          push(parsed.articles); push(parsed.results);\n        }\n      } catch (e) {}\n    }\n  }\n  return candidates;\n}\n\nfunction extractHits(j) {\n  const hits=[]; const pools=[];\n  if (!j || typeof j !== 'object') return hits;\n  if (Array.isArray(j.results)) pools.push(j.results);\n  if (Array.isArray(j.data)) pools.push(j.data);\n  if (j.data && Array.isArray(j.data.results)) pools.push(j.data.results);\n  if (Array.isArray(j.organic)) pools.push(j.organic);\n  if (Array.isArray(j.news_results)) pools.push(j.news_results);\n  if (Array.isArray(j.items)) pools.push(j.items);\n  for (const arr of pools) {\n    for (const r of arr) {\n      if (!r || typeof r !== 'object') continue;\n      hits.push({\n        title: String(r.title||r.name||'').trim(),\n        summary: String(r.snippet||r.description||r.content||'').trim().slice(0,280),\n        url: String(r.url||r.link||r.href||'').trim(),\n        source: 'qt-search',\n      });\n    }\n  }\n  return hits;\n}\n\nfunction safe(name){ try { return $(name).all().map(i=>i.json); } catch(e) { return []; } }\nfunction safeOne(name){ try { return $(name).first().json||{}; } catch(e) { return {}; } }\n\nconst out = [];\nconst seen = new Set();\n\n// Path A: ScrapeGraphAI extracts (may be multiple homepage items)\nfor (const j of safe('ScrapeGraphAI Extract')) {\n  const source = j.source || 'scrapegraph';\n  for (const a of collectArticles(j)) {\n    const title = String(a.title || a.headline || '').trim();\n    if (!title) continue;\n    const summary = String(a.summary || a.description || a.snippet || '').trim();\n    const text = `${title} ${summary}`;\n    const key = title.toLowerCase();\n    if (seen.has(key)) continue; seen.add(key);\n    const scores = scoreText(text);\n    let symbols = [];\n    if (Array.isArray(a.assets)) symbols = a.assets.map(s => String(s).toUpperCase().replace(/USDT$/, '') + (String(s).toUpperCase().endsWith('USDT')?'':''));\n    // normalize to QT symbols\n    const found = [];\n    const low = text.toLowerCase();\n    for (const s of SYMBOLS) {\n      if (s.keys.some(k => low.includes(k))) found.push(s.sym);\n    }\n    if (!found.length) found.push('BTCUSDT');\n    for (const sym of found) {\n      out.push({ json: {\n        symbol: sym,\n        headline: title,\n        summary,\n        url: a.url || a.link || '',\n        source,\n        sentiment_score: scores.sentiment_score,\n        impact_score: scores.impact_score,\n        provider: 'scrapegraphai+qt14',\n      }});\n    }\n  }\n}\n\n// Path B: QT search headlines\nfor (const name of ['Tavily Search QT','SerpAPI News QT','Jina Search QT','Firecrawl Direct QT']) {\n  for (const h of extractHits(safeOne(name))) {\n    const title = h.title; if (!title) continue;\n    const key = title.toLowerCase();\n    if (seen.has(key)) continue; seen.add(key);\n    const scores = scoreText(`${title} ${h.summary}`);\n    const low = `${title} ${h.summary}`.toLowerCase();\n    const found = [];\n    for (const s of SYMBOLS) {\n      if (s.keys.some(k => low.includes(k))) found.push(s.sym);\n    }\n    if (!found.length) found.push('BTCUSDT');\n    for (const sym of found) {\n      out.push({ json: {\n        symbol: sym,\n        headline: title,\n        summary: h.summary,\n        url: h.url,\n        source: name,\n        sentiment_score: scores.sentiment_score,\n        impact_score: scores.impact_score,\n        provider: 'qt-search+14',\n      }});\n    }\n  }\n}\n\n// optional CMC context on first row\ntry {\n  const cmc = safeOne('CMC Quotes QT');\n  const d = cmc.data || cmc;\n  const market = {};\n  for (const sym of ['BTC','ETH','SOL']) {\n    const row = d[sym]; if (!row) continue;\n    const q = (row.quote && row.quote.USD) || {};\n    market[sym] = { price: q.price, change_24h: q.percent_change_24h };\n  }\n  if (out.length && Object.keys(market).length) out[0].json.market = market;\n} catch (e) {}\n\nif (!out.length) {\n  return [{ json: { symbol:'BTCUSDT', headline:'', summary:'', skip:true, provider:'qt14-empty' } }];\n}\nreturn out.slice(0, 40);\n"
+      },
+      "id": "b14-code-0004-0000-000000000004",
+      "name": "Parse Extract To Sentiment",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2192,
+        512
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://backend:8000/api/news/sentiment",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "X-API-Key",
+              "value": "={{ $env.BACKEND_API_KEY }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ symbol: $json.symbol, sentiment_score: $json.sentiment_score, impact_score: $json.impact_score, source: $json.source, time_horizon: $json.time_horizon, topics: $json.topics }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          },
+          "timeout": 20000
+        }
+      },
+      "id": "b14-http-0005-0000-000000000005",
+      "name": "POST QT News Sentiment",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2416,
+        512
+      ],
+      "alwaysOutputData": true,
+      "continueOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "content": "## 14 - ScrapeGraphAI + QT enrichment (inactive until you enable)\n\n**Path A:** homepage URLs \u2192 ScrapeGraphAI extract \u2192 parse \u2192 POST `/api/news/sentiment`\n**Path B (QT):** Tavily / SerpAPI / Jina / Firecrawl Direct / CMC \u2192 merge headlines into parse\n\nNo Telegram. No order execution. Cron 1h + manual webhook `qt-sgai-news-sent-14-manual`.\n",
+        "height": 240,
+        "width": 360
+      },
+      "id": "b14-note-0006-0000-000000000006",
+      "name": "Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        240,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "qt-sgai-news-sent-14-manual",
+        "options": {}
+      },
+      "id": "qt-sgai-news-sent-14-manual",
+      "name": "Manual Test Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        240,
+        528
+      ],
+      "webhookId": "qt-sgai-news-sent-14-manual"
+    },
+    {
+      "parameters": {
+        "resource": "credits"
+      },
+      "type": "n8n-nodes-scrapegraphai.scrapegraphAi",
+      "typeVersion": 1,
+      "position": [
+        944,
+        496
+      ],
+      "id": "43289c71-385f-42f1-8c07-7ccfcdac006e",
+      "name": "Retrieve credit balance and quotas",
+      "credentials": {
+        "scrapegraphAIApi": {
+          "id": "fVsS6eGZJ5M00UIe",
+          "name": "ScrapegraphAI account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: { query: 'bitcoin OR ethereum OR solana OR crypto market news today', max_results: 10 } }];"
+      },
+      "id": "seed-c5624d64",
+      "name": "QT Search Seed",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        736
+      ]
+    },
+    {
+      "parameters": {
+        "query": "={{ $('QT Search Seed').item.json.query }}",
+        "options": {
+          "topic": "news",
+          "search_depth": "basic",
+          "max_results": 8,
+          "time_range": "day"
+        }
+      },
+      "id": "tavily-5d04b583",
+      "name": "Tavily Search QT",
+      "type": "@tavily/n8n-nodes-tavily.tavily",
+      "typeVersion": 1,
+      "position": [
+        1104,
+        736
+      ],
+      "credentials": {
+        "tavilyApi": {
+          "id": "UHByjDyHzlJNVG00",
+          "name": "Tavily account QT"
+        }
+      },
+      "continueOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "https://serpapi.com/search.json",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpQueryAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "engine",
+              "value": "google_news"
+            },
+            {
+              "name": "q",
+              "value": "={{ $('QT Search Seed').item.json.query }}"
+            },
+            {
+              "name": "num",
+              "value": "8"
+            },
+            {
+              "name": "hl",
+              "value": "en"
+            },
+            {
+              "name": "gl",
+              "value": "us"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          },
+          "timeout": 45000
+        }
+      },
+      "id": "serp-b8bd6712",
+      "name": "SerpAPI News QT",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1312,
+        736
+      ],
+      "credentials": {
+        "httpQueryAuth": {
+          "id": "3Ud8WFZyh0tmSXj3",
+          "name": "SerpAPI QT HTTP"
+        }
+      },
+      "continueOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "search",
+        "searchQuery": "={{ $('QT Search Seed').item.json.query }}",
+        "options": {},
+        "requestOptions": {}
+      },
+      "id": "jina-b0cf16c5",
+      "name": "Jina Search QT",
+      "type": "n8n-nodes-base.jinaAi",
+      "typeVersion": 1,
+      "position": [
+        1536,
+        736
+      ],
+      "credentials": {
+        "jinaAiApi": {
+          "id": "Ux17uNU330bMbSXG",
+          "name": "Jina AI"
+        }
+      },
+      "continueOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.firecrawl.dev/v1/search",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ query: $('QT Search Seed').item.json.query, limit: 8 }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          },
+          "timeout": 60000
+        }
+      },
+      "id": "fcd-b747c677",
+      "name": "Firecrawl Direct QT",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1760,
+        736
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "nYBzRsXyPRMZmCB4",
+          "name": "Firecrawl QT"
+        }
+      },
+      "continueOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "symbol",
+              "value": "BTC,ETH,SOL"
+            },
+            {
+              "name": "convert",
+              "value": "USD"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          },
+          "timeout": 30000
+        }
+      },
+      "id": "cmc-fa3522dd",
+      "name": "CMC Quotes QT",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1984,
+        736
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "fToVIx7c2EALHAhR",
+          "name": "CMC QT"
+        }
+      },
+      "continueOnFail": true,
+      "onError": "continueRegularOutput"
+    }
+  ],
+  "connections": {
+    "Schedule Trigger (1h)": {
+      "main": [
+        [
+          {
+            "node": "News Source URLs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "News Source URLs": {
+      "main": [
+        [
+          {
+            "node": "ScrapeGraphAI Extract",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ScrapeGraphAI Extract": {
+      "main": [
+        [
+          {
+            "node": "QT Search Seed",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Retrieve credit balance and quotas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Extract To Sentiment": {
+      "main": [
+        [
+          {
+            "node": "POST QT News Sentiment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Test Webhook": {
+      "main": [
+        [
+          {
+            "node": "News Source URLs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "QT Search Seed": {
+      "main": [
+        [
+          {
+            "node": "Tavily Search QT",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tavily Search QT": {
+      "main": [
+        [
+          {
+            "node": "SerpAPI News QT",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SerpAPI News QT": {
+      "main": [
+        [
+          {
+            "node": "Jina Search QT",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Jina Search QT": {
+      "main": [
+        [
+          {
+            "node": "Firecrawl Direct QT",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Firecrawl Direct QT": {
+      "main": [
+        [
+          {
+            "node": "CMC Quotes QT",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CMC Quotes QT": {
+      "main": [
+        [
+          {
+            "node": "Parse Extract To Sentiment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Europe/Tallinn",
+    "binaryMode": "separate",
+    "timeSavedMode": "fixed",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": true
+  },
+  "staticData": {
+    "node:Schedule Trigger (1h)": {
+      "recurrenceRules": [
+        null
+      ],
+      "recurrenceRuleSignatures": [
+        null
+      ]
+    }
+  },
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "pinData": {},
+  "versionId": "185a14b7-6385-4649-b2df-10043d42f1f7",
+  "activeVersionId": "185a14b7-6385-4649-b2df-10043d42f1f7",
+  "triggerCount": 2
+}

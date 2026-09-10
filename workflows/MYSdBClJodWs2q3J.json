@@ -1,0 +1,166 @@
+{
+  "id": "MYSdBClJodWs2q3J",
+  "name": "5.-Binance FM 15min indicators tool",
+  "active": true,
+  "nodes": [
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $json.sessionId }}"
+      },
+      "id": "425e2b8e-aef8-4089-a175-7e6b427cc6bf",
+      "name": "Simple Memory",
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "position": [
+        -624,
+        1568
+      ],
+      "typeVersion": 1.3
+    },
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "message"
+            },
+            {
+              "name": "sessionId"
+            }
+          ]
+        }
+      },
+      "id": "5577dd0b-317d-4133-9c46-f029a6bb0488",
+      "name": "When Executed by Another Workflow",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "position": [
+        -1088,
+        1248
+      ],
+      "typeVersion": 1.1
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.message }}",
+        "options": {
+          "systemMessage": "You are a short-term technical analysis agent that calculates **15-minute interval trading signals** for any Binance Spot Market trading pair. You are used by higher-level agents to assess intraday volatility, trend momentum, and entry/exit opportunities.\n\n---\n\n### \ud83d\udd10 Access Control\n\n* Expect to be triggered by another workflow.\n* Maintain `sessionId` context for user-specific response handling.\n\n---\n\n### \ud83d\udce5 Expected Input Format\n\n```json\n{\n  \"message\": \"BTCUSDT\",\n  \"sessionId\": \"123456789\"\n}\n```\n\n* `message`: Valid Binance symbol (e.g., BTCUSDT)\n* `sessionId`: Telegram user or workflow context\n\n---\n\n### \ud83d\udd27 Tools Used\n\nYou POST the trading pair to this endpoint:\n\n```\nhttps://treasurium.app.n8n.cloud/webhook/15m-indicators\n```\n\n**Payload format:**\n\n```json\n{\n  \"symbol\": \"BTCUSDT\"\n}\n```\n\n---\n\n### \ud83d\udcca Behavior\n\n* Request **15-minute kline data** with a limit sufficient for indicator calculations (typically `limit: 100`).\n* Calculate key indicators including:\n\n  * RSI\n  * MACD\n  * Bollinger Bands\n  * SMA/EMA\n  * ADX\n* Return results in Telegram-optimized format (e.g. Markdown with clear sections).\n\n---\n\n### \ud83e\udde0 Use Cases\n\n* Detect momentum shifts in short-term windows.\n* Generate alerts for potential scalping or breakout signals.\n* Contribute insights to larger multi-timeframe analysis workflows (e.g., Quant AI Agent, Financial Analyst Tool).\n\n"
+        }
+      },
+      "id": "022b9457-1ae8-414e-9b91-369f913d2288",
+      "name": "Binance SM 15min Indicators Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "position": [
+        -688,
+        1248
+      ],
+      "typeVersion": 1.9
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://n8n1.thorinvest.org/webhook/39cc366c-af5f-472a-9d48-bbe30a4fe3ea",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "symbol",
+              "value": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('parameters0_Value', ``, 'string') }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a0775027-597c-411f-8336-4d4af133c306",
+      "name": "HTTP Request 15m Indicators Tool",
+      "type": "n8n-nodes-base.httpRequestTool",
+      "position": [
+        -368,
+        1552
+      ],
+      "typeVersion": 4.2
+    },
+    {
+      "parameters": {
+        "model": "deepseek/deepseek-v4-flash",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenRouter",
+      "typeVersion": 1,
+      "position": [
+        -832,
+        1456
+      ],
+      "id": "3f62d87d-1942-4a6f-86a8-80672df7adfd",
+      "name": "OpenRouter Chat Model",
+      "credentials": {
+        "openRouterApi": {
+          "id": "qQi8XDmwL3UdHNax",
+          "name": "OpenRouter account 3"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Simple Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "Binance SM 15min Indicators Agent",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request 15m Indicators Tool": {
+      "ai_tool": [
+        [
+          {
+            "node": "Binance SM 15min Indicators Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "When Executed by Another Workflow": {
+      "main": [
+        [
+          {
+            "node": "Binance SM 15min Indicators Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenRouter Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Binance SM 15min Indicators Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "timeSavedMode": "fixed",
+    "errorWorkflow": "p8vhXj53RK8MUxb7",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": true
+  },
+  "staticData": null,
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "pinData": {},
+  "versionId": "98f676f1-19d6-4ff8-8e6c-1d710e6d2097",
+  "activeVersionId": "98f676f1-19d6-4ff8-8e6c-1d710e6d2097",
+  "triggerCount": 0
+}

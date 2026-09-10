@@ -5,9 +5,12 @@ from unittest.mock import MagicMock, patch
 from backend.services.binance_futures_service import BinanceFuturesService
 from backend.services.trading_loop import TradingLoopService
 from backend.services.trading_mode import (
+    BINANCE_PAPER_SESSION_ID,
     TradingMode,
+    binance_paper_parallel_enabled,
     get_trading_mode,
     live_binance_orders_allowed,
+    live_ctrader_orders_allowed,
     paper_reported_equity,
     paper_starting_balance,
 )
@@ -256,3 +259,73 @@ def test_paper_cycle_positions_shape(monkeypatch):
         "unrealized_pnl": 10.0,
         "mark_price": 2020.0,
     }]
+
+
+def test_paper_parallel_blocks_live_binance_keeps_ctrader(monkeypatch):
+    monkeypatch.setenv("TRADING_MODE", "live")
+    monkeypatch.setenv("PAPER_TRADING", "false")
+    monkeypatch.setenv("DRY_RUN_ALL", "false")
+    monkeypatch.setenv("BINANCE_PAPER_PARALLEL", "true")
+    monkeypatch.setenv("ACTIVE_BROKER", "ctrader")
+    assert binance_paper_parallel_enabled() is True
+    assert live_binance_orders_allowed() is False
+    assert live_ctrader_orders_allowed() is True
+    assert TradingLoopService._is_live_binance() is False
+    assert TradingLoopService._crypto_session_id() == BINANCE_PAPER_SESSION_ID
+    assert TradingLoopService._crypto_broker_name() == "binance_futures"
+
+
+def test_paper_parallel_live_binance_broker_still_not_live(monkeypatch):
+    """Even if ACTIVE_BROKER is binance, the parallel flag forbids the exchange."""
+    monkeypatch.setenv("TRADING_MODE", "live")
+    monkeypatch.setenv("PAPER_TRADING", "false")
+    monkeypatch.setenv("DRY_RUN_ALL", "false")
+    monkeypatch.setenv("ACTIVE_BROKER", "binance_futures")
+    monkeypatch.setenv("BINANCE_PAPER_PARALLEL", "true")
+    assert TradingLoopService._is_live_binance() is False
+    assert live_binance_orders_allowed() is False
+
+
+def test_effective_balance_uses_paper_book_when_parallel_in_live(monkeypatch):
+    monkeypatch.setenv("TRADING_MODE", "live")
+    monkeypatch.setenv("PAPER_TRADING", "false")
+    monkeypatch.setenv("DRY_RUN_ALL", "false")
+    monkeypatch.setenv("BINANCE_PAPER_PARALLEL", "true")
+    monkeypatch.setenv("ACTIVE_BROKER", "ctrader")
+    loop = _loop()
+    live = MagicMock()
+    live.get_balance.return_value = {"equity": 918.0, "balance": 918.0, "available": 918.0}
+    with patch(
+        "backend.services.unified_trading.UnifiedTrading.get_paper_portfolio",
+        return_value={"cash": 100_000.0, "equity": 100_000.0, "margin_used": 0.0},
+    ) as gp, patch(
+        "backend.services.trading_loop.get_active_broker",
+        return_value=live,
+    ):
+        bal = loop._get_effective_balance()
+    assert bal["broker"] == "paper_trading"
+    assert bal["equity"] == 100_000.0
+    live.get_balance.assert_not_called()
+    gp.assert_called()
+    assert gp.call_args.args[0] == BINANCE_PAPER_SESSION_ID
+
+
+def test_binance_service_refuses_live_order_when_paper_parallel(monkeypatch):
+    monkeypatch.setenv("TRADING_MODE", "live")
+    monkeypatch.setenv("PAPER_TRADING", "false")
+    monkeypatch.setenv("DRY_RUN_ALL", "false")
+    monkeypatch.setenv("BINANCE_PAPER_PARALLEL", "true")
+    svc = _binance_svc()
+    client = MagicMock()
+    with patch.object(svc, "_get_client", return_value=client) as get_client:
+        result = svc.place_order(
+            symbol="BTCUSDT",
+            direction="BUY",
+            action="open",
+            quantity=0.01,
+            price=50_000.0,
+        )
+        get_client.assert_not_called()
+    assert result["status"] == "error"
+    client.futures_create_order.assert_not_called()
+

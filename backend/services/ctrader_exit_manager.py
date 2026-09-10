@@ -97,11 +97,19 @@ def _original_r_distance(db, position: Dict[str, Any], entry: float) -> Optional
 def _manage_position(db, pos: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     symbol = str(pos.get("symbol") or "")
     side = str(pos.get("side") or pos.get("direction") or "").upper()
-    entry = float(pos.get("entry_price") or 0)
+    pid = pos.get("position_id")
     current = float(pos.get("current_price") or 0)
     cur_sl = float(pos["stop_loss"]) if pos.get("stop_loss") else None
-    pid = pos.get("position_id")
-    if not symbol or not entry or not current or not pid or side not in ("BUY", "SELL"):
+
+    if not symbol or not current or not pid or side not in ("BUY", "SELL"):
+        return None
+
+    # Prefer DB entry_price: the broker cache can drift on reconnect (spread
+    # included vs not, or Spotware rounding) and produces wrong-side SL geometry.
+    row = _find_trade_row(db, pos)
+    broker_entry = float(pos.get("entry_price") or 0)
+    entry = float(row.entry_price) if row and row.entry_price else broker_entry
+    if entry <= 0:
         return None
 
     r = _original_r_distance(db, pos, entry)
@@ -115,13 +123,16 @@ def _manage_position(db, pos: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     min_dist = CTraderService.min_protective_distance(symbol, current)
     pip = max(float(CTraderService.pip_size_for(symbol)), 1e-9)
 
-    # Candidate levels in the profit direction
+    # Candidate levels in the profit direction — must always be on the correct
+    # side of entry (BUY: SL below entry; SELL: SL above entry).
     if side == "BUY":
         be_level = entry + BE_LOCK_R * r
         target = be_level
         if favorable >= TRAIL_START_R * r:
             target = max(be_level, current - max(TRAIL_DIST_R * r, min_dist))
         target = min(target, current - min_dist)  # broker legality
+        # Safety: never send a SL above entry for a BUY.
+        target = min(target, entry - min_dist)
         improves = cur_sl is None or target > cur_sl + pip
     else:
         be_level = entry - BE_LOCK_R * r
@@ -129,6 +140,8 @@ def _manage_position(db, pos: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if favorable >= TRAIL_START_R * r:
             target = min(be_level, current + max(TRAIL_DIST_R * r, min_dist))
         target = max(target, current + min_dist)
+        # Safety: never send a SL below entry for a SELL.
+        target = max(target, entry + min_dist)
         improves = cur_sl is None or target < cur_sl - pip
 
     if not improves:

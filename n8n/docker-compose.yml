@@ -1,0 +1,178 @@
+services:
+  traefik:
+    image: traefik:latest
+    container_name: traefik
+    environment:
+    - DOCKER_API_VERSION=1.41
+    command:
+    - --api.insecure=true
+    - --providers.docker=true
+    - --providers.docker.exposedbydefault=false
+    - --entrypoints.web.address=:80
+    - --entrypoints.websecure.address=:443
+    restart: always
+    ports:
+    - 80:80
+    - 443:443
+    volumes:
+    - traefik_data:/letsencrypt
+    - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+    - n8n_default
+    - trading-net
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:2.36.8
+    container_name: n8n
+    environment:
+    - N8N_HOST=n8n1.thorinvest.org
+    - N8N_PORT=5678
+    - N8N_PROTOCOL=https
+    - NODE_ENV=production
+    - WEBHOOK_URL=https://n8n1.thorinvest.org/
+    - N8N_EDITOR_BASE_URL=https://n8n1.thorinvest.org
+    - GENERIC_TIMEZONE=UTC
+    - N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true
+    - N8N_TRUST_PROXY=true
+    - DB_SQLITE_BUSY_TIMEOUT=10000
+    - N8N_CONCURRENCY_PROCESSES=1
+    - EXECUTIONS_DATA_PRUNE_MAX_COUNT=1000
+    - EXECUTIONS_DATA_MAX_AGE=168
+    - EXECUTIONS_DATA_PRUNE=true
+    - N8N_PROXY_HOPS=1
+    - N8N_BLOCK_ENV_ACCESS_IN_NODE=false
+    - BACKEND_API_KEY=${BACKEND_API_KEY}
+    - EXECUTIONS_MODE=regular
+    - NODE_OPTIONS=--max-old-space-size=3072
+    - N8N_ENABLED_MODULES=instance-ai
+    - N8N_INSTANCE_AI_SANDBOX_ENABLED=true
+    - N8N_INSTANCE_AI_SANDBOX_PROVIDER=n8n-sandbox
+    - N8N_SANDBOX_SERVICE_URL=http://sandbox-api:8080
+    - N8N_SANDBOX_SERVICE_API_KEY=${N8N_SANDBOX_SERVICE_API_KEY}
+    - N8N_INSTANCE_AI_SEARXNG_URL=${N8N_INSTANCE_AI_SEARXNG_URL:-http://ai-trading-searxng:8080}
+    labels:
+    - traefik.enable=true
+    - traefik.http.routers.n8n.rule=Host(`n8n1.thorinvest.org`)
+    - traefik.http.routers.n8n.tls=true
+    - traefik.http.routers.n8n.entrypoints=websecure
+    - traefik.http.services.n8n.loadbalancer.server.port=5678
+    deploy:
+      resources:
+        limits:
+          cpus: 2
+          memory: 4G
+        reservations:
+          cpus: 0.25
+          memory: 256M
+    restart: always
+    ports:
+    - 127.0.0.1:5678:5678
+    volumes:
+    - n8n_data:/home/node/.n8n
+    networks:
+    - n8n_default
+    - trading-net
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
+    restart: always
+    networks:
+    - n8n_default
+    - trading-net
+  sandbox-certs:
+    image: ghcr.io/n8n-io/n8n-sandbox-service-api:1.2.0
+    user: 0:0
+    restart: 'no'
+    entrypoint:
+    - sh
+    - -c
+    command:
+    - 'bootstrap-mtls.sh --out-dir /tls --api-san sandbox-api --control-san-prefix
+      sandbox-runner --world-readable && chown -R sandbox-api:sandbox-api /tls/api
+      && chmod -R a+rX /tls
+
+      '
+    environment:
+      NUM_RUNNERS: '1'
+    volumes:
+    - sandbox-tls:/tls
+    networks:
+    - n8n_default
+  sandbox-api:
+    image: ghcr.io/n8n-io/n8n-sandbox-service-api:1.2.0
+    depends_on:
+      sandbox-certs:
+        condition: service_completed_successfully
+    environment:
+      SANDBOX_API_KEYS: ${SANDBOX_API_KEYS}
+      SANDBOX_API_RUNNER_REGISTRATION_TOKEN: ${SANDBOX_API_RUNNER_REGISTRATION_TOKEN}
+      SANDBOX_API_RUNNER_API_KEY: ${SANDBOX_API_RUNNER_API_KEY}
+      SANDBOX_API_GRPC_TLS_CERT_FILE: /tls/api/grpc-server.crt
+      SANDBOX_API_GRPC_TLS_KEY_FILE: /tls/api/grpc-server.key
+      SANDBOX_API_GRPC_TLS_CLIENT_CA_FILE: /tls/api/ca.crt
+      SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CA_FILE: /tls/api/ca.crt
+      SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_CERT_FILE: /tls/api/control-grpc-api-client.crt
+      SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_KEY_FILE: /tls/api/control-grpc-api-client.key
+      SANDBOX_API_RUNNER_CONTROL_GRPC_TLS_SERVER_NAME: sandbox-runner-1
+    volumes:
+    - sandbox-tls:/tls:ro
+    networks:
+    - n8n_default
+    healthcheck:
+      test:
+      - CMD
+      - wget
+      - -qO-
+      - http://localhost:8080/healthz
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 15s
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+  sandbox-runner-1:
+    image: ghcr.io/n8n-io/n8n-sandbox-service-runner-dind:1.2.0
+    privileged: true
+    depends_on:
+      sandbox-api:
+        condition: service_healthy
+    environment:
+      SANDBOX_RUNNER_API_KEYS: ${SANDBOX_API_RUNNER_API_KEY}
+      SANDBOX_RUNNER_REGISTRATION_TOKEN: ${SANDBOX_API_RUNNER_REGISTRATION_TOKEN}
+      SANDBOX_RUNNER_API_GRPC_ADDR: sandbox-api:9090
+      SANDBOX_RUNNER_HTTP_BASE_URL: http://sandbox-runner-1:8080
+      SANDBOX_RUNNER_CONTROL_GRPC_LISTEN_ADDR: :9091
+      SANDBOX_RUNNER_CONTROL_GRPC_ADVERTISE_ADDR: sandbox-runner-1:9091
+      SANDBOX_RUNNER_ID: runner-1
+      SANDBOX_RUNNER_DOCKER_SANDBOX_IMAGE: ghcr.io/n8n-io/n8n-sandbox-service-sandbox:latest
+      SANDBOX_RUNNER_REGISTRATION_GRPC_CA_FILE: /tls/runner/ca.crt
+      SANDBOX_RUNNER_REGISTRATION_GRPC_CERT_FILE: /tls/runner/grpc-client.crt
+      SANDBOX_RUNNER_REGISTRATION_GRPC_KEY_FILE: /tls/runner/grpc-client.key
+      SANDBOX_RUNNER_REGISTRATION_GRPC_SERVER_NAME: sandbox-api
+      SANDBOX_RUNNER_CONTROL_GRPC_TLS_CERT_FILE: /tls/runner/control-grpc-server.crt
+      SANDBOX_RUNNER_CONTROL_GRPC_TLS_KEY_FILE: /tls/runner/control-grpc-server.key
+      SANDBOX_RUNNER_CONTROL_GRPC_TLS_CLIENT_CA_FILE: /tls/runner/ca.crt
+    volumes:
+    - sandbox-tls:/tls:ro
+    networks:
+    - n8n_default
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '1.5'
+          memory: 2G
+networks:
+  n8n_default:
+    external: true
+  trading-net:
+    external: true
+volumes:
+  traefik_data:
+    external: true
+  n8n_data:
+    external: true
+  sandbox-tls: null

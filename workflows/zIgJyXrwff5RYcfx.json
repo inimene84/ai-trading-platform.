@@ -1,0 +1,276 @@
+{
+  "id": "zIgJyXrwff5RYcfx",
+  "name": "4.-Binance FM price-24hrStats-OrderBook-Kline tool",
+  "active": true,
+  "nodes": [
+    {
+      "parameters": {
+        "toolDescription": "Fetches the current price for a trading pair (e.g., BTCUSDT) from Binance Spot Market.\n\n\u2705 Expected Query Format (JSON):\n\njson\n{\n  \"symbol\": \"BTCUSDT\"\n}\nYou must provide a valid symbol (e.g., BTCUSDT, ETHUSDT, BNBUSDT) as a string.",
+        "url": "https://fapi.binance.com/fapi/v1/ticker/price",
+        "sendQuery": true,
+        "parametersQuery": {
+          "values": [
+            {
+              "name": "symbol"
+            }
+          ]
+        }
+      },
+      "id": "c694f381-c73b-4d8b-a8d3-f60c31db6550",
+      "name": "getCurrentPrice",
+      "type": "@n8n/n8n-nodes-langchain.toolHttpRequest",
+      "position": [
+        832,
+        1072
+      ],
+      "typeVersion": 1.1
+    },
+    {
+      "parameters": {
+        "toolDescription": "Fetches 24-hour price statistics including open, high, low, close, and volume for a trading pair (e.g., BTCUSDT) from Binance Spot Market.\\n\\n\\u2705 Expected Query Format (JSON):\\n{\\n  \\\"symbol\\\": \\\"BTCUSDT\\\"\\n}\\nReplace 'BTCUSDT' with the symbol you want to monitor.",
+        "url": "https://fapi.binance.com/fapi/v1/ticker/24hr",
+        "sendQuery": true,
+        "parametersQuery": {
+          "values": [
+            {
+              "name": "symbol"
+            }
+          ]
+        }
+      },
+      "id": "3d00cf7b-244a-42bd-8af2-5b32f25f054d",
+      "name": "get24hrStats",
+      "type": "@n8n/n8n-nodes-langchain.toolHttpRequest",
+      "position": [
+        1072,
+        1072
+      ],
+      "typeVersion": 1.1
+    },
+    {
+      "parameters": {
+        "toolDescription": "Fetches the live order book (bids and asks) for a specific trading pair from Binance.\n\n\u2705 Expected Input Format (JSON):\n{\n  \"symbol\": \"BTCUSDT\",\n  \"limit\": 100\n}\n\nYou may adjust the `limit` between 1 and 5000 (default: 100). The response includes `bids` and `asks` as arrays of [price, quantity] levels.",
+        "url": "https://fapi.binance.com/fapi/v1/depth",
+        "sendQuery": true,
+        "parametersQuery": {
+          "values": [
+            {
+              "name": "symbol"
+            },
+            {
+              "name": "limit"
+            }
+          ]
+        }
+      },
+      "id": "004f8f64-c984-4412-a94a-23ff84340f8a",
+      "name": "getOrderBook",
+      "type": "@n8n/n8n-nodes-langchain.toolHttpRequest",
+      "position": [
+        1312,
+        1072
+      ],
+      "typeVersion": 1.1
+    },
+    {
+      "parameters": {
+        "toolDescription": "Fetches candlestick (OHLCV) data for a trading pair and time interval from Binance. Supports optional time range filtering.\n\n\u2705 Expected Input Format (JSON):\n{\n  \"symbol\": \"BTCUSDT\",\n  \"interval\": \"15m\",\n  \"limit\": 100,\n  \"startTime\": 1690000000000,\n  \"endTime\": 1690100000000,\n  \"timeZone\": \"0\"\n}\n\nOnly `symbol` and `interval` are required. All other fields are optional.\n\nThe response is an array of arrays representing each candlestick:\n[\n  [ openTime, open, high, low, close, volume, closeTime, quoteVolume, numTrades, takerBase, takerQuote, ignore ]\n]",
+        "url": "https://fapi.binance.com/fapi/v1/klines",
+        "sendQuery": true,
+        "parametersQuery": {
+          "values": [
+            {
+              "name": "symbol"
+            },
+            {
+              "name": "interval"
+            },
+            {
+              "name": "limit",
+              "valueProvider": "modelOptional"
+            }
+          ]
+        }
+      },
+      "id": "1d8273d6-aec2-4741-a7f5-6c16baae0002",
+      "name": "getKlines",
+      "type": "@n8n/n8n-nodes-langchain.toolHttpRequest",
+      "position": [
+        1568,
+        1072
+      ],
+      "typeVersion": 1.1
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $json.sessionId }}"
+      },
+      "id": "f4fd625d-ae68-4c29-a12c-b17e51b119e3",
+      "name": "Simple Memory",
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "position": [
+        640,
+        1072
+      ],
+      "typeVersion": 1.3
+    },
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "message"
+            },
+            {
+              "name": "sessionId"
+            }
+          ]
+        }
+      },
+      "id": "87827e4e-fcf1-4324-8fbe-43109c18c8d0",
+      "name": "When Executed by Another Workflow",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "position": [
+        432,
+        736
+      ],
+      "typeVersion": 1.1
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.message }}",
+        "options": {
+          "systemMessage": "You are the **Binance SM Price-24hrStats-OrderBook-Kline Agent**, responsible for gathering and summarizing real-time price and market structure data for any given trading pair. You always call **all four market data tools** and return **latest candles across all key intervals**.\n\n---\n\n### \ud83d\udd27 Connected Tools (Always Executed)\n\n#### \ud83d\udcc8 `getCurrentPrice`\n\n*Latest trade price*\n**Endpoint**: `/api/v3/ticker/price`\n**Input**:\n\n```json\n{ \"symbol\": \"BTCUSDT\" }\n```\n\n---\n\n#### \ud83d\udcca `get24hrStats`\n\n*24-hour stats including OHLC and volume*\n**Endpoint**: `/api/v3/ticker/24hr`\n**Input**:\n\n```json\n{ \"symbol\": \"BTCUSDT\" }\n```\n\n---\n\n#### \ud83e\uddfe `getOrderBook`\n\n*Live order book (top 100 bids/asks)*\n**Endpoint**: `/api/v3/depth`\n**Input**:\n\n```json\n{ \"symbol\": \"BTCUSDT\", \"limit\": 100 }\n```\n\n---\n\n#### \ud83d\udd70\ufe0f `getKlines` (Multi-Interval)\n\n*Latest candle data for multiple timeframes*\n**Endpoint**: `/api/v3/klines`\n**Inputs** (run separately for each):\n\n```json\n{ \"symbol\": \"BTCUSDT\", \"interval\": \"15m\", \"limit\": 1 }\n{ \"symbol\": \"BTCUSDT\", \"interval\": \"1h\",  \"limit\": 1 }\n{ \"symbol\": \"BTCUSDT\", \"interval\": \"4h\",  \"limit\": 1 }\n{ \"symbol\": \"BTCUSDT\", \"interval\": \"1d\",  \"limit\": 1 }\n```\n\n---\n\n### \ud83e\udde0 Behavior Instructions\n\n* Always extract the **symbol** from the user's prompt (e.g., \"ETHUSDT\", \"SOLUSDT\")\n* Trigger **all four tools** in parallel\n* For klines, call the endpoint 4 times (15m, 1h, 4h, 1d)\n* Merge all tool outputs into a **single response**\n* Format clearly for **Telegram** messaging\n\n---\n\n### \ud83d\udce4 Output Format (Telegram HTML)\n\nExample:\n\n```\n\ud83d\udcca BTCUSDT Market Overview\n\n\ud83d\udcb0 Price: $63,220  \n\ud83d\udcc8 24h Change: +2.3% | Volume: 45,210 BTC  \n\n\ud83d\udcc9 Order Book  \n\u2022 Top Bid: $63,190  \n\u2022 Top Ask: $63,230  \n\n\ud83d\udd70\ufe0f Latest Candles  \n\u2022 15m: O: $63,000 | C: $63,220 | Vol: 320 BTC  \n\u2022 1h : O: $62,700 | C: $63,300 | Vol: 980 BTC  \n\u2022 4h : O: $61,800 | C: $63,500 | Vol: 2,410 BTC  \n\u2022 1d : O: $59,200 | C: $63,220 | Vol: 7,850 BTC\n```\n\n---\n\n### \u2705 Input Expectations\n\n* Input is in natural language, e.g.:\n\n  * \"What\u2019s going on with BTC?\"\n  * \"Give me full SOL update\"\n  * \"Show 4h and 1d candles for ETH\"\n\n* If no symbol is found, ask:\n\n  > \u201cPlease provide the token symbol (e.g., BTCUSDT).\u201d\n\n"
+        }
+      },
+      "id": "91dcb903-ad4b-493f-9bff-6d1471492132",
+      "name": "Binance SM Price-24hrStats-OrderBook-Kline Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "position": [
+        832,
+        736
+      ],
+      "typeVersion": 1.9
+    },
+    {
+      "parameters": {
+        "model": "deepseek/deepseek-v4-flash",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenRouter",
+      "typeVersion": 1,
+      "position": [
+        448,
+        1056
+      ],
+      "id": "93c8e287-2dc6-40ab-84a0-14aae6cbdeaa",
+      "name": "OpenRouter Chat Model",
+      "credentials": {
+        "openRouterApi": {
+          "id": "qQi8XDmwL3UdHNax",
+          "name": "OpenRouter account 3"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "getKlines": {
+      "ai_tool": [
+        [
+          {
+            "node": "Binance SM Price-24hrStats-OrderBook-Kline Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "get24hrStats": {
+      "ai_tool": [
+        [
+          {
+            "node": "Binance SM Price-24hrStats-OrderBook-Kline Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "getOrderBook": {
+      "ai_tool": [
+        [
+          {
+            "node": "Binance SM Price-24hrStats-OrderBook-Kline Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Simple Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "Binance SM Price-24hrStats-OrderBook-Kline Agent",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "getCurrentPrice": {
+      "ai_tool": [
+        [
+          {
+            "node": "Binance SM Price-24hrStats-OrderBook-Kline Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "When Executed by Another Workflow": {
+      "main": [
+        [
+          {
+            "node": "Binance SM Price-24hrStats-OrderBook-Kline Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenRouter Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Binance SM Price-24hrStats-OrderBook-Kline Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "none",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": true,
+    "binaryMode": "separate",
+    "timeSavedMode": "fixed",
+    "errorWorkflow": "p8vhXj53RK8MUxb7"
+  },
+  "staticData": null,
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "pinData": {},
+  "versionId": "a1372761-5be7-41ee-8966-bbb74892b363",
+  "activeVersionId": "a1372761-5be7-41ee-8966-bbb74892b363",
+  "triggerCount": 0
+}

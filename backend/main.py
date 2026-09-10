@@ -102,7 +102,9 @@ async def lifespan(app: FastAPI):
     """Lifespan context manager for startup and shutdown events."""
     validate_live_startup_security()
     from backend.services.trading_mode import (
+        BINANCE_PAPER_SESSION_ID,
         TradingMode,
+        binance_paper_parallel_enabled,
         get_trading_mode,
         paper_leverage_for_broker,
         paper_starting_balance,
@@ -158,6 +160,22 @@ async def lifespan(app: FastAPI):
             init_kwargs["paper_balance"] = paper_starting_balance()
         ut.init_session(**init_kwargs)
         logger.info(f"✓ Unified Trading Router initialized ({mode.upper()} MODE)")
+        if binance_paper_parallel_enabled():
+            paper_sess = ut.init_session(
+                "binance_futures",
+                mode="paper",
+                paper_balance=paper_starting_balance(),
+                leverage=paper_leverage_for_broker("binance_futures"),
+                session_id=BINANCE_PAPER_SESSION_ID,
+            )
+            ut.set_default_session(BINANCE_PAPER_SESSION_ID)
+            logger.info(
+                "✓ Binance paper-parallel session %s (portfolio=%s) — "
+                "crypto loop is simulated, cTrader stays on TRADING_MODE=%s",
+                BINANCE_PAPER_SESSION_ID,
+                paper_sess.paper_portfolio_id,
+                mode,
+            )
     except Exception as e:
         logger.warning(f"⚠ Unified Trading init warning: {e}")
 

@@ -1,0 +1,270 @@
+{
+  "id": "iIAtqhz8f145Cfrf",
+  "name": "17 - QuantumTrade Scrapling Fetch (Webhook)",
+  "active": true,
+  "nodes": [
+    {
+      "id": "wh-5b03fefa",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        260,
+        300
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "qt-scrapling-fetch-17",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "webhookId": "2e72f52f84f341849792bed4815a155b"
+    },
+    {
+      "id": "note-b26a26e8",
+      "name": "Routing Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        40,
+        40
+      ],
+      "parameters": {
+        "content": "## 17 - Scrapling Research Fetch (draft)\n\n**Direct:** `http://ai-trading-scrapling:8080/fetch`\n**Backend alias:** `http://ai-trading-backend:8000/api/research/fetch`\n**Auth:** Scrapling QT (httpBearerAuth)\n\nBody: `{ \"url\", \"mode\": \"http|stealth\", \"extraction_type\": \"markdown|html|text\", \"css_selector?\" }`\nResearch only \u2014 no prices, no orders.",
+        "height": 320,
+        "width": 420
+      }
+    },
+    {
+      "id": "norm-e32ea096",
+      "name": "Normalize Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const raw=$input.first().json||{};\nconst body=(raw.body && typeof raw.body==='object')?raw.body:raw;\nconst url=String(body.url||body.link||'').trim();\nconst mode=['http','stealth'].includes(String(body.mode||'').toLowerCase())?String(body.mode).toLowerCase():'http';\nconst extraction_type=['markdown','html','text'].includes(String(body.extraction_type||body.format||'').toLowerCase())?String(body.extraction_type||body.format).toLowerCase():'markdown';\nconst css_selector=body.css_selector?String(body.css_selector):null;\nif(!url.startsWith('http')) return [{json:{ok:false,error:'url required (public http/https)', url}}];\nconst payload={url, mode, extraction_type};\nif(css_selector) payload.css_selector=css_selector;\nreturn [{json:{ok:true, payload}}];"
+      }
+    },
+    {
+      "id": "iff-6282baf7",
+      "name": "URL OK?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        700,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "1",
+              "leftValue": "={{ $json.ok }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      }
+    },
+    {
+      "id": "sc-4b43993e",
+      "name": "Scrapling Fetch QT",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        940,
+        220
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "http://ai-trading-scrapling:8080/fetch",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.payload) }}",
+        "options": {
+          "timeout": 90000,
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "credentials": {
+        "httpBearerAuth": {
+          "id": "5zsyuVRVlidofvho",
+          "name": "Scrapling Research"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "id": "bad-5786e96e",
+      "name": "Bad Request",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        940,
+        420
+      ],
+      "parameters": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [
+            {
+              "id": "1",
+              "name": "ok",
+              "value": false,
+              "type": "boolean"
+            },
+            {
+              "id": "2",
+              "name": "error",
+              "value": "={{ $json.error || \"url required\" }}",
+              "type": "string"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "out-5a78433d",
+      "name": "Normalize Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1180,
+        220
+      ],
+      "parameters": {
+        "jsCode": "const j=$input.first().json||{};\nconst prev=$('Normalize Input').first().json||{};\nif(prev.ok===false) return [{json:{ok:false,error:prev.error,workflow:'17-qt-scrapling-fetch'}}];\nconst content=j.content;\nreturn [{json:{\n  ok: !j.error && typeof content==='string',\n  url: j.url || (prev.payload&&prev.payload.url),\n  status: j.status,\n  mode: j.mode,\n  extraction_type: j.extraction_type,\n  content: typeof content==='string'?content:null,\n  content_len: typeof content==='string'?content.length:0,\n  error: j.error||null,\n  workflow:'17-qt-scrapling-fetch',\n}}];"
+      }
+    },
+    {
+      "id": "resp-bd3a125d",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1400,
+        300
+      ],
+      "parameters": {
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Normalize Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Input": {
+      "main": [
+        [
+          {
+            "node": "URL OK?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "URL OK?": {
+      "main": [
+        [
+          {
+            "node": "Scrapling Fetch QT",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Bad Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Scrapling Fetch QT": {
+      "main": [
+        [
+          {
+            "node": "Normalize Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Bad Request": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Output": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": true
+  },
+  "staticData": null,
+  "meta": null,
+  "pinData": {},
+  "versionId": "d710f1e3-c7ac-46da-a0fb-866eed57b954",
+  "activeVersionId": "d710f1e3-c7ac-46da-a0fb-866eed57b954",
+  "triggerCount": 1
+}

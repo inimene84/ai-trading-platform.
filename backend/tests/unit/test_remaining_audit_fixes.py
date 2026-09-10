@@ -374,12 +374,13 @@ def test_sentry_token_missing_returns_503(monkeypatch):
 
 def test_trading_mutation_without_admin_token_is_rejected(monkeypatch):
     """Paper startup may omit a token; trading POSTs must still fail closed."""
+    from fastapi.testclient import TestClient
+    from backend.main import app
+
     monkeypatch.setenv("TRADING_MODE", "paper")
     monkeypatch.setenv("PAPER_TRADING", "true")
     for name in AUTH_ENV_VARS:
         monkeypatch.delenv(name, raising=False)
-    from fastapi.testclient import TestClient
-    from backend.main import app
 
     client = TestClient(app)
     res = client.post("/api/trading/loop/start")

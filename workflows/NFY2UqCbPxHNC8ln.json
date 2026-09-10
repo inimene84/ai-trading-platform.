@@ -1,0 +1,451 @@
+{
+  "id": "NFY2UqCbPxHNC8ln",
+  "name": "3.-Binance FM Financial Analyst Agent",
+  "active": true,
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Primary Reasoning Agent\nNode: Binance SM Financial Analyst Agent\nThis is the orchestrator that:\n\n**Parses the symbol** and optional timeframe from user input\n\nSelects **tools dynamically**\n\n**Merges all results into one final report**\n\n",
+        "height": 460,
+        "width": 500,
+        "color": 5
+      },
+      "id": "5448c373-8ff6-435f-aeee-d0c8530790d8",
+      "name": "Sticky Note8",
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        0,
+        -16
+      ],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "Nh18cqaTPFZmJMHX",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/Nh18cqaTPFZmJMHX",
+          "cachedResultName": "8.-Binance FM 1day indicators tool"
+        },
+        "workflowInputs": {
+          "value": {
+            "message": "={{ $fromAI(\"message\",\"Populate this with a relevant message to this subagent\")}}",
+            "sessionId": "={{ $json.sessionId }}"
+          },
+          "schema": [
+            {
+              "id": "message",
+              "type": "string",
+              "display": true,
+              "required": false,
+              "displayName": "message",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "sessionId",
+              "type": "string",
+              "display": true,
+              "required": false,
+              "displayName": "sessionId",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            }
+          ],
+          "mappingMode": "defineBelow",
+          "matchingColumns": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        }
+      },
+      "id": "4ab87c37-7c98-4d49-bd81-ff0de43b04d4",
+      "name": "Binance SM 1day Indicators Agent",
+      "type": "@n8n/n8n-nodes-langchain.toolWorkflow",
+      "position": [
+        640,
+        640
+      ],
+      "typeVersion": 2.2
+    },
+    {
+      "parameters": {
+        "description": "This agent focuses on retrieving and analyzing 4-hour timeframe technical indicators for Binance Spot Market trading pairs. It provides a medium-term view of trend strength, volatility, and momentum shifts\u2014ideal for swing trading analysis and macro-level setups.\n\n\ud83d\udd27 What It Does:\nWhen triggered, the agent queries the Binance SM 4hour Indicators Tool workflow and returns a curated set of technical indicator values, such as:\n\n\u2705 RSI (Relative Strength Index)\n\n\u2705 MACD (Moving Average Convergence Divergence)\n\n\u2705 Bollinger Bands\n\n\u2705 SMA / EMA\n\n\u2705 ADX (Trend Strength)\n\nThese indicators are derived from recent 4-hour candlestick data (typically the last 20 bars) and formatted for human-readable AI response generation.",
+        "workflowId": {
+          "__rl": true,
+          "value": "YUXhhq8m2vYG55jM",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/YUXhhq8m2vYG55jM",
+          "cachedResultName": "7.-Binance FM 4hour indicators tool"
+        },
+        "workflowInputs": {
+          "value": {
+            "message": "={{ $fromAI(\"message\",\"Populate this with a relevant message to this subagent\")}}",
+            "sessionId": "={{ $json.sessionId }}"
+          },
+          "schema": [
+            {
+              "id": "message",
+              "type": "string",
+              "display": true,
+              "required": false,
+              "displayName": "message",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "sessionId",
+              "type": "string",
+              "display": true,
+              "required": false,
+              "displayName": "sessionId",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            }
+          ],
+          "mappingMode": "defineBelow",
+          "matchingColumns": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        }
+      },
+      "id": "1d03581c-b971-4d73-a13f-86ca729bf990",
+      "name": "Binance SM 4hour Indicators Agent",
+      "type": "@n8n/n8n-nodes-langchain.toolWorkflow",
+      "position": [
+        208,
+        512
+      ],
+      "typeVersion": 2.2
+    },
+    {
+      "parameters": {
+        "description": "This agent is responsible for analyzing 1-hour interval technical indicators for trading pairs on the Binance Spot Market. It is used to detect mid-range market momentum and potential entry/exit signals based on trend strength and volatility.\n\n\ud83d\udd27 What It Does:\nWhen invoked, this agent queries the Binance SM 1hour Indicators Tool to retrieve AI-processed indicator data including (but not limited to):\n\n\u2705 RSI (Relative Strength Index)\n\n\u2705 MACD (Moving Average Convergence Divergence)\n\n\u2705 Bollinger Bands (BBANDS)\n\n\u2705 SMA / EMA (Simple & Exponential Moving Averages)\n\n\u2705 ADX (Average Directional Index)\n\nThese indicators are calculated from the latest 1-hour candlestick data and limited to the most recent data points (typically last 20).",
+        "workflowId": {
+          "__rl": true,
+          "value": "0DI8SaNMLK4AQzxs",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/0DI8SaNMLK4AQzxs",
+          "cachedResultName": "6.-Binance FM 1hour indicators tool"
+        },
+        "workflowInputs": {
+          "value": {
+            "message": "={{ $fromAI(\"message\",\"Populate this with a relevant message to this subagent\")}}",
+            "sessionId": "={{ $json.sessionId }}"
+          },
+          "schema": [
+            {
+              "id": "message",
+              "type": "string",
+              "display": true,
+              "required": false,
+              "displayName": "message",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "sessionId",
+              "type": "string",
+              "display": true,
+              "required": false,
+              "displayName": "sessionId",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            }
+          ],
+          "mappingMode": "defineBelow",
+          "matchingColumns": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        }
+      },
+      "id": "df4fa0f6-fee5-423c-ad66-bc2464f6e686",
+      "name": "Binance SM 1hour Indicators Agent",
+      "type": "@n8n/n8n-nodes-langchain.toolWorkflow",
+      "position": [
+        336,
+        688
+      ],
+      "typeVersion": 2.2
+    },
+    {
+      "parameters": {
+        "description": "This is a 15-minute interval technical indicator agent for Binance Spot Market pairs. It provides AI-driven access to real-time technical signals calculated on the latest 15-minute candlestick data. Designed for use within larger financial analysis workflows, this tool helps detect short-term momentum shifts and trading signals.\n\n\ud83d\udd27 What It Does:\nWhen called with a valid crypto symbol, this agent fetches the latest 15-minute technical indicators, typically including (but not limited to):\n\n\u2705 Relative Strength Index (RSI)\n\n\u2705 Bollinger Bands (BBANDS)\n\n\u2705 Moving Averages (SMA/EMA)\n\n\u2705 MACD\n\n\u2705 ADX",
+        "workflowId": {
+          "__rl": true,
+          "value": "MYSdBClJodWs2q3J",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/MYSdBClJodWs2q3J",
+          "cachedResultName": "5.-Binance FM 15min indicators tool"
+        },
+        "workflowInputs": {
+          "value": {
+            "message": "={{ $fromAI(\"message\",\"Populate this with a relevant message to this subagent\")}}",
+            "sessionId": "={{ $json.sessionId }}"
+          },
+          "schema": [
+            {
+              "id": "message",
+              "type": "string",
+              "display": true,
+              "required": false,
+              "displayName": "message",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "sessionId",
+              "type": "string",
+              "display": true,
+              "required": false,
+              "displayName": "sessionId",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            }
+          ],
+          "mappingMode": "defineBelow",
+          "matchingColumns": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        }
+      },
+      "id": "2e6779b9-75b2-42eb-aaee-a70c53f033c2",
+      "name": "Binance SM 15min Indicators Agent",
+      "type": "@n8n/n8n-nodes-langchain.toolWorkflow",
+      "position": [
+        464,
+        560
+      ],
+      "typeVersion": 2.2
+    },
+    {
+      "parameters": {
+        "description": "This tool is a delegated sub-agent workflow that provides low-level market data from the Binance Spot Market in response to upstream AI reasoning. It is used by higher-level agents (e.g. the Financial Analyst Agent) to retrieve structured financial metrics and price data for any cryptocurrency pair.\n\n\ud83d\udd27 What It Does:\nThis agent accepts a symbol-based message input and returns Binance API data for:\n\n\u2705 getCurrentPrice \u2013 Latest market price for a trading pair (e.g., BTCUSDT)\n\n\u2705 get24hrStats \u2013 24-hour price change, high/low, volume, and close stats\n\n\u2705 getOrderBook \u2013 Real-time order book (bids/asks) with adjustable depth\n\n\u2705 getKlines \u2013 Candlestick OHLCV data for technical analysis",
+        "workflowId": {
+          "__rl": true,
+          "value": "zIgJyXrwff5RYcfx",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/zIgJyXrwff5RYcfx",
+          "cachedResultName": "4.-Binance FM price-24hrStats-OrderBook-Kline tool"
+        },
+        "workflowInputs": {
+          "value": {
+            "message": "={{ $fromAI(\"message\",\"Populate this with a relevant message to this subagent\")}}",
+            "sessionId": "={{ $json.sessionId }}"
+          },
+          "schema": [
+            {
+              "id": "message",
+              "type": "string",
+              "display": true,
+              "required": false,
+              "displayName": "message",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "sessionId",
+              "type": "string",
+              "display": true,
+              "required": false,
+              "displayName": "sessionId",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            }
+          ],
+          "mappingMode": "defineBelow",
+          "matchingColumns": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        }
+      },
+      "id": "25e84d55-0175-44be-bd3c-c4968c0bea8a",
+      "name": "Binance SM Price-24hrStats-OrderBook-Kline Agent",
+      "type": "@n8n/n8n-nodes-langchain.toolWorkflow",
+      "position": [
+        64,
+        656
+      ],
+      "typeVersion": 2.2
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.message }}",
+        "options": {
+          "systemMessage": "You are the **Binance futures Market Financial Analyst AI Agent**, tasked with interpreting natural-language trading queries and generating **multi-timeframe, indicator-driven market analysis** for any Binance futures symbol.\n\nYour core responsibility is to orchestrate real-time price tools and technical indicator sub-agents to **diagnose trend conditions, volatility shifts, and market momentum**, and return a structured report formatted for Telegram.\n\n---\n\n### \ud83d\udd17 Connected Tools & Agents\n\n#### 1. **Price & Market Structure Tool**\n\nWorkflow: `Binance SM Price-24hrStats-OrderBook-Kline Tool`\nReturns:\n\n* `getCurrentPrice`\n* `get24hrStats`\n* `getOrderBook`\n* `getKlines`\n  Input:\n\n```json\n{\n  \"message\": \"<SYMBOL>\",\n  \"sessionId\": \"<Telegram Chat ID>\"\n}\n```\n\n#### 2. **Timeframe-Based Technical Indicator Agents**\n\nEach uses the latest Binance kline data (limit: 40) to calculate:\n\n* **RSI** (14)\n* **MACD** (12/26/9)\n* **Bollinger Bands** (20/2)\n* **SMA / EMA** (20)\n* **ADX** (+DI, \u2212DI, 14)\n\nAgents:\n\n* `Binance SM 15min Indicators Agent`\n* `Binance SM 1hour Indicators Agent`\n* `Binance SM 4hour Indicators Agent`\n* `Binance SM 1day Indicators Agent`\n\nInput to each agent:\n\n```json\n{\n  \"message\": \"<SYMBOL>\",\n  \"sessionId\": \"<Telegram Chat ID>\"\n}\n```\n\n---\n\n### \ud83e\udde0 Decision Engine & Routing Logic\n\nYou must:\n\n* Extract the **symbol** and **implied timeframe** from the user query.\n* If no timeframe is given, default to:\n\n  * **Short-Term**: 15m + 1h\n  * **Mid-Term**: 1h + 4h\n  * **Long-Term**: 1d + 4h\n* Route data requests in parallel across tools\n* Merge raw metrics into a final structured insight\n\n---\n\n### \ud83d\udce4 Telegram Output Template\n\nReturn your final result in this format:\n\n```\n\ud83d\udcca <SYMBOL> Market Snapshot\n\n\ud83d\udcb0 Price: $63,220  \n\ud83d\udcc8 24h Change: +2.3%  \n\ud83d\udcca Volume: 45,210 BTC\n\n\ud83e\uddea Technical Summary:\n\u2022 1h RSI: 68 (Bullish)  \n\u2022 MACD: Crossover Up  \n\u2022 BB Width: Narrowing (Possible Breakout)  \n\u2022 ADX: 32 (Strong Trend)  \n\n\ud83d\udcc9 Support: $61,900  \n\ud83d\udcc8 Resistance: $63,800\n```\n\n---\n\n### \u2705 Input Handling Notes\n\n* Input: Human questions like \"How\u2019s BTC doing today?\" or \"Is SOL bullish in the 4h chart?\"\n* If timeframe is missing, **infer intent**\n* If symbol is missing, prompt: \u201cWhich token would you like me to analyze?\u201d\n* All agents and tools **must return cleaned JSON**, avoid raw API output"
+        }
+      },
+      "id": "4bd8d792-1b4b-490b-bb82-5441419095e2",
+      "name": "Binance SM Financial Analyst Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "position": [
+        144,
+        288
+      ],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $json.sessionId }}"
+      },
+      "id": "cd7335ae-b18c-4419-b450-563c458bbe1f",
+      "name": "Simple Memory",
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "position": [
+        -48,
+        512
+      ],
+      "typeVersion": 1.3
+    },
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "message"
+            },
+            {
+              "name": "sessionId"
+            }
+          ]
+        }
+      },
+      "id": "3b985dc2-248f-4284-82e6-00586a9704de",
+      "name": "When Executed by Another Workflow",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "position": [
+        -400,
+        288
+      ],
+      "typeVersion": 1.1
+    },
+    {
+      "parameters": {
+        "model": "deepseek/deepseek-v4-flash",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenRouter",
+      "typeVersion": 1,
+      "position": [
+        -176,
+        512
+      ],
+      "id": "14c9f1bb-a1da-426c-b44a-7246becba6e3",
+      "name": "OpenRouter Chat Model",
+      "credentials": {
+        "openRouterApi": {
+          "id": "qQi8XDmwL3UdHNax",
+          "name": "OpenRouter account 3"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Binance SM Price-24hrStats-OrderBook-Kline Agent": {
+      "ai_tool": [
+        [
+          {
+            "node": "Binance SM Financial Analyst Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Binance SM 4hour Indicators Agent": {
+      "ai_tool": [
+        [
+          {
+            "node": "Binance SM Financial Analyst Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Binance SM 1hour Indicators Agent": {
+      "ai_tool": [
+        [
+          {
+            "node": "Binance SM Financial Analyst Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Binance SM 15min Indicators Agent": {
+      "ai_tool": [
+        [
+          {
+            "node": "Binance SM Financial Analyst Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Binance SM 1day Indicators Agent": {
+      "ai_tool": [
+        [
+          {
+            "node": "Binance SM Financial Analyst Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Simple Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "Binance SM Financial Analyst Agent",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "When Executed by Another Workflow": {
+      "main": [
+        [
+          {
+            "node": "Binance SM Financial Analyst Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenRouter Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Binance SM Financial Analyst Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "timeSavedMode": "fixed",
+    "errorWorkflow": "p8vhXj53RK8MUxb7",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": true
+  },
+  "staticData": null,
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "pinData": {},
+  "versionId": "dd4f8238-c06b-49b4-82ec-0f3762a342ad",
+  "activeVersionId": "dd4f8238-c06b-49b4-82ec-0f3762a342ad",
+  "triggerCount": 0
+}

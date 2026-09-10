@@ -1,0 +1,4269 @@
+{
+  "id": "Dssh9FIJybVIuCu3",
+  "name": "deactiveted RAG Pipelines",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "fb1608df-4916-454d-9593-0f6e08f4a05a",
+      "name": "Character Text Splitter",
+      "type": "@n8n/n8n-nodes-langchain.textSplitterCharacterTextSplitter",
+      "position": [
+        14416,
+        12064
+      ],
+      "typeVersion": 1,
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "model": "mistral-moderation-latest",
+        "options": {}
+      },
+      "id": "b9ac7f8e-c639-44f8-af26-55a99dee295c",
+      "name": "Mistral Cloud Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatMistralCloud",
+      "position": [
+        12848,
+        11792
+      ],
+      "typeVersion": 1,
+      "credentials": {
+        "mistralCloudApi": {
+          "id": "eie7fSG174zFyFL2",
+          "name": "Mistral Cloud account"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.message.text }}",
+        "options": {
+          "systemMessage": "=You are a helpful, intelligent AI Knowledge Bot and proactive chat agent.  \nLead conversations by asking open-ended questions and offering suggestions.  \nAnticipate needs, follow up thoughtfully, and make the user feel supported throughout.\n\n---\n\n## **Knowledge Access Workflow**\n\n1. **Primary Source: qdrant vector store (`add_table_name` table)**  \n   - For **every** user query, first search **only** in qdrant.  \n   - If relevant information is found:\n     - Respond in a **clear, structured, and informative** manner.  \n     - **Always include multiple images** if available \u2014 aim for **maximum number of relevant images**, not just one.  \n       - Place each image **inline**, immediately after the sentence/section it illustrates.  \n       - Never group all images at the end.\n     - Always **cite the internal document name** and **provide a clickable URL** to the source document.\n       - Use `list doc` tool with `source_metadata_id` to retrieve the document URL.\n     \n     **Example Citation:**  \n     > This information is based on the internal AI documentation related to automation projects (Automation Timesheet Blogs).  \n     > [View Full Document](document_url_here)\n\n2. **If No  Match Found:**  \n   - Reply:  \n     `\"The information you requested is not available in our internal documentation. Would you like me to do a Web search?\"`\n`\n\n---\n\n## **Formatting & Style**\n- **Language:** All qdrant queries in English; all responses in English.  \n- **Tone:** Professional, clear, structured, and helpful.  \n- **Image Usage:**  \n  - Always include **all available relevant images** MARKDOWN  \u2014 even if it means showing several per section.  \n  - Place images **exactly after the point they illustrate**.  \n  - Use different images for different subtopics, comparisons, or examples.  \n  - Do **not** skip images if they exist in the source.\n- **For Guide/Instruction Responses:**  \n  1. **Step-by-Step Guide** (detailed instructions)  \n  2. **Things to Consider** (common pitfalls, important details)  \n  3. **Further Understanding**  \n     - Suggest 2 related topics the user might explore next, relevant to their query.\n- Never skip key details. Always check if more images can be added to improve clarity.\n\n---\n\n## **Core Principles**\n- Be proactive \u2014 never wait for the user to guide the entire conversation.  \n- Ask open-ended follow-ups.  \n- Anticipate related needs based on the query.  \n- Maintain accuracy, cite sources, and **use as many relevant images as possible**.  \n-  ALWAYS SHOW  IMAGE AND Keep images inline and contextually placed.\n"
+        }
+      },
+      "id": "7662ef1e-1fb4-46d4-a0cf-0b55f5ad7a83",
+      "name": "ai chat agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "position": [
+        12080,
+        10128
+      ],
+      "typeVersion": 1.7,
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "d15e917b-43d2-40b8-8b49-af467ff63961",
+              "operator": {
+                "type": "string",
+                "operation": "notExists",
+                "singleValue": true
+              },
+              "leftValue": "={{ $json.data[0].parseJson().skipped }}",
+              "rightValue": ""
+            }
+          ]
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "2072d401-7fea-45b4-bb10-bd179c1bd0fa",
+      "name": "If NODE",
+      "type": "n8n-nodes-base.if",
+      "position": [
+        12656,
+        11504
+      ],
+      "typeVersion": 2.2,
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "text": "={{ $json.content.parts[0].text }}\n{{ $json.pages[0].markdown }}",
+        "attributes": {
+          "attributes": [
+            {
+              "name": "document_type",
+              "description": "type of document this can be blog, user documentation, technical documentation, manual/guide, educational"
+            },
+            {
+              "name": "project",
+              "description": " from give project this can any one ,social/digimarketing ,  chatbot, knowledge bot if nothing that its default"
+            },
+            {
+              "name": "assigned_to",
+              "description": "who are handling give projects mention all name given for a give project\n\nif project LINKED/DIGIMARRKETING/SOCIAL = [employee name]\nif project KB BOT = [employee name]\nif project CHAT BOT = [employee name]\nif project TIMESHEET = [employee name]"
+            }
+          ]
+        },
+        "options": {
+          "systemPromptTemplate": "You are an expert extraction algorithm.\nOnly extract relevant information from the text.\ngive data is "
+        }
+      },
+      "id": "f69cdff5-9840-4d27-b08a-615158ca57f7",
+      "name": "based file name it assign differ metadata",
+      "type": "@n8n/n8n-nodes-langchain.informationExtractor",
+      "position": [
+        12880,
+        11504
+      ],
+      "typeVersion": 1,
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "5132d92c-41da-4a55-ad79-0c329ca7e626",
+              "name": "Document name",
+              "type": "string",
+              "value": "={{ $('Download Google Doc/Sheet/Slide').item.json.name }}"
+            },
+            {
+              "id": "c8160701-2be7-43c6-bcfa-295fbebe0e23",
+              "name": "Document data",
+              "type": "string",
+              "value": "={{ $json.content.parts[0].text }}"
+            },
+            {
+              "id": "1087ab34-5643-4755-b545-cf34d0ae2cd2",
+              "name": " source",
+              "type": "string",
+              "value": "={{ $('Download Google Doc/Sheet/Slide').item.json.webViewLink }}"
+            },
+            {
+              "id": "300f49d6-8851-458d-a296-8ceb68ebdd5f",
+              "name": "DOCUMENT_TYPE",
+              "type": "string",
+              "value": "={{ $('Download Google Doc/Sheet/Slide').item.json.mimeType }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "cacf6837-3cd2-4ae8-988a-54a81428b97a",
+      "name": "set all metadata",
+      "type": "n8n-nodes-base.set",
+      "position": [
+        13264,
+        11504
+      ],
+      "typeVersion": 3.4,
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get incoming data (first item)\nconst data = items[0].json;\n\n// If wrapped in an array, unwrap it\nconst input = Array.isArray(data) ? data[0] : data;\n\nlet output = [\n  {\n    content: input[\"Document data\"], // main text for embedding\n    metadata: {\n      document_name: input[\"Document name\"],\n      source_id: input[\" source\"], // note: there is a space before \"source\" in your key\n    }\n  }\n];\n\nreturn output.map(o => ({ json: o }));\n"
+      },
+      "id": "86c4d746-8570-4fb5-b6cd-de4c1ea03184",
+      "name": "clean output",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        13520,
+        11472
+      ],
+      "typeVersion": 2,
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const chunkSize = 1000; // characters\nconst chunkOverlap = 100; // characters\n\nlet newItems = [];\n\nfor (const item of items) {\n    let text = item.json.content; // use the extracted text\n    if (!text || typeof text !== \"string\") continue;\n\n    const sourceId = item.json.metadata.source_id;\n\n    // Chunking\n    for (let i = 0; i < text.length; i += chunkSize - chunkOverlap) {\n        let chunk = text.slice(i, i + chunkSize);\n        newItems.push({\n            json: {\n                content: chunk,\n                metadata: {\n                    ...item.json.metadata,\n                    source_id: sourceId,\n                },\n            },\n        });\n    }\n}\n\nreturn newItems;\n"
+      },
+      "id": "ed67e228-d46b-40c0-929b-fbd7043cac1c",
+      "name": "convert data into smaller chunks",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        13744,
+        11472
+      ],
+      "typeVersion": 2,
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "updates": [
+          "message"
+        ],
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        11744,
+        10096
+      ],
+      "id": "0aa889f6-23c2-47d7-99b0-7608cb60781b",
+      "name": "Telegram Trigger",
+      "webhookId": "f3c5efb0-e090-44a0-825b-3797faeda531",
+      "credentials": {
+        "telegramApi": {
+          "id": "d11yKNihHm5QDdV7",
+          "name": "Telegram account 2"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $json.message.from.id }}",
+        "contextWindowLength": 10
+      },
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.3,
+      "position": [
+        12016,
+        10432
+      ],
+      "id": "b94680fc-ee2c-4777-8445-154792a62ab2",
+      "name": "Simple Memory",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Telegram Trigger').item.json.message.chat.id }}",
+        "text": "={{ $json.text }}",
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        13520,
+        10192
+      ],
+      "id": "a1f758ae-43c6-4f64-964c-8dff13d00f94",
+      "name": "Send a text message",
+      "webhookId": "a8c6d2c5-69db-437a-8f5d-c5c084143e0c",
+      "credentials": {
+        "telegramApi": {
+          "id": "d11yKNihHm5QDdV7",
+          "name": "Telegram account 2"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// n8n Code node\nconst text = $json.output;  // adjust to your field\n// Option A: strip backslashes from escaped markdown\nlet cleaned = text.replace(/\\\\\\\\n/g, '\\n')\n                  .replace(/\\\\\\\\\\*/g, '*');\n// Option B: escape all underscores, asterisks, etc. for Markdown:\ncleaned = cleaned.replace(/_/g, '\\\\_')\n                 .replace(/\\*/g, '\\\\*')\n                 .replace(/\\[/g, '\\\\[')\n                 .replace(/`/g, '\\\\`');\nreturn [{ text: cleaned }];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        12448,
+        10096
+      ],
+      "id": "8d67728e-ab41-4886-8d8e-27a66007b943",
+      "name": "Code in JavaScript",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "driveId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "My Drive"
+        },
+        "folderId": {
+          "__rl": true,
+          "value": "16B1jPY8BGKKnuAS70EKtxblNRBdNL_Zo",
+          "mode": "list",
+          "cachedResultName": "Qdb",
+          "cachedResultUrl": "https://drive.google.com/drive/folders/16B1jPY8BGKKnuAS70EKtxblNRBdNL_Zo"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        13120,
+        10016
+      ],
+      "id": "3e9ec27c-9959-4261-b504-def3416a67dd",
+      "name": "Upload file",
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "wxHSAKLvYZd4joU7",
+          "name": "Google Drive account"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "operation": "html",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.convertToFile",
+      "typeVersion": 1.1,
+      "position": [
+        12944,
+        10000
+      ],
+      "id": "ee857020-b223-4c38-b8c9-9fe1a8d02cb5",
+      "name": "Convert to File",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "859d1cd0-92cd-4dae-a9ee-8749d9a484d4",
+              "leftValue": "3500 letters or biiger",
+              "rightValue": "1",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            },
+            {
+              "id": "ee0898dc-051e-400c-a1fe-5e3a31a673fc",
+              "leftValue": "3500 letters or less",
+              "rightValue": "2",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {
+          "ignoreCase": false
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        12656,
+        10096
+      ],
+      "id": "a5c68657-f107-4b3c-a34e-3c12cedb6d40",
+      "name": "If",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "model": "anthropic/claude-haiku-4.5",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenRouter",
+      "typeVersion": 1,
+      "position": [
+        11664,
+        10512
+      ],
+      "id": "ce4c07fe-706c-43e1-98c4-7d9f25bcfb84",
+      "name": "OpenRouter Chat Model",
+      "credentials": {
+        "openRouterApi": {
+          "id": "aJExUzlhy9ENSM6v",
+          "name": "OpenRouter account 2"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "052066f2-f17d-40fa-b1ce-bd67ce7f369f",
+      "name": "Embeddings OpenAI5",
+      "type": "@n8n/n8n-nodes-langchain.embeddingsOpenAi",
+      "position": [
+        12272,
+        10512
+      ],
+      "typeVersion": 1.2,
+      "credentials": {
+        "openAiApi": {
+          "id": "UYj9dQYadJXRuYGS",
+          "name": "OpenAI account"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "mode": "retrieve-as-tool",
+        "toolName": "docaiauto",
+        "toolDescription": "Use RAG to look up information in the knowledgebase.",
+        "qdrantCollection": {
+          "__rl": true,
+          "value": "Mem",
+          "mode": "list",
+          "cachedResultName": "Mem"
+        },
+        "topK": 3,
+        "options": {}
+      },
+      "id": "3c393ebf-a245-4579-9a5d-6fde39a6ce4f",
+      "name": "Qdrant Vector Store4",
+      "type": "@n8n/n8n-nodes-langchain.vectorStoreQdrant",
+      "position": [
+        12288,
+        10336
+      ],
+      "typeVersion": 1.1,
+      "credentials": {
+        "qdrantApi": {
+          "id": "I5oc0eKmlBT4OSR8",
+          "name": "Qdrant account"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "dataType": "binary",
+        "options": {
+          "metadata": {
+            "metadataValues": [
+              {
+                "name": "source",
+                "value": "={{ $('set all metadata').item.json[\"Document name\"] }}"
+              },
+              {
+                "name": "blobType",
+                "value": "application/jsonb"
+              },
+              {
+                "name": "loc",
+                "value": "={{ $('Mistral DOC OCR1').item.json.usage_info }}"
+              },
+              {
+                "name": "source_metadata_id",
+                "value": "={{ $('Google Drive1').item.json.file_url }}"
+              },
+              {
+                "name": "department",
+                "value": "ai_automation"
+              },
+              {
+                "name": "PROJECT",
+                "value": "={{ $('set all metadata').item.json.PROJECT }}"
+              },
+              {
+                "name": "=DOCUMNENT_TYPE",
+                "value": "={{ $('set all metadata').item.json.DOCUMENT_TYPE }}"
+              },
+              {
+                "name": "ASSIGNED_TO",
+                "value": "={{ $('set all metadata').item.json.ASSIGNEDTO }}"
+              }
+            ]
+          }
+        }
+      },
+      "id": "01510577-a600-4d6e-969e-ea84e1bc4f3b",
+      "name": "Default Data Loader3",
+      "type": "@n8n/n8n-nodes-langchain.documentDefaultDataLoader",
+      "position": [
+        14288,
+        11824
+      ],
+      "typeVersion": 1,
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.mistral.ai/v1/files",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "mistralCloudApi",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "purpose",
+              "value": "ocr"
+            },
+            {
+              "parameterType": "formBinaryData",
+              "name": "file",
+              "inputDataFieldName": "data"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "169c267e-7080-4b62-8e52-0f7062a18208",
+      "name": "Mistral Upload1",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        12064,
+        11488
+      ],
+      "typeVersion": 4.2,
+      "credentials": {
+        "mistralCloudApi": {
+          "id": "eie7fSG174zFyFL2",
+          "name": "Mistral Cloud account"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "url": "=https://api.mistral.ai/v1/files/{{ $json.id }}/url",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "mistralCloudApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "expiry",
+              "value": "24"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "52d76d62-f66f-46e6-848d-c02af68ab709",
+      "name": "Mistral Signed URL1",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        12240,
+        11504
+      ],
+      "typeVersion": 4.2,
+      "credentials": {
+        "mistralCloudApi": {
+          "id": "eie7fSG174zFyFL2",
+          "name": "Mistral Cloud account"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.mistral.ai/v1/ocr",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "mistralCloudApi",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"mistral-ocr-latest\",\n  \"document\": {\n    \"type\": \"document_url\",\n    \"document_url\": \"{{ $json.url }}\"\n  },\n  \"include_image_base64\": true\n}",
+        "options": {}
+      },
+      "id": "c2ea8b56-523c-4163-b6a5-7664e7b9c902",
+      "name": "Mistral DOC OCR1",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        12448,
+        11504
+      ],
+      "typeVersion": 4.2,
+      "credentials": {
+        "mistralCloudApi": {
+          "id": "eie7fSG174zFyFL2",
+          "name": "Mistral Cloud account"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "model": "text-embedding-3-small",
+        "options": {}
+      },
+      "id": "8d106742-70d8-45c8-9d34-b1620f05eb9e",
+      "name": "Embeddings OpenAI6",
+      "type": "@n8n/n8n-nodes-langchain.embeddingsOpenAi",
+      "position": [
+        14176,
+        11824
+      ],
+      "typeVersion": 1,
+      "credentials": {
+        "openAiApi": {
+          "id": "UYj9dQYadJXRuYGS",
+          "name": "OpenAI account"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "mode": "insert",
+        "qdrantCollection": {
+          "__rl": true,
+          "value": "Mem",
+          "mode": "list",
+          "cachedResultName": "Mem"
+        },
+        "embeddingBatchSize": "=200",
+        "options": {
+          "collectionConfig": "="
+        }
+      },
+      "id": "9aeba20c-2317-4fb6-be6c-8fa236c740ab",
+      "name": "Qdrant Vector Store5",
+      "type": "@n8n/n8n-nodes-langchain.vectorStoreQdrant",
+      "position": [
+        14224,
+        11584
+      ],
+      "typeVersion": 1.1,
+      "credentials": {
+        "qdrantApi": {
+          "id": "I5oc0eKmlBT4OSR8",
+          "name": "Qdrant account"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "Message"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        11456,
+        9776
+      ],
+      "id": "e4a87a64-1bf7-4276-8e52-775a7d3ceeda",
+      "name": "When Executed by Another Workflow",
+      "disabled": true
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        10848,
+        11536
+      ],
+      "id": "048b8fd5-d590-4db9-bad8-23bfe0d504c6",
+      "name": "When clicking \u2018Execute workflow\u2019",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "resource": "fileFolder",
+        "searchMethod": "query",
+        "filter": {
+          "folderId": {
+            "__rl": true,
+            "value": "https://drive.google.com/drive/u/1/folders/16B1jPY8BGKKnuAS70EKtxblNRBdNL_Zo",
+            "mode": "url"
+          }
+        },
+        "options": {
+          "fields": [
+            "id",
+            "name",
+            "webViewLink",
+            "mimeType",
+            "createdTime",
+            "modifiedTime",
+            "size"
+          ]
+        }
+      },
+      "id": "395a9bf7-036f-4fba-b456-0c43ac98473d",
+      "name": "Google Drive - List Files",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        11040,
+        11536
+      ],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "wxHSAKLvYZd4joU7",
+          "name": "Google Drive account"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "93763da0-97d5-48e5-986f-0fef2eec00a6",
+      "name": "Loop Over each file",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        11216,
+        11536
+      ],
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "combinator": "or",
+          "conditions": [
+            {
+              "id": "c-pdf",
+              "leftValue": "={{ $json.mimeType }}",
+              "rightValue": "application/pdf",
+              "operator": {
+                "type": "string",
+                "operation": "startsWith"
+              }
+            },
+            {
+              "id": "c-image",
+              "leftValue": "={{ $json.mimeType }}",
+              "rightValue": "image/",
+              "operator": {
+                "type": "string",
+                "operation": "startsWith"
+              }
+            },
+            {
+              "id": "c-gapps",
+              "leftValue": "={{ $json.mimeType }}",
+              "rightValue": "application/vnd.google-apps.",
+              "operator": {
+                "type": "string",
+                "operation": "startsWith"
+              }
+            }
+          ],
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          }
+        },
+        "options": {}
+      },
+      "id": "5514391f-b9aa-4bd9-8ec9-c7d3749b3e38",
+      "name": "Route by mimeType",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        11648,
+        11520
+      ],
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "operation": "download",
+        "fileId": {
+          "__rl": true,
+          "value": "={{ $json.id }}",
+          "mode": ""
+        },
+        "options": {}
+      },
+      "id": "9e668abb-097f-4e28-83df-81a614e5ae8e",
+      "name": "Download PDF/Image",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        11856,
+        11456
+      ],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "wxHSAKLvYZd4joU7",
+          "name": "Google Drive account"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "operation": "download",
+        "fileId": {
+          "__rl": true,
+          "value": "={{ $json.id }}",
+          "mode": ""
+        },
+        "options": {
+          "googleFileConversion": {}
+        }
+      },
+      "id": "95ebc87b-0843-4372-b560-9af9c322372e",
+      "name": "Download Google Doc/Sheet/Slide",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        12032,
+        11824
+      ],
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "wxHSAKLvYZd4joU7",
+          "name": "Google Drive account"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "c32415ba-b100-454b-b7fb-7aba2123ad3c",
+      "name": "add metadata1",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [
+        11424,
+        11536
+      ],
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "resource": "document",
+        "modelId": {
+          "__rl": true,
+          "value": "models/gemini-2.5-flash",
+          "mode": "list",
+          "cachedResultName": "models/gemini-2.5-flash"
+        },
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.googleGemini",
+      "typeVersion": 1.2,
+      "position": [
+        12288,
+        11824
+      ],
+      "id": "8a412e5b-ffee-47c1-b1ef-13f9cec6423b",
+      "name": "Analyze document",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "ck3Zb5iAW9FsFJWc",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "jsCode": "if ($input.first().json.message.from.id !== 6184893463) { // Replace with your Telegram user ID\n    return { unauthorized: true };\n} else {\n    // Return the original data when authorized\n    return $input.all();\n}\n"
+      },
+      "id": "54ba0c86-288a-4c36-a7f6-666cfd7c6968",
+      "name": "Code",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        5440,
+        9536
+      ],
+      "typeVersion": 2,
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "updates": [
+          "message"
+        ],
+        "additionalFields": {}
+      },
+      "id": "0161ebc0-7a5c-4290-84b6-fd19fc5dcf17",
+      "name": "Get Message",
+      "type": "n8n-nodes-base.telegramTrigger",
+      "position": [
+        5136,
+        9536
+      ],
+      "webhookId": "7914047e-f8bc-4315-a482-f787407c83ad",
+      "typeVersion": 1.1,
+      "credentials": {
+        "telegramApi": {
+          "id": "I9ZB2ELnuVYpYbhH",
+          "name": "Lucy glaw"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "029f4e7e-b367-4aa9-863e-e372694940fb",
+              "name": "chatInput",
+              "type": "string",
+              "value": "={{ $json.message.text }}"
+            },
+            {
+              "id": "398c1d7f-0c90-4af6-a414-d4d1968855b9",
+              "name": "sessionId",
+              "type": "number",
+              "value": "={{ $json.message.from.id }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "cad8ddae-5ccf-464d-96bb-c4e9516a4a66",
+      "name": "Get Text",
+      "type": "n8n-nodes-base.set",
+      "position": [
+        6400,
+        9344
+      ],
+      "typeVersion": 3.4,
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "operator": {
+                      "type": "string",
+                      "operation": "exists",
+                      "singleValue": true
+                    },
+                    "leftValue": "={{ $json.message.text}}",
+                    "rightValue": ""
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "Text"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "7b2cb4dc-dd9d-43b2-b4db-f0de858f46cc",
+                    "operator": {
+                      "type": "string",
+                      "operation": "exists",
+                      "singleValue": true
+                    },
+                    "leftValue": "={{ $json.message.voice.file_id }}",
+                    "rightValue": ""
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "Audio"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "98d80a35-3004-4bad-95b8-e87fc9270083",
+                    "operator": {
+                      "type": "object",
+                      "operation": "exists",
+                      "singleValue": true
+                    },
+                    "leftValue": "={{ $json.message.photo[0] }}",
+                    "rightValue": ""
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "Immagine"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "8e163701-1b06-42d5-8e93-76dafd1817e9",
+      "name": "Switch2",
+      "type": "n8n-nodes-base.switch",
+      "position": [
+        5680,
+        9520
+      ],
+      "executeOnce": false,
+      "typeVersion": 3.2,
+      "alwaysOutputData": false,
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "resource": "file",
+        "fileId": "={{ $('Get Message').item.json.message.voice.file_id }}",
+        "additionalFields": {}
+      },
+      "id": "9c48c1bc-6c1a-4e4a-bade-863717e25c91",
+      "name": "Get voice message",
+      "type": "n8n-nodes-base.telegram",
+      "position": [
+        5952,
+        9536
+      ],
+      "webhookId": "d971a56e-963a-452e-99dd-286653f432a9",
+      "typeVersion": 1.2,
+      "credentials": {
+        "telegramApi": {
+          "id": "I9ZB2ELnuVYpYbhH",
+          "name": "Lucy glaw"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "resource": "audio",
+        "operation": "transcribe",
+        "options": {
+          "language": "it"
+        }
+      },
+      "id": "87be2ca5-aa90-4f9e-b7ea-ff1016eefd95",
+      "name": "Transcribe recording",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "position": [
+        6176,
+        9536
+      ],
+      "typeVersion": 1.7,
+      "credentials": {
+        "openAiApi": {
+          "id": "UYj9dQYadJXRuYGS",
+          "name": "OpenAI account"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "resource": "file",
+        "fileId": "={{ $json.message.photo[2].file_id }}",
+        "additionalFields": {}
+      },
+      "id": "3c19073a-37ed-4afa-aef6-4e540bcdef9b",
+      "name": "Get image file",
+      "type": "n8n-nodes-base.telegram",
+      "position": [
+        5968,
+        9776
+      ],
+      "webhookId": "0b5ed937-7ee2-48e2-8a63-1937609680fc",
+      "typeVersion": 1.2,
+      "credentials": {
+        "telegramApi": {
+          "id": "I9ZB2ELnuVYpYbhH",
+          "name": "Lucy glaw"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "operation": "upload",
+        "path": "=/XXX/{{ $binary.data.fileName }}",
+        "options": {}
+      },
+      "id": "cc29e60c-594e-4c58-b9b0-ecb0deee65a6",
+      "name": "Upload image",
+      "type": "n8n-nodes-base.ftp",
+      "position": [
+        6192,
+        9952
+      ],
+      "typeVersion": 1,
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "29fbf21e-301d-4a1c-b6c9-723c9c03fb61",
+              "name": "image_url",
+              "type": "string",
+              "value": "=https://XXX/{{ $binary.data.fileName }}"
+            },
+            {
+              "id": "272f6379-55fa-4d36-8da7-0ec1232606fd",
+              "name": "chatInput",
+              "type": "string",
+              "value": "={{ $('Get Message').item.json.message.caption || \"\"}}"
+            },
+            {
+              "id": "aff4f5c4-fe02-4bb8-b923-9c91334124ba",
+              "name": "sessionId",
+              "type": "string",
+              "value": "={{ $('Get Message').item.json.message.from.id }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "e5f95adb-b547-47d6-9480-00bd960bbea1",
+      "name": "Set Image Url",
+      "type": "n8n-nodes-base.set",
+      "position": [
+        6416,
+        9776
+      ],
+      "typeVersion": 3.4,
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "029f4e7e-b367-4aa9-863e-e372694940fb",
+              "name": "chatInput",
+              "type": "string",
+              "value": "={{ $json.text }}"
+            },
+            {
+              "id": "398c1d7f-0c90-4af6-a414-d4d1968855b9",
+              "name": "sessionId",
+              "type": "number",
+              "value": "={{ $('Get Message').item.json.message.from.id }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "2591b2b6-93f8-4fa5-bf14-6201b40b37a1",
+      "name": "Get input text from voice",
+      "type": "n8n-nodes-base.set",
+      "position": [
+        6400,
+        9536
+      ],
+      "typeVersion": 3.4,
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "0a0c4019-7ba0-4153-9dec-dd366e1accdf",
+      "name": "Google Gemini Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "position": [
+        6880,
+        9744
+      ],
+      "typeVersion": 1,
+      "credentials": {
+        "googlePalmApi": {
+          "id": "ck3Zb5iAW9FsFJWc",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {},
+      "id": "21ec8e8b-2175-4262-bb33-719e3d166424",
+      "name": "Postgres Chat Memory",
+      "type": "@n8n/n8n-nodes-langchain.memoryPostgresChat",
+      "position": [
+        6768,
+        9952
+      ],
+      "typeVersion": 1.3,
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "path": "56c7aeae-eb8a-4d2e-a149-dfe02b586d18",
+        "options": {}
+      },
+      "id": "540d715c-adfc-4037-a9b9-ff9fd292e552",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "position": [
+        5984,
+        9056
+      ],
+      "webhookId": "56c7aeae-eb8a-4d2e-a149-dfe02b586d18",
+      "typeVersion": 2.1,
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {}
+          ]
+        }
+      },
+      "id": "ba4f0d18-ff02-4908-b79b-f28154e5d74d",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "position": [
+        5968,
+        8816
+      ],
+      "typeVersion": 1.3,
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "messageId": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Message_ID', ``, 'string') }}"
+      },
+      "id": "4c438ce2-c8af-4dd2-ad15-956042aadae4",
+      "name": "Get a message in Gmail",
+      "type": "n8n-nodes-base.gmailTool",
+      "position": [
+        5168,
+        11008
+      ],
+      "webhookId": "94d96aef-c203-4a9b-948d-963a2f143868",
+      "typeVersion": 2.1,
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "7S91ttvZUuTD85GO",
+          "name": "Gmail account"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('To', ``, 'string') }}",
+        "subject": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Subject', ``, 'string') }}",
+        "message": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Message', ``, 'string') }}",
+        "options": {}
+      },
+      "id": "b61d3167-f99d-47cd-a6d9-ad028aaaefdc",
+      "name": "Send a message in Gmail",
+      "type": "n8n-nodes-base.gmailTool",
+      "position": [
+        5344,
+        11008
+      ],
+      "webhookId": "11022cbf-4db4-4fb6-b2cc-213b1aabc7d7",
+      "typeVersion": 2.1,
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "7S91ttvZUuTD85GO",
+          "name": "Gmail account"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "returnAll": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Return_All', ``, 'boolean') }}",
+        "simple": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Simplify', ``, 'boolean') }}",
+        "filters": {
+          "q": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Search', ``, 'string') }}",
+          "receivedAfter": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Received_After', ``, 'string') }}",
+          "receivedBefore": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Received_Before', ``, 'string') }}"
+        },
+        "options": {
+          "downloadAttachments": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Download_Attachments', ``, 'boolean') }}"
+        }
+      },
+      "id": "2fff95a9-daa9-4a0c-beb1-420d4a50fbe9",
+      "name": "Get many messages in Gmail",
+      "type": "n8n-nodes-base.gmailTool",
+      "position": [
+        5680,
+        11008
+      ],
+      "webhookId": "766ec83e-38e7-41f9-86e9-dc74581a07e6",
+      "typeVersion": 2.1,
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "zyzDVPSoz3GGeuEu",
+          "name": "Gmail account TV"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "operation": "reply",
+        "messageId": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Message_ID', ``, 'string') }}",
+        "message": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Message', ``, 'string') }}",
+        "options": {}
+      },
+      "id": "d91ba5bb-0bcf-466f-91b6-62dd6a32106f",
+      "name": "Reply to a message in Gmail",
+      "type": "n8n-nodes-base.gmailTool",
+      "position": [
+        5504,
+        11008
+      ],
+      "webhookId": "09b28a3b-8944-4cc6-a2fd-a8163e013b4a",
+      "typeVersion": 2.1,
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "7S91ttvZUuTD85GO",
+          "name": "Gmail account"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "resource": "draft",
+        "subject": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Subject', ``, 'string') }}",
+        "message": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Message', ``, 'string') }}",
+        "options": {
+          "replyTo": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Send_Replies_To', ``, 'string') }}",
+          "threadId": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Thread_ID', ``, 'string') }}",
+          "sendTo": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('To_Email', ``, 'string') }}"
+        }
+      },
+      "id": "ff4d061a-c0e6-430c-b8fa-80661896604d",
+      "name": "Create a draft in Gmail",
+      "type": "n8n-nodes-base.gmailTool",
+      "position": [
+        5856,
+        11008
+      ],
+      "webhookId": "4cda1631-469d-4c82-ac9b-cb6bfcd68fa0",
+      "typeVersion": 2.1,
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "7S91ttvZUuTD85GO",
+          "name": "Gmail account"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "path": "63975752-0598-4992-9422-165a84c8798c"
+      },
+      "id": "5e202932-bcf5-4e39-a0a8-6447c5cfeaa8",
+      "name": "MCP Gmail Trigger",
+      "type": "@n8n/n8n-nodes-langchain.mcpTrigger",
+      "position": [
+        5408,
+        10784
+      ],
+      "webhookId": "63975752-0598-4992-9422-165a84c8798c",
+      "typeVersion": 2,
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "path": "0f72eb90-2a1c-403e-98e1-901d76c2825c"
+      },
+      "id": "000ac5a0-6907-4225-afd4-ede49411463a",
+      "name": "MCP Calendar Trigger",
+      "type": "@n8n/n8n-nodes-langchain.mcpTrigger",
+      "position": [
+        6368,
+        10784
+      ],
+      "webhookId": "0f72eb90-2a1c-403e-98e1-901d76c2825c",
+      "typeVersion": 2,
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "calendar": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Calendar', ``, 'string') }}",
+          "__regex": "(^[a-zA-Z0-9.!#$%&\u2019*+/=?^_`{|}~-]+@[a-zA-Z0-9-]+(?:\\.[a-zA-Z0-9-]+)*)"
+        },
+        "start": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Start', ``, 'string') }}",
+        "end": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('End', ``, 'string') }}",
+        "additionalFields": {}
+      },
+      "id": "eabfa7ee-7e0c-4299-950e-4b67b834e4a5",
+      "name": "Create an event in Google Calendar",
+      "type": "n8n-nodes-base.googleCalendarTool",
+      "position": [
+        6208,
+        10992
+      ],
+      "typeVersion": 1.3,
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "f9qsZqlGZgKmByh1",
+          "name": "Google Calendar account  TV"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "calendar": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Calendar', ``, 'string') }}",
+          "__regex": "(^[a-zA-Z0-9.!#$%&\u2019*+/=?^_`{|}~-]+@[a-zA-Z0-9-]+(?:\\.[a-zA-Z0-9-]+)*)"
+        },
+        "returnAll": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Return_All', ``, 'boolean') }}",
+        "timeMin": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('After', ``, 'string') }}",
+        "timeMax": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Before', ``, 'string') }}",
+        "options": {}
+      },
+      "id": "16461569-98ab-40a1-8861-b2c6d8fee43f",
+      "name": "Get many events in Google Calendar",
+      "type": "n8n-nodes-base.googleCalendarTool",
+      "position": [
+        6368,
+        10992
+      ],
+      "typeVersion": 1.3,
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "f9qsZqlGZgKmByh1",
+          "name": "Google Calendar account  TV"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "calendar": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Calendar', ``, 'string') }}",
+          "__regex": "(^[a-zA-Z0-9.!#$%&\u2019*+/=?^_`{|}~-]+@[a-zA-Z0-9-]+(?:\\.[a-zA-Z0-9-]+)*)",
+          "cachedResultName": "",
+          "cachedResultUrl": ""
+        },
+        "eventId": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Event_ID', ``, 'string') }}",
+        "options": {}
+      },
+      "id": "766251b8-ea48-4c42-8ed8-96caaef08f4b",
+      "name": "Get an event in Google Calendar",
+      "type": "n8n-nodes-base.googleCalendarTool",
+      "position": [
+        6512,
+        10992
+      ],
+      "typeVersion": 1.3,
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "f9qsZqlGZgKmByh1",
+          "name": "Google Calendar account  TV"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "operation": "delete",
+        "calendar": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Calendar', ``, 'string') }}",
+          "__regex": "(^[a-zA-Z0-9.!#$%&\u2019*+/=?^_`{|}~-]+@[a-zA-Z0-9-]+(?:\\.[a-zA-Z0-9-]+)*)"
+        },
+        "eventId": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Event_ID', ``, 'string') }}",
+        "options": {}
+      },
+      "id": "b8ccb887-9f2e-413c-b27a-7047dc6d6e10",
+      "name": "Delete an event in Google Calendar",
+      "type": "n8n-nodes-base.googleCalendarTool",
+      "position": [
+        6656,
+        10992
+      ],
+      "typeVersion": 1.3,
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "f9qsZqlGZgKmByh1",
+          "name": "Google Calendar account  TV"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "resource": "calendar",
+        "calendar": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Calendar', ``, 'string') }}",
+          "__regex": "(^[a-zA-Z0-9.!#$%&\u2019*+/=?^_`{|}~-]+@[a-zA-Z0-9-]+(?:\\.[a-zA-Z0-9-]+)*)"
+        },
+        "timeMin": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Start_Time', ``, 'string') }}",
+        "timeMax": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('End_Time', ``, 'string') }}",
+        "options": {}
+      },
+      "id": "2357f41f-286c-4069-8a99-0251ef80ff74",
+      "name": "Get availability in a calendar in Google Calendar",
+      "type": "n8n-nodes-base.googleCalendarTool",
+      "position": [
+        6800,
+        10992
+      ],
+      "typeVersion": 1.3,
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "f9qsZqlGZgKmByh1",
+          "name": "Google Calendar account  TV"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "operation": "download",
+        "fileId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('File', ``, 'string') }}"
+        },
+        "options": {}
+      },
+      "id": "1e8c26eb-544b-4d38-99b0-dd956ba2f62f",
+      "name": "Download file in Google Drive",
+      "type": "n8n-nodes-base.googleDriveTool",
+      "position": [
+        7008,
+        10928
+      ],
+      "typeVersion": 3,
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "M3Szp4Bdo9rI3Y7o",
+          "name": "Google Drive account  TV"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "resource": "fileFolder",
+        "queryString": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Search_Query', ``, 'string') }}",
+        "limit": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Limit', ``, 'number') }}",
+        "filter": {},
+        "options": {}
+      },
+      "id": "d4a3234e-e426-4cc2-bdb9-fb917e0a40f2",
+      "name": "Search files and folders in Google Drive",
+      "type": "n8n-nodes-base.googleDriveTool",
+      "position": [
+        7168,
+        10928
+      ],
+      "typeVersion": 3,
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "M3Szp4Bdo9rI3Y7o",
+          "name": "Google Drive account  TV"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "resource": "drive",
+        "operation": "list",
+        "returnAll": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Return_All', ``, 'boolean') }}",
+        "limit": 50,
+        "options": {}
+      },
+      "id": "c8a3d472-87e5-4a75-ba7a-029492e743bb",
+      "name": "Get many shared drives in Google Drive",
+      "type": "n8n-nodes-base.googleDriveTool",
+      "position": [
+        7312,
+        10928
+      ],
+      "typeVersion": 3,
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "M3Szp4Bdo9rI3Y7o",
+          "name": "Google Drive account  TV"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "operation": "createFromText",
+        "content": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('File_Content', ``, 'string') }}",
+        "name": "={{$now.format('yyyyLLdd')}}",
+        "driveId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Parent_Drive', ``, 'string') }}"
+        },
+        "folderId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Parent_Folder', ``, 'string') }}"
+        },
+        "options": {}
+      },
+      "id": "c15f6d1f-e3b6-4efc-9734-3a59d2d72431",
+      "name": "Create file from text in Google Drive",
+      "type": "n8n-nodes-base.googleDriveTool",
+      "position": [
+        7472,
+        10928
+      ],
+      "typeVersion": 3,
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "M3Szp4Bdo9rI3Y7o",
+          "name": "Google Drive account  TV"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "operation": "move",
+        "fileId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('File', ``, 'string') }}",
+          "cachedResultName": "",
+          "cachedResultUrl": ""
+        },
+        "driveId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Parent_Drive', ``, 'string') }}",
+          "cachedResultName": "",
+          "cachedResultUrl": ""
+        },
+        "folderId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Parent_Folder', ``, 'string') }}",
+          "cachedResultName": "",
+          "cachedResultUrl": ""
+        }
+      },
+      "id": "1d9fad21-b073-438c-90bc-0da0bb74781d",
+      "name": "Move file in Google Drive",
+      "type": "n8n-nodes-base.googleDriveTool",
+      "position": [
+        7664,
+        10928
+      ],
+      "typeVersion": 3,
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "M3Szp4Bdo9rI3Y7o",
+          "name": "Google Drive account  TV"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "folderId": "default",
+        "title": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Title', ``, 'string') }}"
+      },
+      "id": "e83d1a5e-d881-43f8-af11-d9aa09276b5b",
+      "name": "Create a document in Google Docs",
+      "type": "n8n-nodes-base.googleDocsTool",
+      "position": [
+        7312,
+        11744
+      ],
+      "typeVersion": 2,
+      "credentials": {
+        "googleDocsOAuth2Api": {
+          "id": "D4g4CJXqFATNUDDb",
+          "name": "Google Docs account TV"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "documentURL": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Doc_ID_or_URL', ``, 'string') }}"
+      },
+      "id": "7eaa658f-3284-4539-8b66-235769ecca5e",
+      "name": "Get a document in Google Docs",
+      "type": "n8n-nodes-base.googleDocsTool",
+      "position": [
+        7488,
+        11744
+      ],
+      "typeVersion": 2,
+      "credentials": {
+        "googleDocsOAuth2Api": {
+          "id": "D4g4CJXqFATNUDDb",
+          "name": "Google Docs account TV"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentURL": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Doc_ID_or_URL', ``, 'string') }}",
+        "actionsUi": {
+          "actionFields": [
+            {
+              "action": "insert",
+              "text": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('actionFields0_Text', ``, 'string') }}"
+            }
+          ]
+        }
+      },
+      "id": "d426193c-960a-4d08-8de5-85d05c6804e2",
+      "name": "Update a document in Google Docs",
+      "type": "n8n-nodes-base.googleDocsTool",
+      "position": [
+        7696,
+        11744
+      ],
+      "typeVersion": 2,
+      "credentials": {
+        "googleDocsOAuth2Api": {
+          "id": "D4g4CJXqFATNUDDb",
+          "name": "Google Docs account TV"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "path": "1f35317d-7b8e-48b9-a419-936ea5b63ae6"
+      },
+      "id": "bd7d7af0-29b2-4c02-9810-75e3696cb57d",
+      "name": "MCP Docs Trigger",
+      "type": "@n8n/n8n-nodes-langchain.mcpTrigger",
+      "position": [
+        7392,
+        11584
+      ],
+      "webhookId": "1f35317d-7b8e-48b9-a419-936ea5b63ae6",
+      "typeVersion": 2,
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "path": "031809b0-c277-4ff1-b65a-9e72294b1ff1"
+      },
+      "id": "663dd936-57ad-4b88-a0d3-dd49a22edb8e",
+      "name": "MCP Drive Trigger",
+      "type": "@n8n/n8n-nodes-langchain.mcpTrigger",
+      "position": [
+        7216,
+        10784
+      ],
+      "webhookId": "031809b0-c277-4ff1-b65a-9e72294b1ff1",
+      "typeVersion": 2,
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "path": "1f35317d-7b8e-48b9-a419-936ea5b63ae6"
+      },
+      "id": "dd206d79-ed4a-46f3-b83a-2138ed0fb690",
+      "name": "MCP Sheet Trigger",
+      "type": "@n8n/n8n-nodes-langchain.mcpTrigger",
+      "position": [
+        5424,
+        11568
+      ],
+      "webhookId": "1f35317d-7b8e-48b9-a419-936ea5b63ae6",
+      "typeVersion": 2,
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Document', ``, 'string') }}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Sheet', ``, 'string') }}"
+        },
+        "options": {}
+      },
+      "id": "516fc6bf-c066-4e94-b046-0d439ec117be",
+      "name": "Get row(s) in sheet in Google Sheets",
+      "type": "n8n-nodes-base.googleSheetsTool",
+      "position": [
+        5152,
+        11760
+      ],
+      "typeVersion": 4.7,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "KhwTBwckNkx69AwL",
+          "name": "Google Sheets account TV"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Document', ``, 'string') }}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Sheet', ``, 'string') }}"
+        },
+        "columns": {
+          "value": {},
+          "schema": [],
+          "mappingMode": "autoMapInputData",
+          "matchingColumns": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "206c753e-7002-4401-8aab-890225b59f3a",
+      "name": "Append or update row in sheet in Google Sheets",
+      "type": "n8n-nodes-base.googleSheetsTool",
+      "position": [
+        5312,
+        11760
+      ],
+      "typeVersion": 4.7,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "KhwTBwckNkx69AwL",
+          "name": "Google Sheets account TV"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "operation": "create",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Document', ``, 'string') }}",
+          "cachedResultName": "",
+          "cachedResultUrl": ""
+        },
+        "title": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Title', ``, 'string') }}",
+        "options": {}
+      },
+      "id": "e96a6e8a-bb8f-4420-9c76-a9acdee26bcf",
+      "name": "Create sheet in Google Sheets",
+      "type": "n8n-nodes-base.googleSheetsTool",
+      "position": [
+        5632,
+        11760
+      ],
+      "typeVersion": 4.7,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "KhwTBwckNkx69AwL",
+          "name": "Google Sheets account TV"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "operation": "delete",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Document', ``, 'string') }}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Sheet', ``, 'string') }}"
+        },
+        "startIndex": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Start_Row_Number', ``, 'number') }}",
+        "numberToDelete": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Number_of_Rows_to_Delete', ``, 'number') }}"
+      },
+      "id": "2563b4b9-8ab7-4ada-8606-834ada3f8807",
+      "name": "Delete rows or columns from sheet in Google Sheets",
+      "type": "n8n-nodes-base.googleSheetsTool",
+      "position": [
+        5776,
+        11760
+      ],
+      "typeVersion": 4.7,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "KhwTBwckNkx69AwL",
+          "name": "Google Sheets account TV"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Document', ``, 'string') }}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Sheet', ``, 'string') }}"
+        },
+        "columns": {
+          "value": {},
+          "schema": [],
+          "mappingMode": "autoMapInputData",
+          "matchingColumns": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "b4317db8-d7db-4f2e-96a9-e566f9570027",
+      "name": "Update row in sheet in Google Sheets",
+      "type": "n8n-nodes-base.googleSheetsTool",
+      "position": [
+        5456,
+        11760
+      ],
+      "typeVersion": 4.7,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "KhwTBwckNkx69AwL",
+          "name": "Google Sheets account TV"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "operation": "clear",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Document', ``, 'string') }}"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Sheet', ``, 'string') }}"
+        },
+        "keepFirstRow": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Keep_First_Row', ``, 'boolean') }}"
+      },
+      "id": "402b7449-d857-4093-8d51-c344dc7c007b",
+      "name": "Clear sheet in Google Sheets",
+      "type": "n8n-nodes-base.googleSheetsTool",
+      "position": [
+        5936,
+        11744
+      ],
+      "typeVersion": 4.7,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "KhwTBwckNkx69AwL",
+          "name": "Google Sheets account TV"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "title": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Title', ``, 'string') }}"
+      },
+      "id": "b14d19dc-5934-4e09-9b00-60392fc9198d",
+      "name": "Create a presentation in Google Slides",
+      "type": "n8n-nodes-base.googleSlidesTool",
+      "position": [
+        6336,
+        11760
+      ],
+      "typeVersion": 2,
+      "credentials": {
+        "googleSlidesOAuth2Api": {
+          "id": "dHMdPKunonXi37Zq",
+          "name": "Google Slides account"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "path": "1f35317d-7b8e-48b9-a419-936ea5b63ae6"
+      },
+      "id": "c5591231-2746-46ab-9107-9051567fe280",
+      "name": "MCP Slides Trigger",
+      "type": "@n8n/n8n-nodes-langchain.mcpTrigger",
+      "position": [
+        6496,
+        11552
+      ],
+      "webhookId": "1f35317d-7b8e-48b9-a419-936ea5b63ae6",
+      "typeVersion": 2,
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "presentationId": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Presentation_ID', ``, 'string') }}"
+      },
+      "id": "7d55afec-4400-4c3d-9d9f-c5b28e043f01",
+      "name": "Get a presentation in Google Slides",
+      "type": "n8n-nodes-base.googleSlidesTool",
+      "position": [
+        6496,
+        11760
+      ],
+      "typeVersion": 2,
+      "credentials": {
+        "googleSlidesOAuth2Api": {
+          "id": "dHMdPKunonXi37Zq",
+          "name": "Google Slides account"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "operation": "getSlides",
+        "presentationId": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Presentation_ID', ``, 'string') }}",
+        "returnAll": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Return_All', ``, 'boolean') }}"
+      },
+      "id": "358634f4-d09d-4462-af61-c6f78f313e7b",
+      "name": "Get slides from a presentation in Google Slides",
+      "type": "n8n-nodes-base.googleSlidesTool",
+      "position": [
+        6656,
+        11760
+      ],
+      "typeVersion": 2,
+      "credentials": {
+        "googleSlidesOAuth2Api": {
+          "id": "dHMdPKunonXi37Zq",
+          "name": "Google Slides account"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "operation": "replaceText",
+        "presentationId": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Presentation_ID', ``, 'string') }}",
+        "textUi": {
+          "textValues": [
+            {
+              "text": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('textValues0_Search_For', ``, 'string') }}",
+              "replaceText": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('textValues0_Replace_With', ``, 'string') }}"
+            }
+          ]
+        },
+        "options": {
+          "revisionId": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Revision_ID', ``, 'string') }}"
+        }
+      },
+      "id": "1fb63adb-9218-4c0d-8b02-74d6f20a8f3b",
+      "name": "Replace text in a presentation in Google Slides",
+      "type": "n8n-nodes-base.googleSlidesTool",
+      "position": [
+        6832,
+        11760
+      ],
+      "typeVersion": 2,
+      "credentials": {
+        "googleSlidesOAuth2Api": {
+          "id": "dHMdPKunonXi37Zq",
+          "name": "Google Slides account"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "resource": "draft",
+        "operation": "delete",
+        "messageId": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Draft_ID', ``, 'string') }}"
+      },
+      "id": "8d197346-bdd9-4caf-aec2-4d6d00ae50bc",
+      "name": "Delete a draft in Gmail",
+      "type": "n8n-nodes-base.gmailTool",
+      "position": [
+        5872,
+        11200
+      ],
+      "webhookId": "4cda1631-469d-4c82-ac9b-cb6bfcd68fa0",
+      "typeVersion": 2.1,
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "7S91ttvZUuTD85GO",
+          "name": "Gmail account"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "operation": "delete",
+        "messageId": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Draft_ID', ``, 'string') }}"
+      },
+      "id": "9df351c8-ca7e-4658-b1d3-dbb53c2d7d5b",
+      "name": "Delete a message in Gmail",
+      "type": "n8n-nodes-base.gmailTool",
+      "position": [
+        5168,
+        11200
+      ],
+      "webhookId": "4cda1631-469d-4c82-ac9b-cb6bfcd68fa0",
+      "typeVersion": 2.1,
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "7S91ttvZUuTD85GO",
+          "name": "Gmail account"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "operation": "addLabels",
+        "messageId": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Draft_ID', ``, 'string') }}",
+        "labelIds": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Label_Names_or_IDs', ``, 'string') }}"
+      },
+      "id": "08adf4f1-4a05-4b88-9383-db58db321b5c",
+      "name": "Add label to message in Gmail",
+      "type": "n8n-nodes-base.gmailTool",
+      "position": [
+        5344,
+        11200
+      ],
+      "webhookId": "4cda1631-469d-4c82-ac9b-cb6bfcd68fa0",
+      "typeVersion": 2.1,
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "7S91ttvZUuTD85GO",
+          "name": "Gmail account"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "operation": "removeLabels",
+        "messageId": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Draft_ID', ``, 'string') }}",
+        "labelIds": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Label_Names_or_IDs', ``, 'string') }}"
+      },
+      "id": "4727c9dd-de45-4b06-a997-7dbde8e19a78",
+      "name": "Remove label from message in Gmail",
+      "type": "n8n-nodes-base.gmailTool",
+      "position": [
+        5520,
+        11200
+      ],
+      "webhookId": "4cda1631-469d-4c82-ac9b-cb6bfcd68fa0",
+      "typeVersion": 2.1,
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "7S91ttvZUuTD85GO",
+          "name": "Gmail account"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "operation": "sendAndWait",
+        "sendTo": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('To', ``, 'string') }}",
+        "subject": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Subject', ``, 'string') }}",
+        "message": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Message', ``, 'string') }}",
+        "options": {}
+      },
+      "id": "8bafae55-c958-48df-9fa0-a89877036d77",
+      "name": "Send message and wait for response in Gmail",
+      "type": "n8n-nodes-base.gmailTool",
+      "position": [
+        5696,
+        11200
+      ],
+      "webhookId": "4cda1631-469d-4c82-ac9b-cb6bfcd68fa0",
+      "typeVersion": 2.1,
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "7S91ttvZUuTD85GO",
+          "name": "Gmail account"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "endpointUrl": "https://n8n1.thorinvest.org/mcp/63975752-0598-4992-9422-165a84c8798c",
+        "options": {}
+      },
+      "id": "c6c53916-4d97-42ac-997f-3f0de3263467",
+      "name": "Gmail Agent",
+      "type": "@n8n/n8n-nodes-langchain.mcpClientTool",
+      "position": [
+        7168,
+        10112
+      ],
+      "typeVersion": 1.2,
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "endpointUrl": "https://n8n1.thorinvest.org/mcp/031809b0-c277-4ff1-b65a-9e72294b1ff1",
+        "options": {}
+      },
+      "id": "94b343db-9297-430f-b09b-e5bbc2641f33",
+      "name": "Google Drive Agent",
+      "type": "@n8n/n8n-nodes-langchain.mcpClientTool",
+      "position": [
+        7168,
+        10272
+      ],
+      "typeVersion": 1.2,
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "endpointUrl": "https://n8n1.thorinvest.org/mcp/0f72eb90-2a1c-403e-98e1-901d76c2825c",
+        "options": {}
+      },
+      "id": "1f4c17ba-6dad-43c4-b97a-dc39276f03de",
+      "name": "Google Calendar Agent",
+      "type": "@n8n/n8n-nodes-langchain.mcpClientTool",
+      "position": [
+        7312,
+        10256
+      ],
+      "typeVersion": 1.2,
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "endpointUrl": "https://n8n1.thorinvest.org/mcp/1f35317d-7b8e-48b9-a419-936ea5b63ae6",
+        "options": {}
+      },
+      "id": "0813abd0-e123-4933-83e4-d66a2a53503d",
+      "name": "Google Slides Agent",
+      "type": "@n8n/n8n-nodes-langchain.mcpClientTool",
+      "position": [
+        7456,
+        10272
+      ],
+      "typeVersion": 1.2,
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "endpointUrl": "https://n8n1.thorinvest.org/mcp/1f35317d-7b8e-48b9-a419-936ea5b63ae6",
+        "options": {}
+      },
+      "id": "009a27ab-3d21-4f9a-bb45-141bed3b7ec4",
+      "name": "Google Docs Agent",
+      "type": "@n8n/n8n-nodes-langchain.mcpClientTool",
+      "position": [
+        7296,
+        10112
+      ],
+      "typeVersion": 1.2,
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "endpointUrl": "https://n8n1.thorinvest.org/mcp/1f35317d-7b8e-48b9-a419-936ea5b63ae6",
+        "options": {}
+      },
+      "id": "c69c1706-dcd3-4bfc-a6a6-7d1ac7ae476a",
+      "name": "Google Sheets Agent",
+      "type": "@n8n/n8n-nodes-langchain.mcpClientTool",
+      "position": [
+        7440,
+        10112
+      ],
+      "typeVersion": 1.2,
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.chatInput ?? '' }}\n\nImage Url (if exist): {{ $json.image_url ?? '' }}",
+        "options": {
+          "systemMessage": "=# \ud83e\udd16 Universal Orchestrator Agent \u2014 n8n OpenClaw Simulation\n\nYou are an advanced AI orchestrator agent running inside n8n, simulating an OpenClaw-style multi-agent architecture. Your role is to analyze the user's request, decompose it into tasks, and intelligently delegate each task to the most appropriate specialized tool or sub-agent. You operate autonomously, chain tool calls as needed, and synthesize results into a coherent final response.\n\n---\n\n## \ud83e\udde0 CORE BEHAVIOR\n\n- Always reason step-by-step before calling any tool.\n- Select the most appropriate tool(s) based on the nature of the request.\n- Chain multiple tools when a task requires it (e.g., research \u2192 write doc \u2192 send email).\n- Never ask the user for information you can retrieve yourself via tools.\n- If a tool returns insufficient results, try an alternative tool or refine your query.\n- Always summarize what you did and what the outcome was.\n\n---\n\n## \ud83d\udee0\ufe0f AVAILABLE TOOLS & AGENTS\n\n### \ud83d\udd0d 1. Research Agent (`research_agent`)\n- **Provider:** Perplexity AI\n- **Use when:** The user needs deep research, fact-checking, topic analysis, competitor research, industry reports, or any question requiring up-to-date internet knowledge.\n- **Input:** A well-formed research question or topic.\n- **Output:** Structured research summary with sources.\n\n---\n\n### \ud83c\udf10 2. Web Search Agent (`websearch_agent`)\n- **Provider:** Perplexity AI\n- **Use when:** The user needs quick web searches, current news, recent events, prices, or lightweight information retrieval (faster and lighter than full Research Agent).\n- **Input:** A search query string.\n- **Output:** Top results with snippets and URLs.\n\n---\n\n### \ud83d\udd77\ufe0f 3. Scraper Agent (`scraper_agent`)\n- **Provider:** ScrapeGraphAI\n- **Use when:** The user provides a URL or asks to extract structured data from a specific webpage (e.g., product details, article content, table data, contact info).\n- **Input:** URL + extraction instructions (what data to extract).\n- **Output:** Structured JSON or formatted text extracted from the page.\n\n---\n\n### \ud83d\udcc1 4. Google Drive Agent (`googledrive_agent`)\n- **Use when:** The user needs to search, list, upload, download, move, or manage files and folders in Google Drive.\n- **Input:** Action type + file name/ID/folder path.\n- **Output:** File metadata, download links, or confirmation of action performed.\n\n---\n\n### \ud83d\udce7 5. Gmail Agent (`gmail_agent`)\n- **Use when:** The user needs to read, search, send, reply to, or organize emails in Gmail.\n- **Input:** Action type (send/read/search/reply) + relevant parameters (to, subject, body, search query).\n- **Output:** Email content, sent confirmation, or list of matching emails.\n\n---\n\n### \ud83d\udcdd 6. Google Docs Agent (`googledocs_agent`)\n- **Use when:** The user needs to create, read, edit, append content to, or format a Google Doc.\n- **Input:** Action type + document ID or title + content to write/append.\n- **Output:** Document link, content extracted, or confirmation of edit.\n\n---\n\n### \ud83d\udcca 7. Google Sheets Agent (`googlesheets_agent`)\n- **Use when:** The user needs to read, write, update, or analyze data in a Google Sheet (e.g., logging data, pulling reports, updating CRM-like tables).\n- **Input:** Action type + spreadsheet ID/name + sheet/range + data payload.\n- **Output:** Data rows, updated values, or confirmation.\n\n---\n\n### \ud83d\udcd1 8. Google Slides Agent (`googleslides_agent`)\n- **Use when:** The user needs to create a presentation, add/edit slides, or extract content from Google Slides.\n- **Input:** Action type + presentation ID or title + slide content/instructions.\n- **Output:** Presentation link or confirmation of changes.\n\n---\n\n### \ud83d\udcc5 9. Google Calendar Agent (`googlecalendar_agent`)\n- **Use when:** The user needs to create, read, update, or delete calendar events, check availability, or schedule meetings.\n- **Input:** Action type + event details (title, date, time, attendees, description).\n- **Output:** Event link, list of events, or confirmation of action.\n\n---\n\n### \ud83e\udde0 10. RAG Agent (`rag_agent`)\n- **Use when:** The user asks questions about internal documents, company knowledge base, uploaded files, or any private/indexed knowledge that is not publicly available on the web.\n- **Input:** A natural language question or query.\n- **Output:** Answer grounded in retrieved document chunks with source references.\n\n---\n\n### \ud83d\udd0c 11. MCP Agents (`mcp_[service_name]`)\n> **Placeholder \u2014 extend as needed**\n- **Use when:** The user requires integration with an external service connected via Model Context Protocol (MCP).\n- **Available MCP endpoints:** *(to be configured \u2014 replace with actual service names)*\n  - `mcp_placeholder_1` \u2014 [Service Name TBD]\n  - `mcp_placeholder_2` \u2014 [Service Name TBD]\n  - `mcp_placeholder_3` \u2014 [Service Name TBD]\n- **Input:** Service-specific action and parameters.\n- **Output:** Service-specific response.\n\n---\n\n### \u2699\ufe0f 12. Sub-Workflows (`subwf_[workflow_name]`)\n> **Placeholder \u2014 extend as needed**\n- **Use when:** The user's request maps to a predefined automation workflow in n8n.\n- **Available Sub-Workflows:**\n  - `subwf_social_posting` \u2014 **Postiz Integration**: Post content to any social media platform (LinkedIn, Twitter/X, Instagram, Facebook, TikTok, etc.). Input: platform, content text, media URL (optional), scheduled time (optional).\n  - `subwf_placeholder_2` \u2014 [Workflow Name TBD]\n  - `subwf_placeholder_3` \u2014 [Workflow Name TBD]\n  - `subwf_placeholder_4` \u2014 [Workflow Name TBD]\n- **Input:** Workflow-specific parameters.\n- **Output:** Workflow execution result or confirmation.\n\n---\n\n### \ud83d\udea8 13. Escalation Agent (`escalation_agent`)\n- **Use when:**\n  - A task cannot be completed by any available tool after multiple attempts.\n  - The request involves ambiguous, sensitive, or critical decisions requiring human judgment.\n  - An error or unexpected result occurs that blocks task completion.\n  - The user explicitly requests human review or approval.\n- **Input:** Summary of the issue, tools already attempted, reason for escalation.\n- **Output:** Escalation notification sent to the responsible human (via email, Slack, or designated channel), with full context attached.\n\n---\n\n## \ud83d\udd04 ORCHESTRATION LOGIC\n\nFollow this decision flow for every request:\nUNDERSTAND \u2192 Parse the user intent and identify all sub-tasks.\nPLAN \u2192 Map each sub-task to the most suitable tool/agent.\nEXECUTE \u2192 Call tools sequentially or in parallel as needed.\nEVALUATE \u2192 Check if results are complete and accurate.\nCHAIN \u2192 If further steps are needed, call additional tools with previous output as input.\nESCALATE \u2192 If blocked or uncertain, call escalation_agent.\nRESPOND \u2192 Synthesize all results into a clear, structured final answer.\n\n---\n\n## \ud83d\udccb TOOL SELECTION CHEAT SHEET\n\n| User Need | Primary Tool |\n|---|---|\n| Research a topic in depth | `research_agent` |\n| Quick web search / news | `websearch_agent` |\n| Extract data from a URL | `scraper_agent` |\n| Manage files in Drive | `googledrive_agent` |\n| Send / read emails | `gmail_agent` |\n| Write / edit a document | `googledocs_agent` |\n| Work with spreadsheet data | `googlesheets_agent` |\n| Create / edit a presentation | `googleslides_agent` |\n| Schedule / manage events | `googlecalendar_agent` |\n| Query internal knowledge base | `rag_agent` |\n| External service via MCP | `mcp_[service_name]` |\n| Run a predefined automation | `subwf_[workflow_name]` |\n| Post on social media | `subwf_social_posting` |\n| Task failed / needs human | `escalation_agent` |\n\n---\n\n## \u26a0\ufe0f RULES & CONSTRAINTS\n\n- **Never hallucinate tool results.** If a tool is unavailable or returns an error, report it honestly.\n- **Always confirm destructive actions** (delete, send email to many recipients, post publicly) before executing if there is any ambiguity.\n- **Respect data privacy.** Do not expose sensitive data in intermediate steps unnecessarily.\n- **Keep tool calls focused.** Pass precise, minimal inputs \u2014 do not dump large unstructured text into tools.\n- **Log your reasoning.** Before each tool call, briefly state why you are calling it.\n- **If in doubt, escalate.** It is always better to escalate than to take a wrong action autonomously.\n\n---\n\n*Orchestrator ready. Awaiting your instructions.*"
+        }
+      },
+      "id": "d2763d74-8a4d-4fc4-bf3e-e7fb04e7e246",
+      "name": "OpenClaw Agents",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "position": [
+        7024,
+        9520
+      ],
+      "typeVersion": 3.1,
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "url": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('URL', ``, 'string') }}",
+        "formats": {
+          "format": [
+            {}
+          ]
+        },
+        "fetchConfig": {}
+      },
+      "id": "067f5586-6d0c-4598-a872-8849297b5727",
+      "name": "Scraper Agent",
+      "type": "n8n-nodes-scrapegraphai.scrapegraphAiTool",
+      "position": [
+        7552,
+        9504
+      ],
+      "typeVersion": 1,
+      "credentials": {
+        "scrapegraphAIApi": {
+          "id": "fVsS6eGZJ5M00UIe",
+          "name": "ScrapegraphAI account"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "mode": "retrieve-as-tool",
+        "toolDescription": "RAG Agent",
+        "qdrantCollection": {
+          "__rl": true,
+          "value": "Mem",
+          "mode": "list",
+          "cachedResultName": "Mem"
+        },
+        "useReranker": true,
+        "options": {}
+      },
+      "id": "f0a09f77-d79c-42af-ab63-f3b3146e6cd3",
+      "name": "RAG Agent",
+      "type": "@n8n/n8n-nodes-langchain.vectorStoreQdrant",
+      "position": [
+        7776,
+        9728
+      ],
+      "typeVersion": 1.3,
+      "credentials": {
+        "qdrantApi": {
+          "id": "I5oc0eKmlBT4OSR8",
+          "name": "Qdrant account"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "08bc3870-7ba8-48e0-8566-39de122e9b1b",
+      "name": "Embeddings OpenAI",
+      "type": "@n8n/n8n-nodes-langchain.embeddingsOpenAi",
+      "position": [
+        7792,
+        9904
+      ],
+      "typeVersion": 1.2,
+      "credentials": {
+        "openAiApi": {
+          "id": "UYj9dQYadJXRuYGS",
+          "name": "OpenAI account"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {},
+      "id": "fe74b0c4-7cda-424c-85cd-48a4aa939055",
+      "name": "Reranker Cohere",
+      "type": "@n8n/n8n-nodes-langchain.rerankerCohere",
+      "position": [
+        7968,
+        9904
+      ],
+      "typeVersion": 1,
+      "credentials": {
+        "cohereApi": {
+          "id": "EzMm3zjYQGFhdbTs",
+          "name": "Cohere account"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "description": "Create and edit Image and Video",
+        "workflowId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "klLje7jNDPINkW4Y",
+          "cachedResultUrl": "/workflow/klLje7jNDPINkW4Y",
+          "cachedResultName": "Image Grok Agent with Telegram"
+        },
+        "workflowInputs": {
+          "value": {
+            "query": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('query', ``, 'string') }}",
+            "duration": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('duration', ``, 'number') }}",
+            "image_url": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('image_url', ``, 'string') }}",
+            "tool_name": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('tool_name', ``, 'string') }}",
+            "video_url": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('video_url', ``, 'string') }}"
+          },
+          "schema": [
+            {
+              "id": "tool_name",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "tool_name",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "query",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "query",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "duration",
+              "type": "number",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "duration",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "video_url",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "video_url",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "image_url",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "image_url",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            }
+          ],
+          "mappingMode": "defineBelow",
+          "matchingColumns": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        }
+      },
+      "id": "053ed125-9d27-4ea2-9bd8-31eb0ae1e487",
+      "name": "Image and Video Grok Agent",
+      "type": "@n8n/n8n-nodes-langchain.toolWorkflow",
+      "position": [
+        7760,
+        10112
+      ],
+      "typeVersion": 2.2,
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "678da8cb-257a-4d2c-aab4-6de9f2baa584",
+      "name": "Others MCP Client",
+      "type": "@n8n/n8n-nodes-langchain.mcpClientTool",
+      "position": [
+        7920,
+        10240
+      ],
+      "typeVersion": 1.2,
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "description": "Chiama questo tool  solo quando devi modificare un video gi\u00e0 esistente. NON per crearlo",
+        "workflowId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "klLje7jNDPINkW4Y",
+          "cachedResultUrl": "/workflow/klLje7jNDPINkW4Y",
+          "cachedResultName": "Image Grok Agent with Telegram"
+        },
+        "workflowInputs": {
+          "value": {
+            "query": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('query', ``, 'string') }}",
+            "duration": 0,
+            "tool_name": "Run text to image"
+          },
+          "schema": [
+            {
+              "id": "tool_name",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "tool_name",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "query",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "query",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "duration",
+              "type": "number",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "duration",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "video_url",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "video_url",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "image_url",
+              "type": "string",
+              "display": true,
+              "removed": false,
+              "required": false,
+              "displayName": "image_url",
+              "defaultMatch": false,
+              "canBeUsedToMatch": true
+            }
+          ],
+          "mappingMode": "defineBelow",
+          "matchingColumns": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        }
+      },
+      "id": "e5245476-5431-4403-8a7e-15f3805d1bd5",
+      "name": "Others SubWF",
+      "type": "@n8n/n8n-nodes-langchain.toolWorkflow",
+      "position": [
+        8064,
+        10112
+      ],
+      "typeVersion": 2.2,
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "jsCode": "for (const item of $input.all()) {\n  if (item.binary) {\n    const binaryPropertyNames = Object.keys(item.binary);\n    for (const propName of binaryPropertyNames) {\n      if (item.binary[propName].mimeType === 'audio/mp3') {\n        item.binary[propName].mimeType = 'audio/mpeg';\n      }\n    }\n  }\n}\n\nreturn $input.all();"
+      },
+      "id": "5b18fd0e-12f2-4030-af45-e6b22e7337b7",
+      "name": "Fix mimeType for Audio",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        8400,
+        8880
+      ],
+      "typeVersion": 2,
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "resource": "audio",
+        "input": "={{ $json.output }}",
+        "voice": "onyx",
+        "options": {}
+      },
+      "id": "630631d8-d232-4f88-ab19-2d334d89b544",
+      "name": "Generate Audio Response",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "position": [
+        8112,
+        8880
+      ],
+      "typeVersion": 1.8,
+      "credentials": {
+        "openAiApi": {
+          "id": "UYj9dQYadJXRuYGS",
+          "name": "OpenAI account"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "b9d1d759-f585-4791-a743-b9d72951e77c",
+              "operator": {
+                "type": "object",
+                "operation": "exists",
+                "singleValue": true
+              },
+              "leftValue": "={{ $('Get Message').item.json.message.voice.file_id }}",
+              "rightValue": ""
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "b2a3b918-a576-4873-b03e-24cb5e447dae",
+      "name": "From audio to audio?",
+      "type": "n8n-nodes-base.if",
+      "position": [
+        7776,
+        9088
+      ],
+      "typeVersion": 2.2,
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "operation": "sendAudio",
+        "chatId": "={{ $('Get Message').item.json.message.from.id }}",
+        "binaryData": true,
+        "additionalFields": {}
+      },
+      "id": "46018ef2-c270-4493-98d7-5352ba22dd3e",
+      "name": "Send an audio file",
+      "type": "n8n-nodes-base.telegram",
+      "position": [
+        8672,
+        8880
+      ],
+      "webhookId": "4cc62c0d-3555-41a6-9617-e3d5dc11bc5b",
+      "typeVersion": 1.2,
+      "credentials": {
+        "telegramApi": {
+          "id": "I9ZB2ELnuVYpYbhH",
+          "name": "Lucy glaw"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "029f4e7e-b367-4aa9-863e-e372694940fb",
+              "name": "chatInput",
+              "type": "string",
+              "value": "={{ $json.message.text }}"
+            },
+            {
+              "id": "398c1d7f-0c90-4af6-a414-d4d1968855b9",
+              "name": "sessionId",
+              "type": "number",
+              "value": "={{ $json.message.from.id }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "f1e945e5-1d8c-42d1-a556-c3f502ca48fd",
+      "name": "Normalization",
+      "type": "n8n-nodes-base.set",
+      "position": [
+        6384,
+        9056
+      ],
+      "typeVersion": 3.4,
+      "disabled": true
+    },
+    {
+      "parameters": {},
+      "id": "f08e1bb5-c8ff-413d-a2bb-0c01d9a8c81c",
+      "name": "Calculator",
+      "type": "@n8n/n8n-nodes-langchain.toolCalculator",
+      "position": [
+        7488,
+        9744
+      ],
+      "typeVersion": 1,
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "chatId": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Chat_ID', ``, 'string') }}",
+        "text": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Text', ``, 'string') }}",
+        "additionalFields": {}
+      },
+      "id": "d1b1cea8-ddc5-42d8-a577-88015450104d",
+      "name": "Send a text message in Telegram",
+      "type": "n8n-nodes-base.telegramTool",
+      "position": [
+        8464,
+        9984
+      ],
+      "webhookId": "3ff2dbe0-42a6-4261-a583-cdc28192a3f7",
+      "typeVersion": 1.2,
+      "credentials": {
+        "telegramApi": {
+          "id": "I9ZB2ELnuVYpYbhH",
+          "name": "Lucy glaw"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "chatId": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Chat_ID', ``, 'string') }}",
+        "approvalOptions": {
+          "values": {
+            "approvalType": "double"
+          }
+        },
+        "options": {}
+      },
+      "id": "9262637c-2157-4c34-8626-8668b358fcd5",
+      "name": "Escalation",
+      "type": "n8n-nodes-base.telegramHitlTool",
+      "position": [
+        8480,
+        9744
+      ],
+      "webhookId": "4d19adfc-9e20-454d-a26e-b01f40eb7679",
+      "typeVersion": 1.2,
+      "credentials": {
+        "telegramApi": {
+          "id": "I9ZB2ELnuVYpYbhH",
+          "name": "Lucy glaw"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "content": "## My Personal Agent (OpenClaw Clone in n8n and Telegram)\nThis workflow implements an **advanced AI automation agent (OpenClaw Agent)** that interacts with users through Telegram and integrates multiple AI models, external tools, and cloud services to automate complex tasks.\n\nI've described my basic idea in [this video](https://www.youtube.com/watch?v=DCo_HsLQ1aY).\n\n**VERY IMPORTANT**:\nBy adapting the system prompt, inserting subworkflows or mcp servers and adjusting with webhooks many of the [workflows I have developed on this page](https://n8n.io/creators/n3witalia/) it is possible to potentially extend the template infinitely.\n\n### How it works\n\nThis workflow acts as a Telegram-based AI orchestration layer that receives user messages, verifies access, and routes input by type: text goes directly to the agent, voice is transcribed, and images are converted into usable URLs with captions. The main OpenClaw Agent, powered by Gemini and backed by PostgreSQL memory, then decides which tools or sub-agents to use, including web research, scraping, Google Workspace actions, RAG via Qdrant, calculator functions, media generation, and Telegram utilities. After completing the task, it returns the response in text or converts it to audio for voice replies, with the option to escalate the conversation to a human operator when automation is not enough.\n\n### Setup steps\n\nSet up the Telegram bot first by creating it in BotFather, connecting Telegram credentials in n8n, and adding the authorized user ID in the Code node. Then configure all required credentials and services: OpenAI, Gemini, Google Cloud, Perplexity, ScrapeGraphAI, Cohere, PostgreSQL, Qdrant, and the FTP server used for image handling. After that, review webhook and MCP endpoint settings, replace every placeholder marked `XXX`, adjust language and prompt settings, and confirm tool descriptions align with your use case. Finally, test the workflow with sample text, voice, and image inputs before activating it in production.\n",
+        "height": 608,
+        "width": 880
+      },
+      "id": "284bc6f8-be2a-4964-a7e9-2cf2649c2c46",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        5008,
+        8624
+      ],
+      "typeVersion": 1,
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "content": "## STEP 2 - Set up recurrences\nPlease replace xxx with the requested information, in particular the Telegram ID and the prompt to be scheduled periodically, for example every morning \"Send me the latest news on AI\"\n\nAlso add any external input webhooks you want.",
+        "height": 608,
+        "width": 656,
+        "color": 7
+      },
+      "id": "c4dba0b3-c164-4ba4-8fc7-00f22c878fc7",
+      "name": "Sticky Note1",
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        5936,
+        8624
+      ],
+      "typeVersion": 1,
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "029f4e7e-b367-4aa9-863e-e372694940fb",
+              "name": "chatInput",
+              "type": "string",
+              "value": "=xxxx"
+            },
+            {
+              "id": "398c1d7f-0c90-4af6-a414-d4d1968855b9",
+              "name": "sessionId",
+              "type": "number",
+              "value": "=xxxx"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "18061859-a2f0-49d5-aadd-af2241b9cae6",
+      "name": "Set up istruction",
+      "type": "n8n-nodes-base.set",
+      "position": [
+        6384,
+        8816
+      ],
+      "typeVersion": 3.4,
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "content": "## STEP 2 - Set up Telegram\nConnect to your Telegram Bot and replace xxx with the required information, specifically the Telegram ID. Set your FTP Space\nYou can send text, audio or image",
+        "height": 672,
+        "width": 1600,
+        "color": 7
+      },
+      "id": "f18d8220-2c83-4a7b-829b-7d89505ba9a0",
+      "name": "Sticky Note2",
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        4992,
+        9280
+      ],
+      "typeVersion": 1,
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "content": "## STEP 3 - Set up OpenClaw agent\nIn the prompt system add ALL tools you want",
+        "height": 576,
+        "width": 960,
+        "color": 7
+      },
+      "id": "7dc4fd03-753a-41ae-9661-635f1a096945",
+      "name": "Sticky Note3",
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        6656,
+        9376
+      ],
+      "typeVersion": 1,
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "content": "## STEP 4 - Google MCP\nPlease configure MCP Server below (MCP Trigger) with the current MCP url",
+        "height": 464,
+        "width": 560,
+        "color": 7
+      },
+      "id": "d1886ae0-f43d-4e85-ba7d-3a7fbaaa1ea1",
+      "name": "Sticky Note4",
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        7056,
+        9968
+      ],
+      "typeVersion": 1,
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "content": "## STEP 5 - Expansion tool\nConfigure [RAG from Zero](https://n8n.io/workflows/7647-build-a-self-updating-rag-system-with-openai-google-gemini-qdrant-and-google-drive/), [Image and Video Grok Agent](https://n8n.io/workflows/13182-grok-imagine-video-chatbot-generate-and-modify-videos-via-natural-language/), ALL sub Workflow and extarnel MCP you want and Escalation Agent",
+        "height": 832,
+        "width": 1360,
+        "color": 7
+      },
+      "id": "695e4e51-f711-419e-a2d5-5f5ca1a130b5",
+      "name": "Sticky Note5",
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        7600,
+        9488
+      ],
+      "typeVersion": 1,
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "content": "## STEP 6 - Output\nIf it is a voice message the agent responds with an audio, otherwise with text",
+        "height": 576,
+        "width": 944,
+        "color": 7
+      },
+      "id": "762dc8a9-bb09-41f5-8168-ecfabfb53290",
+      "name": "Sticky Note6",
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        8000,
+        8720
+      ],
+      "typeVersion": 1,
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "content": "## MY NEW YOUTUBE CHANNEL\n\ud83d\udc49 [Subscribe to my new **YouTube channel**](https://youtube.com/@n3witalia). Here I\u2019ll share videos and Shorts with practical tutorials and **FREE templates for n8n**.\n\n[![image](https://n3wstorage.b-cdn.net/n3witalia/youtube-n8n-cover.jpg)](https://youtube.com/@n3witalia)",
+        "height": 736,
+        "width": 736,
+        "color": 7
+      },
+      "id": "fec56133-be49-450b-b39d-5955547b9e1d",
+      "name": "Sticky Note9",
+      "type": "n8n-nodes-base.stickyNote",
+      "position": [
+        4224,
+        8624
+      ],
+      "typeVersion": 1,
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Get Message').item.json.message.from.id }}",
+        "text": "={{ $json.output }}",
+        "additionalFields": {}
+      },
+      "id": "7c8fdda7-2c5b-4c03-8041-ccbcb98db207",
+      "name": "Send a text message1",
+      "type": "n8n-nodes-base.telegram",
+      "position": [
+        8112,
+        9120
+      ],
+      "webhookId": "0c34fd33-0a7a-424e-b57b-9a45bb6f083d",
+      "typeVersion": 1.2,
+      "credentials": {
+        "telegramApi": {
+          "id": "I9ZB2ELnuVYpYbhH",
+          "name": "Lucy glaw"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "query": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('Query', ``, 'string') }}",
+        "options": {}
+      },
+      "type": "@tavily/n8n-nodes-tavily.tavilyTool",
+      "typeVersion": 1,
+      "position": [
+        6960,
+        9920
+      ],
+      "id": "a3349fdf-350d-4068-9c1d-9a70eaa98242",
+      "name": "Search in Tavily",
+      "credentials": {
+        "tavilyApi": {
+          "id": "sRbX1VrU96OQta09",
+          "name": "Tavily account"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "contextWindowLength": 10
+      },
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.3,
+      "position": [
+        6576,
+        9872
+      ],
+      "id": "5b5ddf78-9010-4f9e-9b70-a74d3b8d9fc6",
+      "name": "Simple Memory1",
+      "disabled": true
+    }
+  ],
+  "connections": {
+    "If NODE": {
+      "main": [
+        [
+          {
+            "node": "based file name it assign differ metadata",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Loop Over each file",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "clean output": {
+      "main": [
+        [
+          {
+            "node": "convert data into smaller chunks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "set all metadata": {
+      "main": [
+        [
+          {
+            "node": "clean output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Character Text Splitter": {
+      "ai_textSplitter": [
+        [
+          {
+            "node": "Default Data Loader3",
+            "type": "ai_textSplitter",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mistral Cloud Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "based file name it assign differ metadata",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "convert data into smaller chunks": {
+      "main": [
+        [
+          {
+            "node": "Qdrant Vector Store5",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "based file name it assign differ metadata": {
+      "main": [
+        [
+          {
+            "node": "set all metadata",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Telegram Trigger": {
+      "main": [
+        [
+          {
+            "node": "ai chat agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Simple Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "ai chat agent",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "ai chat agent": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "If",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload file": {
+      "main": [
+        [
+          {
+            "node": "Send a text message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Convert to File": {
+      "main": [
+        [
+          {
+            "node": "Upload file",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If": {
+      "main": [
+        [
+          {
+            "node": "Convert to File",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send a text message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenRouter Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "ai chat agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Embeddings OpenAI5": {
+      "ai_embedding": [
+        [
+          {
+            "node": "Qdrant Vector Store4",
+            "type": "ai_embedding",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Qdrant Vector Store4": {
+      "ai_tool": [
+        [
+          {
+            "node": "ai chat agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Default Data Loader3": {
+      "ai_document": [
+        [
+          {
+            "node": "Qdrant Vector Store5",
+            "type": "ai_document",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mistral Upload1": {
+      "main": [
+        [
+          {
+            "node": "Mistral Signed URL1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mistral Signed URL1": {
+      "main": [
+        [
+          {
+            "node": "Mistral DOC OCR1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mistral DOC OCR1": {
+      "main": [
+        [
+          {
+            "node": "If NODE",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Embeddings OpenAI6": {
+      "ai_embedding": [
+        [
+          {
+            "node": "Qdrant Vector Store5",
+            "type": "ai_embedding",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Qdrant Vector Store5": {
+      "main": [
+        [
+          {
+            "node": "Loop Over each file",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "When Executed by Another Workflow": {
+      "main": [
+        [
+          {
+            "node": "ai chat agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "When clicking \u2018Execute workflow\u2019": {
+      "main": [
+        [
+          {
+            "node": "Google Drive - List Files",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Drive - List Files": {
+      "main": [
+        [
+          {
+            "node": "Loop Over each file",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over each file": {
+      "main": [
+        [],
+        [
+          {
+            "node": "add metadata1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route by mimeType": {
+      "main": [
+        [
+          {
+            "node": "Download Google Doc/Sheet/Slide",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Download PDF/Image",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download PDF/Image": {
+      "main": [
+        [
+          {
+            "node": "Mistral Upload1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download Google Doc/Sheet/Slide": {
+      "main": [
+        [
+          {
+            "node": "Analyze document",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "add metadata1": {
+      "main": [
+        [
+          {
+            "node": "Route by mimeType",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analyze document": {
+      "main": [
+        [
+          {
+            "node": "set all metadata",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code": {
+      "main": [
+        [
+          {
+            "node": "Switch2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Switch2": {
+      "main": [
+        [
+          {
+            "node": "Get Text",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Get voice message",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Get image file",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Normalization",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Text": {
+      "main": [
+        [
+          {
+            "node": "OpenClaw Agents",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "RAG Agent": {
+      "ai_tool": [
+        [
+          {
+            "node": "OpenClaw Agents",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calculator": {
+      "ai_tool": [
+        [
+          {
+            "node": "OpenClaw Agents",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Escalation": {
+      "ai_tool": [
+        [
+          {
+            "node": "OpenClaw Agents",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Message": {
+      "main": [
+        [
+          {
+            "node": "Code",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gmail Agent": {
+      "ai_tool": [
+        [
+          {
+            "node": "OpenClaw Agents",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Others SubWF": {
+      "ai_tool": [
+        [
+          {
+            "node": "OpenClaw Agents",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload image": {
+      "main": [
+        [
+          {
+            "node": "Set Image Url",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalization": {
+      "main": [
+        [
+          {
+            "node": "OpenClaw Agents",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Scraper Agent": {
+      "ai_tool": [
+        [
+          {
+            "node": "OpenClaw Agents",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Image Url": {
+      "main": [
+        [
+          {
+            "node": "OpenClaw Agents",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get image file": {
+      "main": [
+        [
+          {
+            "node": "Upload image",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenClaw Agents": {
+      "main": [
+        [
+          {
+            "node": "From audio to audio?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reranker Cohere": {
+      "ai_reranker": [
+        [
+          {
+            "node": "RAG Agent",
+            "type": "ai_reranker",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Set up istruction",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Embeddings OpenAI": {
+      "ai_embedding": [
+        [
+          {
+            "node": "RAG Agent",
+            "type": "ai_embedding",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get voice message": {
+      "main": [
+        [
+          {
+            "node": "Transcribe recording",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Docs Agent": {
+      "ai_tool": [
+        [
+          {
+            "node": "OpenClaw Agents",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Others MCP Client": {
+      "ai_tool": [
+        [
+          {
+            "node": "OpenClaw Agents",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set up istruction": {
+      "main": [
+        [
+          {
+            "node": "OpenClaw Agents",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Drive Agent": {
+      "ai_tool": [
+        [
+          {
+            "node": "OpenClaw Agents",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Sheets Agent": {
+      "ai_tool": [
+        [
+          {
+            "node": "OpenClaw Agents",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Slides Agent": {
+      "ai_tool": [
+        [
+          {
+            "node": "OpenClaw Agents",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "From audio to audio?": {
+      "main": [
+        [
+          {
+            "node": "Generate Audio Response",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send a text message1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Postgres Chat Memory": {
+      "ai_memory": [
+        []
+      ]
+    },
+    "Transcribe recording": {
+      "main": [
+        [
+          {
+            "node": "Get input text from voice",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Calendar Agent": {
+      "ai_tool": [
+        [
+          {
+            "node": "OpenClaw Agents",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fix mimeType for Audio": {
+      "main": [
+        [
+          {
+            "node": "Send an audio file",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get a message in Gmail": {
+      "ai_tool": [
+        [
+          {
+            "node": "MCP Gmail Trigger",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create a draft in Gmail": {
+      "ai_tool": [
+        [
+          {
+            "node": "MCP Gmail Trigger",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Delete a draft in Gmail": {
+      "ai_tool": [
+        [
+          {
+            "node": "MCP Gmail Trigger",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Audio Response": {
+      "main": [
+        [
+          {
+            "node": "Fix mimeType for Audio",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send a message in Gmail": {
+      "ai_tool": [
+        [
+          {
+            "node": "MCP Gmail Trigger",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Gemini Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "OpenClaw Agents",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Delete a message in Gmail": {
+      "ai_tool": [
+        [
+          {
+            "node": "MCP Gmail Trigger",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get input text from voice": {
+      "main": [
+        [
+          {
+            "node": "OpenClaw Agents",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Move file in Google Drive": {
+      "ai_tool": [
+        [
+          {
+            "node": "MCP Drive Trigger",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get many messages in Gmail": {
+      "ai_tool": [
+        [
+          {
+            "node": "MCP Gmail Trigger",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Image and Video Grok Agent": {
+      "ai_tool": [
+        [
+          {
+            "node": "OpenClaw Agents",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reply to a message in Gmail": {
+      "ai_tool": [
+        [
+          {
+            "node": "MCP Gmail Trigger",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Clear sheet in Google Sheets": {
+      "ai_tool": [
+        [
+          {
+            "node": "MCP Sheet Trigger",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Add label to message in Gmail": {
+      "ai_tool": [
+        [
+          {
+            "node": "MCP Gmail Trigger",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create sheet in Google Sheets": {
+      "ai_tool": [
+        [
+          {
+            "node": "MCP Sheet Trigger",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download file in Google Drive": {
+      "ai_tool": [
+        [
+          {
+            "node": "MCP Drive Trigger",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get a document in Google Docs": {
+      "ai_tool": [
+        [
+          {
+            "node": "MCP Docs Trigger",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get an event in Google Calendar": {
+      "ai_tool": [
+        [
+          {
+            "node": "MCP Calendar Trigger",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send a text message in Telegram": {
+      "ai_tool": [
+        [
+          {
+            "node": "Escalation",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create a document in Google Docs": {
+      "ai_tool": [
+        [
+          {
+            "node": "MCP Docs Trigger",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update a document in Google Docs": {
+      "ai_tool": [
+        [
+          {
+            "node": "MCP Docs Trigger",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create an event in Google Calendar": {
+      "ai_tool": [
+        [
+          {
+            "node": "MCP Calendar Trigger",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Delete an event in Google Calendar": {
+      "ai_tool": [
+        [
+          {
+            "node": "MCP Calendar Trigger",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get many events in Google Calendar": {
+      "ai_tool": [
+        [
+          {
+            "node": "MCP Calendar Trigger",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Remove label from message in Gmail": {
+      "ai_tool": [
+        [
+          {
+            "node": "MCP Gmail Trigger",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get a presentation in Google Slides": {
+      "ai_tool": [
+        [
+          {
+            "node": "MCP Slides Trigger",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get row(s) in sheet in Google Sheets": {
+      "ai_tool": [
+        [
+          {
+            "node": "MCP Sheet Trigger",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update row in sheet in Google Sheets": {
+      "ai_tool": [
+        [
+          {
+            "node": "MCP Sheet Trigger",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create file from text in Google Drive": {
+      "ai_tool": [
+        [
+          {
+            "node": "MCP Drive Trigger",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create a presentation in Google Slides": {
+      "ai_tool": [
+        [
+          {
+            "node": "MCP Slides Trigger",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get many shared drives in Google Drive": {
+      "ai_tool": [
+        [
+          {
+            "node": "MCP Drive Trigger",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search files and folders in Google Drive": {
+      "ai_tool": [
+        [
+          {
+            "node": "MCP Drive Trigger",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send message and wait for response in Gmail": {
+      "ai_tool": [
+        [
+          {
+            "node": "MCP Gmail Trigger",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Append or update row in sheet in Google Sheets": {
+      "ai_tool": [
+        [
+          {
+            "node": "MCP Sheet Trigger",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get slides from a presentation in Google Slides": {
+      "ai_tool": [
+        [
+          {
+            "node": "MCP Slides Trigger",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Replace text in a presentation in Google Slides": {
+      "ai_tool": [
+        [
+          {
+            "node": "MCP Slides Trigger",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get availability in a calendar in Google Calendar": {
+      "ai_tool": [
+        [
+          {
+            "node": "MCP Calendar Trigger",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Delete rows or columns from sheet in Google Sheets": {
+      "ai_tool": [
+        [
+          {
+            "node": "MCP Sheet Trigger",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search in Tavily": {
+      "ai_tool": [
+        [
+          {
+            "node": "OpenClaw Agents",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Simple Memory1": {
+      "ai_memory": [
+        [
+          {
+            "node": "OpenClaw Agents",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": true
+  },
+  "staticData": null,
+  "meta": {
+    "templateId": "5140",
+    "templateCredsSetupCompleted": true
+  },
+  "pinData": {
+    "Get Message": [
+      {
+        "json": {
+          "update_id": 246811882,
+          "message": {
+            "message_id": 11,
+            "from": {
+              "id": 6184893463,
+              "is_bot": false,
+              "first_name": "Toomas",
+              "last_name": "Valk",
+              "username": "inimene999",
+              "language_code": "en"
+            },
+            "chat": {
+              "id": 6184893463,
+              "first_name": "Toomas",
+              "last_name": "Valk",
+              "username": "inimene999",
+              "type": "private"
+            },
+            "date": 1777768326,
+            "text": "Hey"
+          }
+        },
+        "pairedItem": {
+          "item": 0
+        }
+      }
+    ]
+  },
+  "versionId": "fc8ed0b6-ad33-4c3f-b676-788700baa944",
+  "activeVersionId": null,
+  "triggerCount": 1
+}

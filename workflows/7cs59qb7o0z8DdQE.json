@@ -1,0 +1,783 @@
+{
+  "id": "7cs59qb7o0z8DdQE",
+  "name": "2.-Binance Futures market Quant AI Agent",
+  "active": true,
+  "nodes": [
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "NFY2UqCbPxHNC8ln",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/NFY2UqCbPxHNC8ln",
+          "cachedResultName": "3.-Binance FM Financial Analyst Agent"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "message": "={{ $fromAI(\"message\",\"Populate this with a relevant message to this subagent\")}}",
+            "sessionId": "={{ $json.sessionId }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "message",
+              "displayName": "message",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "sessionId",
+              "displayName": "sessionId",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        }
+      },
+      "id": "d7c38757-4dc2-44ee-93ce-eccd5c983862",
+      "name": "Binance SM Financial Analyst Tool",
+      "type": "@n8n/n8n-nodes-langchain.toolWorkflow",
+      "position": [
+        528,
+        144
+      ],
+      "typeVersion": 2.2
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "=1y25TIMXAYZec4nM",
+          "mode": "id"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "message": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('message', `Populate this with a relevant message to this subagent`, 'string') }}",
+            "sessionId": "={{ $json.sessionId }}"
+          },
+          "matchingColumns": [
+            "message"
+          ],
+          "schema": [
+            {
+              "id": "message",
+              "displayName": "message",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "sessionId",
+              "displayName": "sessionId",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.toolWorkflow",
+      "typeVersion": 2.2,
+      "position": [
+        656,
+        144
+      ],
+      "id": "07a40c13-082e-4dbe-87c8-8c12c5dc39a3",
+      "name": "News and Sentiment Analysis Request"
+    },
+    {
+      "parameters": {
+        "jsCode": "const maxChars = 400;\n\nfunction normalizeMarkdownLists(text) {\n  if (!text) return '';\n\n  const originalLines = String(text).split('\\n');\n  const newLines = [];\n  const isListLine = [];\n\n  let inList = false;\n  let counter = 0;\n\n  for (let i = 0; i < originalLines.length; i++) {\n    let line = originalLines[i].trimEnd();\n    const match = line.match(/^\\s*(?:([-*\u2022])\\s+|(\\d+)[\\.\\)]\\s+)(.+)$/);\n\n    if (match) {\n      const content = (match[3] || '').trim();\n      if (!content) continue;\n\n      if (!inList) {\n        inList = true;\n        counter = 1;\n      } else {\n        counter++;\n      }\n\n      line = `${counter}. ${content}`;\n      newLines.push(line.trim());\n      isListLine.push(true);\n    } else {\n      inList = false;\n      counter = 0;\n\n      if (line === '') {\n        newLines.push('');\n        isListLine.push(false);\n      } else {\n        newLines.push(line);\n        isListLine.push(false);\n      }\n    }\n  }\n\n  let result = '';\n\n  for (let i = 0; i < newLines.length; i++) {\n    const line = newLines[i];\n\n    if (i > 0) {\n      if (isListLine[i] && isListLine[i - 1]) {\n        result += '\\n\\n';\n      } else {\n        result += '\\n';\n      }\n    }\n\n    result += line;\n  }\n\n  result = result.replace(/\\n{3,}/g, '\\n\\n');\n  return result.trim();\n}\n\nfunction formatText(rawText) {\n  let text = String(rawText || '').replace(/\\r\\n/g, '\\n').trim();\n  if (!text) return '';\n\n  text = text.replace(/\\s*((?:\\d+[\\.\\)]\\s+|[-*\u2022]\\s+))/g, '\\n\\n$1').trim();\n\n  if (text.includes('\\n\\n')) {\n    return normalizeMarkdownLists(text);\n  }\n\n  const sentences = text.match(/[^.!?]+[.!?]?/g) || [text];\n  const paragraphs = [];\n  let current = '';\n\n  for (const sentence of sentences) {\n    const s = sentence.trim();\n    if (!s) continue;\n\n    const candidate = current ? current + ' ' + s : s;\n\n    if (candidate.length > maxChars && current) {\n      paragraphs.push(current.trim());\n      current = s;\n    } else {\n      current = candidate;\n    }\n  }\n\n  if (current.trim()) {\n    paragraphs.push(current.trim());\n  }\n\n  const textWithParagraphs = paragraphs.join('\\n\\n');\n  return normalizeMarkdownLists(textWithParagraphs);\n}\n\nconst items = $input.all();\nconst results = [];\n\nfor (const item of items) {\n  const data = item.json || {};\n  let text = data.bot_response ?? data.output ?? data.text ?? '';\n\n  if (text && typeof text === 'object') {\n    if (typeof text.text === 'string') {\n      text = text.text;\n    } else if (Array.isArray(text)) {\n      text = text.join(' ');\n    } else {\n      text = JSON.stringify(text);\n    }\n  }\n\n  if (typeof text !== 'string' || !text.trim()) {\n    results.push(item);\n    continue;\n  }\n\n  const formattedText = formatText(text);\n\n  results.push({\n    json: {\n      ...data,\n      output: formattedText,\n    },\n  });\n}\n\nreturn results;"
+      },
+      "id": "d99b3d93-0b7e-4ec8-be77-82de296413bb",
+      "name": "Transform Text",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        864,
+        32
+      ],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.message }}",
+        "hasOutputParser": true,
+        "options": {
+          "systemMessage": "You are the **Binance Futures Market Quant AI Agent**, responsible for generating structured, professional swing-trading reports for **any trading pair** on the Binance Futures Market. You use **validated technical indicators**, **order flow data**, and **curated crypto sentiment** to create actionable trading strategies.\n\n---\n\n### \ud83d\udd17 Connected Tools\n\n1. **\ud83e\udde0 Binance Financial Market Analyst Tool**\n\n   \u2022 Aggregates outputs from:\n\n   * `Binance 15min Indicators Tool`\n   * `Binance 1h Indicators Tool`\n   * `Binance 4h Indicators Tool`\n   * `Binance 1d Indicators Tool`\n   * `Binance Price/OrderBook/Kline Tool`\n\n   \u2022 Each indicator tool calculates:\n\n   * **RSI, BBANDS, SMA, EMA, ADX, MACD**\n   * Based on the **latest 20 klines** for its interval\n   * Returns both values and signal labels (e.g. overbought, divergence)\n\n   \u2022 The Price Tool provides:\n\n   * **Live price**\n   * **24h OHLCV**\n   * **Order book depth (top 100 bids/asks)**\n   * **Klines** for `15m`, `1h`, `4h`, and `1d` intervals\n\n2. **\ud83d\udcf0 Binance News and Sentiment Analyst Tool**\n\n   \u2022 Pulls from sources like:\n\n   * CoinDesk, Cointelegraph, BitcoinMagazine, NewsBTC, CryptoBriefing, and more\n\n   \u2022 Returns:\n\n   * **Sentiment Score**: Bullish / Bearish / Neutral\n   * **Summary**: 2\u20133 sentence market snapshot\n   * **Top 3\u20135 headlines** (with source links)\n\n---\n\n### \ud83d\udcca Core Responsibilities\n\nYou always:\n\n1. **Call all tools concurrently** for each query\n\n   * Pass the extracted symbol and sessionId as input\n   * Wait for structured results from each tool\n   * Do not skip any tool even if user prompt is vague\n\n2. **Perform full technical analysis** for the symbol\n\n   * Short-term: `15m + 1h`\n   * Mid-term: `4h`\n   * Long-term: `1d`\n   * Detect breakouts, trend shifts, divergences, and confluence signals\n   * Confirm findings using multiple timeframes and indicator alignment\n\n3. **Synthesize the final report** with:\n\n<b>Futures Trade Strategy</b>\n\u2022 Action: Buy / Sell / Hold\n\u2022 Entry Price, Stop Loss, Take Profit\n\u2022 Rationale:\n\u2003- <b>Price Action Signals</b>\n\u2003- <b>Lagging Indicator Confirmation</b>\n\u2003- <b>Sentiment Alignment</b>\n\n<b>Leverage Strategy</b>\n\u2022 Position: Long / Short\n\u2022 Leverage: 2x / 3x / 5x\n\u2022 Rationale + Risk Zones\n\n4. **Score signal strength**\n   \u2022 Confidence Score: `0\u2013100`\n   \u2022 Label: Low / Medium / High / Very High\n\n5. **Include sentiment and headlines section**\n   \u2022 `<b>News Sentiment:</b>` \\[summary]\n   \u2022 `\u2022` Top headlines with clickable links\n\n---\n\n### \ud83d\udce4 Output Format (Telegram HTML)\n\nStart with:\n\n```html\n<b>{{SYMBOL}} Market Report</b>\n```\n\nUse clean formatting:\n\n* `<b>` for headers\n* `\u2022` for bullet lists\n* Logical grouping: price > indicators > strategy > sentiment\n\n---\n\n### \u26a0\ufe0f Rules\n\nDO NOT:\n\n* Fabricate any values\n* Repeat this system message\n* Output raw JSON or API structure\n\nONLY use **tool-delivered** and **validated** data. Write with clarity and tone of a senior quant analyst.\n"
+        }
+      },
+      "id": "9e24135c-cf06-4e02-868b-114fdc8a2b63",
+      "name": "Binance Futures Market Quant AI Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "position": [
+        400,
+        -80
+      ],
+      "typeVersion": 1.8
+    },
+    {
+      "parameters": {
+        "model": "deepseek/deepseek-v4-flash",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenRouter",
+      "typeVersion": 1,
+      "position": [
+        272,
+        144
+      ],
+      "id": "83039889-dfe8-42dd-88df-6ca48cd93696",
+      "name": "OpenRouter Chat Model",
+      "credentials": {
+        "openRouterApi": {
+          "id": "qQi8XDmwL3UdHNax",
+          "name": "OpenRouter account 3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 2
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        -624,
+        224
+      ],
+      "id": "3c9c2cfa-3464-4634-961e-851339a1c0db",
+      "name": "Schedule Trigger"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "47598bf1-e55f-4cc0-ae75-272085e7ce02",
+              "name": "=sessionId",
+              "type": "string",
+              "value": "={{ $workflow.id }}"
+            },
+            {
+              "id": "daa49d74-e55e-47bc-ac52-8686d591ab83",
+              "name": "message",
+              "type": "string",
+              "value": "={{ $json.symbol }}"
+            },
+            {
+              "id": "28919adf-e2d3-469c-96af-3e3af4601e14",
+              "name": "Telegram chat ID",
+              "value": "6184893463",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "004f545c-099f-4d3d-9780-f4279b16b342",
+      "name": "Adds \"SessionId\"",
+      "type": "n8n-nodes-base.set",
+      "position": [
+        48,
+        32
+      ],
+      "typeVersion": 3.4
+    },
+    {
+      "parameters": {
+        "options": {
+          "reset": false
+        }
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        -176,
+        240
+      ],
+      "id": "1aa0d046-4865-4b29-8277-740be47abd09",
+      "name": "Loop Over Items"
+    },
+    {
+      "parameters": {
+        "chatId": "=6184893463",
+        "text": "={{ $json.output }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "id": "d71c03d1-4bde-438b-b8e7-51c5776c146b",
+      "name": "Message1",
+      "type": "n8n-nodes-base.telegram",
+      "position": [
+        1088,
+        32
+      ],
+      "webhookId": "12045ee8-11e5-4040-8e56-80c8d11ed0ba",
+      "typeVersion": 1.2,
+      "credentials": {
+        "telegramApi": {
+          "id": "BBXoKRy0OiDHTfSf",
+          "name": "Telegram account 3"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $json.sessionId }}"
+      },
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.3,
+      "position": [
+        400,
+        144
+      ],
+      "id": "4ccbe168-4f4a-4fcc-9698-6654980a489b",
+      "name": "Simple Memory"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ JSON.stringify($json) }}",
+        "options": {
+          "systemMessage": "You are a Crypto Coin Sentiment Analyst specializing in per-coin trading signals.\n\nYou receive data about a SPECIFIC CRYPTOCURRENCY including:\n- Recent news headlines mentioning this coin (in the 'title' field)\n- Pre-calculated bull/bear keyword scores (bull_score, bear_score)\n- This coin's funding rate and bias (coin_funding_rate, coin_funding_bias)\n- Market-wide context (market_funding_sentiment, liquidation_bias)\n\nYOUR TASK: Analyze and return ONLY a raw JSON object (no markdown fences, no explanation):\n\n{\"sentiment_score\": <float -1.0 to 1.0>, \"direction\": \"BULLISH|BEARISH|NEUTRAL\", \"confidence\": <float 0.0-1.0>, \"impact_score\": <float 0.0-1.0>, \"bias\": \"BUY|SELL|HOLD\", \"reasoning\": \"<1 sentence>\"}\n\nSCORING GUIDE:\n- sentiment_score: -1.0 = strongly bearish, 0 = neutral, 1.0 = strongly bullish\n- No coin-specific headlines (headline_count=0) = direction NEUTRAL, confidence 0.25, sentiment_score near 0\n- High positive funding + bullish news = 0.5 to 0.8\n- Strong negative news or hack/ban = -0.5 to -0.9\n- Conflicting signals = lower confidence (0.3-0.5)\n- impact_score: how market-moving the news is (0.1 = minor, 0.9 = major catalyst)",
+          "enableStreaming": false
+        }
+      },
+      "name": "AI Sentiment Analyst",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3,
+      "position": [
+        400,
+        432
+      ],
+      "id": "58ddd662-4745-417c-b5ca-a0e6689ca00f"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Parse AI output\nconst raw = String($json.output || $json.text || '{}');\nconst txt = raw.replace(/```json?/gi, '').replace(/```/g, '').trim();\n\nconst si = txt.indexOf('{');\nconst ei = txt.lastIndexOf('}');\nlet p = {};\ntry {\n  if (si > -1 && ei > si) p = JSON.parse(txt.slice(si, ei + 1));\n} catch (err) {\n  console.warn('[Sentiment] JSON parse failed:', err.message);\n}\n\nconst score  = Math.max(-1, Math.min(1, parseFloat(p.sentiment_score) || 0));\nconst impact = Math.max(0,  Math.min(1, parseFloat(p.impact_score)    || 0.5));\nconst conf   = Math.max(0,  Math.min(1, parseFloat(p.confidence)      || 0.5));\nconst dir    = (String(p.direction || 'NEUTRAL').replace(/[^A-Z]/g, '').toUpperCase() || 'NEUTRAL');\n\n// \u2705 Pull the original coin item from BEFORE the AI node\nconst originalItem = $('Skip Empty').item.json;\n\n// \u2705 Derive symbol from original item (e.g. \"BTCUSDT\" \u2192 \"BTC\")\nconst coinSym = String(\n  (originalItem.symbol || '').replace(/USDT|USDC/gi, '') ||\n  (Array.isArray(originalItem.symbols) ? originalItem.symbols[0] : '') ||\n  ''\n).toUpperCase().trim();\n\n// InfluxDB line protocol escaping\nconst BS = String.fromCharCode(92);\nconst escTag = function(v) {\n  let s = String(v == null ? '' : v);\n  s = s.split(BS).join(BS + BS);\n  s = s.split(',').join(BS + ',');\n  s = s.split('=').join(BS + '=');\n  s = s.split(' ').join(BS + ' ');\n  return s;\n};\nconst escField = function(v) {\n  let s = String(v == null ? '' : v);\n  s = s.split(BS).join(BS + BS);\n  s = s.split('\"').join(BS + '\"');\n  s = s.split('\\n').join(' ');\n  return s;\n};\n\nconst src   = escTag(originalItem.source || $json.source || 'news');\nconst aid   = escField(originalItem.id   || 'unknown');\nconst title = escField(originalItem.title || $json.headline || '');\nconst ts    = (parseInt(originalItem.published_at) || Math.floor(Date.now() / 1000)) * 1000000000;\n\n// Build symbol list \u2014 prefer coin sym, fallback to symbols array, then CRYPTO\nlet syms = [];\nif (coinSym && coinSym.length > 0 && coinSym !== 'UNDEFINED') {\n  syms = [coinSym];\n} else if (Array.isArray(originalItem.symbols) && originalItem.symbols.length > 0) {\n  syms = originalItem.symbols\n    .map(function(x) { return typeof x === 'object' ? String(x.symbol || x.name || 'CRYPTO') : String(x); })\n    .filter(function(x) { return x && x.trim().length > 0; });\n} else if (typeof originalItem.symbols === 'string' && originalItem.symbols.trim()) {\n  syms = [originalItem.symbols.trim()];\n} else {\n  syms = ['CRYPTO'];\n}\n\n// Build InfluxDB line protocol\nconst lp = syms.map(function(sym) {\n  return 'news_sentiment,symbol=' + escTag(sym) + ',source=' + src + ',direction=' + escTag(dir)\n    + ' sentiment_score=' + score + ',impact_score=' + impact + ',confidence=' + conf\n    + ',article_id=\"' + aid + '\",title=\"' + title + '\" ' + ts;\n}).join('\\n');\n\n// \u2705 Return plain object (not an array) \u2014 required for \"Run Once for Each Item\" mode\nreturn {\n  json: {\n    lineProtocol: lp,\n    symbol: syms[0],\n    count: syms.length,\n    direction: dir,\n    sentiment_score: score,\n    confidence: conf\n  }\n};"
+      },
+      "id": "a5cf6318-ccb3-4904-8d2e-b2ab3d5ac3b8",
+      "name": "Parse & Build LineProtocol1",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        864,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "model": "deepseek/deepseek-v4-flash",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenRouter",
+      "typeVersion": 1,
+      "position": [
+        464,
+        656
+      ],
+      "id": "ec3da8be-bfda-411e-868b-dce626df0733",
+      "name": "OpenRouter Chat Model1",
+      "credentials": {
+        "openRouterApi": {
+          "id": "qQi8XDmwL3UdHNax",
+          "name": "OpenRouter account 3"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "return [\n  { json: { symbol: \"BTCUSDT\" } },\n  { json: { symbol: \"ETHUSDT\" } },\n  { json: { symbol: \"BNBUSDT\" } },\n  { json: { symbol: \"SOLUSDT\" } },\n  { json: { symbol: \"XRPUSDT\" } },\n  { json: { symbol: \"DOGEUSDT\" } },\n  { json: { symbol: \"ADAUSDT\" } },\n  { json: { symbol: \"AVAXUSDT\" } },\n  { json: { symbol: \"DOTUSDT\" } },\n  { json: { symbol: \"LINKUSDT\" } },\n  { json: { symbol: \"LTCUSDT\" } },\n  { json: { symbol: \"ATOMUSDT\" } },\n  { json: { symbol: \"UNIUSDT\" } },\n  { json: { symbol: \"INJUSDT\" } },\n  { json: { symbol: \"APTUSDT\" } },\n  { json: { symbol: \"ARBUSDT\" } },\n  { json: { symbol: \"OPUSDT\" } },\n  { json: { symbol: \"NEARUSDT\" } },\n  { json: { symbol: \"FILUSDT\" } },\n  { json: { symbol: \"ICPUSDT\" } },\n];"
+      },
+      "name": "Process News & Sentiment",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -400,
+        224
+      ],
+      "id": "1b451ce1-8711-4002-a299-e504e0cacaee"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://ai-trading-backend:8000/api/news/sentiment",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{\n  JSON.parse(\n    $json.output.replace(/^```json\\s*/i, '').replace(/\\s*```$/i, '').trim()\n  )\n}}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "={{ $env.BACKEND_API_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        }
+      },
+      "name": "Save Sentiment to Memory1",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        864,
+        528
+      ],
+      "id": "f0dafac7-51bd-43d9-a590-f6552a309809"
+    },
+    {
+      "parameters": {
+        "jsCode": "const sentiment = $input.first().json;\nconst output = sentiment.output ? JSON.parse(sentiment.output) : sentiment;\n\nconst emoji = output.bias === 'BUY' ? '\ud83d\udfe2' : output.bias === 'SELL' ? '\ud83d\udd34' : '\ud83d\udfe1';\nconst moodEmoji = output.marketMood === 'RISK_ON' ? '\ud83d\ude80' : output.marketMood === 'RISK_OFF' ? '\u26a0\ufe0f' : '\ud83d\ude10';\n\nconst msg = `${emoji} <b>Market Sentiment Update</b> ${moodEmoji}\n\n` +\n  `\ud83d\udcca <b>Market Mood:</b> ${output.marketMood || 'N/A'}\n` +\n  `\ud83c\udfaf <b>Bias:</b> ${output.bias || 'N/A'} (${output.confidence || 0}% confidence)\n` +\n  `\n\ud83d\udca1 <b>Recommendation:</b>\n${output.tradingRecommendation || 'No recommendation'}\n` +\n  `\n\ud83d\udd11 <b>Key Narratives:</b>\n${(output.keyNarratives || []).map(n => `\u2022 ${n}`).join('\\n')}\n` +\n  `\n\u26a0\ufe0f <b>Risks:</b>\n${(output.topRisks || []).map(r => `\u2022 ${r}`).join('\\n')}\n` +\n  `\n\u23f0 ${new Date().toISOString().replace('T', ' ').slice(0, 16)} UTC`;\n\nreturn [{ json: { message: msg, parse_mode: 'HTML' } }];"
+      },
+      "name": "Format Telegram Alert1",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1088,
+        624
+      ],
+      "id": "aa753e3b-0f80-4cc3-b9e3-502f6d8dfd24"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://vps-influxdb:8086/api/v2/write?org=hedge-fund&bucket=news-sentiment&precision=ns",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Token VGsJs1Ft4tLq1_kwcbodJy3kxNXs4KcbYv7kj4VLlDWsLtnPEwUNZ8vczuNnBT65iRObY4IlW5Ip7SJ04yHM3g=="
+            },
+            {
+              "name": "Content-Type",
+              "value": "text/plain; charset=utf-8"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "text/plain; charset=utf-8",
+        "body": "={{ $json.lineProtocol }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      },
+      "id": "aa6be4c7-b854-4dd3-9511-3c7abb9f32f4",
+      "name": "Write to InfluxDB",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1088,
+        432
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconsole.log(`[Sentiment] InfluxDB write completed for ${items.length} item(s)`);\nreturn items.map(item => ({ json: { success: true, status: item.json?.status ?? 204 } }));"
+      },
+      "id": "7d6cca26-9617-4352-b38d-2bfdfc347f5d",
+      "name": "Log Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1312,
+        432
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.skip }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "notEquals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "6f737518-25a4-4ae6-b807-306e6e949abc",
+      "name": "Skip Empty",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2,
+      "position": [
+        48,
+        432
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// n8n Code node\nconst text = $json.output;  // adjust to your field\n// Option A: strip backslashes from escaped markdown\nlet cleaned = text.replace(/\\\\\\\\n/g, '\\n')\n                  .replace(/\\\\\\\\\\*/g, '*');\n// Option B: escape all underscores, asterisks, etc. for Markdown:\ncleaned = cleaned.replace(/_/g, '\\\\_')\n                 .replace(/\\*/g, '\\\\*')\n                 .replace(/\\[/g, '\\\\[')\n                 .replace(/`/g, '\\\\`');\nreturn [{ text: cleaned }];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        416,
+        1024
+      ],
+      "id": "20ae1bc8-a145-43b7-beef-23d79b89c125",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "name": "={{ $now }}",
+        "driveId": {
+          "__rl": true,
+          "value": "My Drive",
+          "mode": "list",
+          "cachedResultName": "My Drive",
+          "cachedResultUrl": "https://drive.google.com/drive/my-drive"
+        },
+        "folderId": {
+          "__rl": true,
+          "value": "1LmY-hLu83f_82QAgKQMs1xnaPPBxGqAv",
+          "mode": "list",
+          "cachedResultName": "AI/trading-data/news",
+          "cachedResultUrl": "https://drive.google.com/drive/folders/1LmY-hLu83f_82QAgKQMs1xnaPPBxGqAv"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [
+        960,
+        1024
+      ],
+      "id": "7c84955d-3c69-4c1e-bdf9-26f9bde73d47",
+      "name": "Upload file",
+      "credentials": {
+        "googleDriveOAuth2Api": {
+          "id": "7NYYUWfg1ziz7joT",
+          "name": "Google Drive account 3 Thor"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "toText",
+        "sourceProperty": "text",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.convertToFile",
+      "typeVersion": 1.1,
+      "position": [
+        672,
+        1024
+      ],
+      "id": "924d2a47-7105-4273-8749-71bcd3080b99",
+      "name": "Convert to File"
+    }
+  ],
+  "connections": {
+    "Binance SM Financial Analyst Tool": {
+      "ai_tool": [
+        [
+          {
+            "node": "Binance Futures Market Quant AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "News and Sentiment Analysis Request": {
+      "ai_tool": [
+        [
+          {
+            "node": "Binance Futures Market Quant AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Transform Text": {
+      "main": [
+        [
+          {
+            "node": "Message1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Binance Futures Market Quant AI Agent": {
+      "main": [
+        [
+          {
+            "node": "Transform Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenRouter Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Binance Futures Market Quant AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Process News & Sentiment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Adds \"SessionId\"": {
+      "main": [
+        [
+          {
+            "node": "Binance Futures Market Quant AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Items": {
+      "main": [
+        [
+          {
+            "node": "Skip Empty",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Adds \"SessionId\"",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Message1": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Simple Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "Binance Futures Market Quant AI Agent",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Sentiment Analyst": {
+      "main": [
+        [
+          {
+            "node": "Parse & Build LineProtocol1",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Save Sentiment to Memory1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse & Build LineProtocol1": {
+      "main": [
+        [
+          {
+            "node": "Write to InfluxDB",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenRouter Chat Model1": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Sentiment Analyst",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process News & Sentiment": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Sentiment to Memory1": {
+      "main": [
+        [
+          {
+            "node": "Format Telegram Alert1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Write to InfluxDB": {
+      "main": [
+        [
+          {
+            "node": "Log Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Skip Empty": {
+      "main": [
+        [
+          {
+            "node": "AI Sentiment Analyst",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Convert to File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Convert to File": {
+      "main": [
+        [
+          {
+            "node": "Upload file",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "timeSavedMode": "fixed",
+    "errorWorkflow": "p8vhXj53RK8MUxb7",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": true
+  },
+  "staticData": {
+    "node:Schedule Trigger": {
+      "recurrenceRules": [
+        0
+      ],
+      "recurrenceRuleSignatures": [
+        "hours:2"
+      ]
+    }
+  },
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "pinData": {},
+  "versionId": "9717b3b0-def3-4fa3-9b5e-c9b7d3d69e78",
+  "activeVersionId": "9717b3b0-def3-4fa3-9b5e-c9b7d3d69e78",
+  "triggerCount": 1
+}

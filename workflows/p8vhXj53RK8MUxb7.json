@@ -1,0 +1,115 @@
+{
+  "id": "p8vhXj53RK8MUxb7",
+  "name": "ERROR workflow telegram notification",
+  "active": true,
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "b05da166-54d9-4f13-b154-597a861353be",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        -448,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const err = $input.first().json;\n\nconst workflowName  = err.workflow?.name || 'Unknown Workflow';\nconst nodeName      = err.execution?.lastNodeExecuted || 'Unknown Node';\nconst errorMessage  = err.execution?.error?.message || 'No message';\nconst executionId   = err.execution?.id || 'N/A';\nconst timestamp     = new Date().toLocaleString('en-US', { timeZone: 'Europe/Tallinn' });\n\nlet severity  = '\u26a0\ufe0f WARNING';\nlet action    = 'Check manually';\n\nif (errorMessage.includes('IP_BANNED_418')) {\n  severity = '\ud83d\udd34 CRITICAL';\n  action   = 'STOP ALL WORKFLOWS NOW! IP is banned.';\n} else if (errorMessage.includes('RATE_LIMIT_429')) {\n  severity = '\ud83d\udfe0 HIGH';\n  action   = 'Pause 60 seconds, then resume. Reduce request frequency.';\n} else if (errorMessage.includes('INVALID_SIGNATURE') || errorMessage.includes('-1022')) {\n  severity = '\ud83d\udd34 CRITICAL';\n  action   = 'API key signature invalid \u2014 check timestamp synchronization!';\n} else if (errorMessage.includes('BALANCE_NOT_SUFFICIENT') || errorMessage.includes('-2018')) {\n  severity = '\ud83d\udfe0 HIGH';\n  action   = 'Insufficient balance! Add USDT or reduce position size.';\n} else if (errorMessage.includes('BINANCE_SERVER_ERROR_5')) {\n  severity = '\ud83d\udfe1 LOW';\n  action   = 'Binance server error \u2014 wait 30s and retry.';\n}\n\nconst n8nHost    = 'https://n8n1.thorinvest.org';\nconst execUrl    = `${n8nHost}/execution/${executionId}`;\n\nconst message = [\n  `${severity}`,\n  ``,\n  `*Workflow:* ${workflowName}`,\n  `*Node:* ${nodeName}`,\n  `*Error:* \\`${errorMessage.substring(0, 200)}\\``,\n  ``,\n  `*\ud83d\udd50 Time:* ${timestamp}`,\n  `*\ud83c\udd94 Execution ID:* ${executionId}`,\n  ``,\n  `*\ud83d\udd27 Action:* ${action}`,\n  ``,\n  `[\ud83d\udd17 View in n8n](${execUrl})`\n].join('\\n');\n\nreturn [{ message, severity, workflowName, errorMessage, executionId, timestamp }];"
+      },
+      "id": "3853f160-97e0-4a90-a1d6-9bfdb752463c",
+      "name": "Parse Error Details",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -224,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "6184893463",
+        "text": "={{ $json.message }}",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "510b3453-bdc3-43b7-a110-aa692a8b8660",
+      "name": "Telegram: Error Alert",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "ca0362aa-5aaf-435b-8d35-833f7a57aed8",
+      "credentials": {
+        "telegramApi": {
+          "id": "rl9H8K9VwXLloaiR",
+          "name": "n8n"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO error_logs (workflow_name, node_name, error_message, severity, execution_id, logged_at)\nVALUES ($1, $2, $3, $4, $5, NOW())",
+        "options": {
+          "queryReplacement": "={{ $json.workflowName }}, ={{ $json.errorMessage.substring(0,50) }}, ={{ $json.errorMessage }}, ={{ $json.severity }}, ={{ $json.executionId }}"
+        }
+      },
+      "id": "d5483531-11f4-4a2b-a3c3-d2436d6970e2",
+      "name": "Postgres: Log Error",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        0,
+        208
+      ],
+      "disabled": true
+    }
+  ],
+  "connections": {
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Parse Error Details",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Error Details": {
+      "main": [
+        [
+          {
+            "node": "Telegram: Error Alert",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Postgres: Log Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "timeSavedMode": "fixed",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": true
+  },
+  "staticData": null,
+  "meta": null,
+  "pinData": {},
+  "versionId": "700600a6-5ca5-44d1-9f67-1331cc5c5ca9",
+  "activeVersionId": "700600a6-5ca5-44d1-9f67-1331cc5c5ca9",
+  "triggerCount": 0
+}

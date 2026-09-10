@@ -330,7 +330,8 @@ class PaperTradingEngine:
 
             meta = pf["_meta"]
             self._order_counter += 1
-            oid = f"paper_{self._order_counter:06d}"
+            ts_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+            oid = f"paper_{ts_ms}_{self._order_counter:04d}_{uuid.uuid4().hex[:4]}"
 
             # Validation
             if order.order_type == OrderType.LIMIT and order.price <= 0:
@@ -413,6 +414,14 @@ class PaperTradingEngine:
             # Auto-fill market orders
             if order.order_type == OrderType.MARKET:
                 fill_price = order.price
+                if fill_price <= 0:
+                    try:
+                        from backend.services.binance_futures_service import binance_futures_broker
+                        ep = binance_futures_broker.get_exit_price(order.symbol)
+                        if ep and float(ep) > 0:
+                            fill_price = float(ep)
+                    except Exception:
+                        pass
                 if fill_price <= 0:
                     # Never invent a fill at cost basis — that zeroes paper PnL.
                     rec["status"] = "rejected"

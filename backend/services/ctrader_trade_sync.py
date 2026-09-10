@@ -417,6 +417,12 @@ def reconcile_ctrader_positions(
         except AttributeError:
             pass
         closed += 1
+        if (pnl is not None and pnl < 0) or "SL" in str(close_reason).upper():
+            try:
+                from backend.services.signal_candidate_engine import signal_candidate_engine
+                signal_candidate_engine.set_symbol_cooldown(row.symbol)
+            except Exception as cd_err:
+                logger.debug("Failed to set symbol cooldown on %s: %s", row.symbol, cd_err)
         logger.info(
             "cTrader ghost trade reconciled: id=%s symbol=%s pos_id=%s exit=%s pnl=%s reason=%s",
             row.id, row.symbol, row.broker_position_id, exit_px, pnl, close_reason,

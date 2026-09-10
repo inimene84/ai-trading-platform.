@@ -1,0 +1,520 @@
+{
+  "id": "6iwhoCDJYvSqgMoe",
+  "name": "19 - QuantumTrade PublicAPI Phase2 Keyed",
+  "active": true,
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## QuantumTrade PublicAPI Phase 2 (Keyed stubs)\n\n**Status:** Credential shells use placeholder REPLACE_ME. Workflow stays **inactive**.\nDo not invent real keys. No order/execution nodes.\n\n### Wired sources\n- FRED via `FRED QT`\n- Finnhub via `Finnhub QT`\n- AlphaVantage via `Alpha Vantage QT`\n- TwelveData via `Twelve Data QT`\n- MarketAux via `MarketAux QT`\n- GNews via `GNews QT`\n\n### Invoke\nPOST `qt-publicapi-phase2-19` body `{{\"sources\":\"all\"}}`\n",
+        "height": 420,
+        "width": 480
+      },
+      "id": "sticky-28ec4218",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -640,
+        -208
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "qt-publicapi-phase2-19",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-65396603",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        208
+      ],
+      "webhookId": "whid-1db390dd"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 6
+            }
+          ]
+        }
+      },
+      "id": "cron-03034db6",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        432
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const ALL = [\"FRED\", \"Finnhub\", \"AlphaVantage\", \"TwelveData\", \"MarketAux\", \"GNews\"];\nconst body = $json.body || $json || {};\nlet sources = body.sources !== undefined ? body.sources : (body.source || 'all');\nif (sources === 'all' || sources === true || sources == null) sources = ALL.slice();\nelse if (typeof sources === 'string') sources = sources.split(',').map(s => s.trim()).filter(Boolean);\nelse if (!Array.isArray(sources)) sources = ALL.slice();\nsources = sources.filter(s => ALL.includes(s));\nif (!sources.length) sources = ALL.slice();\nreturn [{ json: { sources, requested_at: new Date().toISOString(), mode: 'phase2-keyed-stubs' } }];\n"
+      },
+      "id": "normalize-370375a2",
+      "name": "Normalize Sources",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        288,
+        288
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://api.stlouisfed.org/fred/series/observations?series_id=GDP&file_type=json",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpQueryAuth",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          },
+          "timeout": 30000
+        }
+      },
+      "id": "fred-d8682d21",
+      "name": "FRED",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        560,
+        288
+      ],
+      "credentials": {
+        "httpQueryAuth": {
+          "id": "EOjuqYw9LCs1Xodr",
+          "name": "FRED QT"
+        }
+      },
+      "continueOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "https://finnhub.io/api/v1/quote?symbol=AAPL",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpQueryAuth",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          },
+          "timeout": 30000
+        }
+      },
+      "id": "finnhu-fed36e7e",
+      "name": "Finnhub",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        800,
+        288
+      ],
+      "credentials": {
+        "httpQueryAuth": {
+          "id": "EfFf7ab6v6yduWfd",
+          "name": "Finnhub QT"
+        }
+      },
+      "continueOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol=IBM",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpQueryAuth",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          },
+          "timeout": 30000
+        }
+      },
+      "id": "alphav-79a91b83",
+      "name": "AlphaVantage",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1040,
+        288
+      ],
+      "credentials": {
+        "httpQueryAuth": {
+          "id": "RfZj6iKdsuE7oY3M",
+          "name": "Alpha Vantage QT"
+        }
+      },
+      "continueOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "https://api.twelvedata.com/quote?symbol=AAPL",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpQueryAuth",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          },
+          "timeout": 30000
+        }
+      },
+      "id": "twelve-06e36c34",
+      "name": "TwelveData",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1280,
+        288
+      ],
+      "credentials": {
+        "httpQueryAuth": {
+          "id": "XWXQph3BnsA0Z3xM",
+          "name": "Twelve Data QT"
+        }
+      },
+      "continueOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "https://api.marketaux.com/v1/news/all?symbols=AAPL&limit=3",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpQueryAuth",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          },
+          "timeout": 30000
+        }
+      },
+      "id": "market-74a44306",
+      "name": "MarketAux",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1520,
+        288
+      ],
+      "credentials": {
+        "httpQueryAuth": {
+          "id": "2knfB9sZaPbL8yDt",
+          "name": "MarketAux QT"
+        }
+      },
+      "continueOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "https://gnews.io/api/v4/top-headlines?lang=en&max=5&topic=business",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpQueryAuth",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          },
+          "timeout": 30000
+        }
+      },
+      "id": "gnews-3506695c",
+      "name": "GNews",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1760,
+        288
+      ],
+      "credentials": {
+        "httpQueryAuth": {
+          "id": "TyZoOQInEmjYvkZ1",
+          "name": "GNews QT"
+        }
+      },
+      "continueOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const ALL = [\"FRED\", \"Finnhub\", \"AlphaVantage\", \"TwelveData\", \"MarketAux\", \"GNews\"];\nconst requested = ($('Normalize Sources').first().json.sources) || ALL;\nconst out = { ok: true, phase: 2, requested_at: $('Normalize Sources').first().json.requested_at,\n  sources_requested: requested, results: {}, errors: {}, note: 'keys may be REPLACE_ME placeholders' };\nfunction trimVal(v) {\n  if (Array.isArray(v)) return { truncated: true, count: v.length, sample: v.slice(0, 3) };\n  if (v && typeof v === 'object') {\n    const keys = Object.keys(v);\n    if (keys.length > 40) {\n      const sample = {}; for (const k of keys.slice(0, 20)) sample[k] = v[k];\n      return { truncated: true, key_count: keys.length, sample };\n    }\n  }\n  return v;\n}\nfor (const name of ALL) {\n  if (!requested.includes(name)) { out.results[name] = { skipped: true }; continue; }\n  try {\n    const item = $(name).first(); const j = item ? item.json : null;\n    if (j && (j.error || j.message) && (j.statusCode || j.status || j.error)) {\n      out.errors[name] = { message: j.message || j.error, status: j.statusCode || j.status };\n      out.results[name] = { error: true };\n    } else { out.results[name] = trimVal(j); }\n  } catch (e) {\n    out.errors[name] = { message: String(e.message || e) };\n    out.results[name] = { error: true };\n  }\n}\nreturn [{ json: out }];\n"
+      },
+      "id": "merge-f46ede33",
+      "name": "Merge Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2000,
+        288
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {}
+      },
+      "id": "respond-a597b40d",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        2240,
+        288
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst res = $input.first().json.results || {};\nconst items = [];\n\n// 1. MarketAux articles & entity sentiment\nconst ma = res.MarketAux;\nif (ma && !ma.skipped && !ma.error && Array.isArray(ma.data)) {\n  for (const art of ma.data.slice(0, 10)) {\n    const scores = [];\n    if (Array.isArray(art.entities)) {\n      for (const ent of art.entities) {\n        if (ent.symbol && typeof ent.sentiment_score === 'number') {\n          const sent = ent.sentiment_score > 0.05 ? 'bullish' : ent.sentiment_score < -0.05 ? 'bearish' : 'neutral';\n          scores.push({\n            pair: ent.symbol,\n            sentiment: sent,\n            score: ent.sentiment_score,\n            confidence: (ent.match_score || 50) / 100,\n            reasoning: art.snippet ? art.snippet.substring(0, 150) : '',\n            model: 'marketaux'\n          });\n          \n          items.push({\n            json: {\n              type: 'sentiment',\n              endpoint: 'http://backend:8000/api/news/sentiment',\n              payload: {\n                symbol: ent.symbol.replace(/[^a-zA-Z0-9]/g, ''),\n                sentiment_score: Math.round(ent.sentiment_score * 100) / 100,\n                impact_score: 0.7,\n                source: 'marketaux',\n                time_horizon: 'medium',\n                topics: ent.industry || 'equities'\n              }\n            }\n          });\n        }\n      }\n    }\n    \n    items.push({\n      json: {\n        type: 'article',\n        endpoint: 'http://backend:8000/api/sentiment/ingest',\n        payload: {\n          source: 'marketaux',\n          external_id: art.uuid || art.url,\n          title: art.title,\n          description: art.description || art.snippet || art.title,\n          url: art.url,\n          published_at: art.published_at || new Date().toISOString(),\n          scores: scores.length > 0 ? scores : undefined,\n          auto_score: scores.length === 0\n        }\n      }\n    });\n  }\n}\n\n// 2. FRED Macro Indicators\nconst fred = res.FRED;\nif (fred && !fred.skipped && !fred.error) {\n  const obs = fred.observations || fred.data || [];\n  if (Array.isArray(obs) && obs.length > 0) {\n    const latest = obs[obs.length - 1];\n    items.push({\n      json: {\n        type: 'calendar',\n        endpoint: 'http://backend:8000/api/calendar/batch',\n        payload: {\n          events: [{\n            time_utc: latest.date ? new Date(latest.date).toISOString() : new Date().toISOString(),\n            currency: 'USD',\n            impact: 'HIGH',\n            title: 'FRED Economic Indicator Observation',\n            actual: String(latest.value || ''),\n            source: 'fred'\n          }]\n        }\n      }\n    });\n  }\n}\n\nreturn items.length > 0 ? items : [{ json: { type: 'empty' } }];\n"
+      },
+      "id": "extract-ingest-wf19",
+      "name": "Extract Ingest Payloads",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2200,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.type }}",
+              "rightValue": "empty",
+              "operator": {
+                "type": "string",
+                "operation": "notEquals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "filter-ingest-wf19",
+      "name": "Filter Non-Empty",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2.2,
+      "position": [
+        2400,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.endpoint }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.payload) }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "={{ $env.BACKEND_API_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "http-ingest-wf19",
+      "name": "HTTP: Ingest to Trading Platform",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2600,
+        480
+      ],
+      "continueOnFail": true
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Normalize Sources",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Normalize Sources",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Sources": {
+      "main": [
+        [
+          {
+            "node": "FRED",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FRED": {
+      "main": [
+        [
+          {
+            "node": "Finnhub",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Finnhub": {
+      "main": [
+        [
+          {
+            "node": "AlphaVantage",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AlphaVantage": {
+      "main": [
+        [
+          {
+            "node": "TwelveData",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "TwelveData": {
+      "main": [
+        [
+          {
+            "node": "MarketAux",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "MarketAux": {
+      "main": [
+        [
+          {
+            "node": "GNews",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GNews": {
+      "main": [
+        [
+          {
+            "node": "Merge Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Results": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Extract Ingest Payloads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Ingest Payloads": {
+      "main": [
+        [
+          {
+            "node": "Filter Non-Empty",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Non-Empty": {
+      "main": [
+        [
+          {
+            "node": "HTTP: Ingest to Trading Platform",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": true,
+    "binaryMode": "separate"
+  },
+  "staticData": {
+    "node:Schedule Trigger": {
+      "recurrenceRules": [
+        0
+      ],
+      "recurrenceRuleSignatures": [
+        "hours:6"
+      ]
+    }
+  },
+  "meta": null,
+  "pinData": {},
+  "versionId": "283c4fa5-5e7c-4314-9a55-25c2b1cd3e5a",
+  "activeVersionId": "283c4fa5-5e7c-4314-9a55-25c2b1cd3e5a",
+  "triggerCount": 2
+}

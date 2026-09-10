@@ -1,0 +1,977 @@
+{
+  "id": "J7KQNf1QxVGNwHAf",
+  "name": "18 - QuantumTrade PublicAPI Research Aggregator",
+  "active": true,
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## QuantumTrade PublicAPI Research Aggregator (Phase 1)\n\n**Status:** ACTIVE. OOM fix applied (exec 43379).\n\n### OOM mitigations\n- Coinpaprika: `/v1/tickers/btc-bitcoin` only (full `/tickers` was multi-MB OOM). eth/sol can be added later as separate small nodes.\n- SEC_EDGAR: Apple sample `CIK0000320193.json` (not full company_tickers.json).\n- Each HTTP is followed by a Slim Code node named like the source; Merge reads ONLY Code nodes (never raw HTTP via `$()`).\n\n### Phase 1 sources (wired)\n1. CoinGecko\n2. Coinpaprika\n3. DefiLlama\n4. Frankfurter\n5. CurrencyAPI\n6. Econdb\n7. Helious\n8. FuturesClock\n9. TheCalendar\n10. SEC_EDGAR\n11. OpenMeteo\n12. Noozra\n\n### Phase 2 (waiting for keys)\nFRED, Finnhub, Alpha Vantage, Twelve Data, MarketAux, GNews \u2014 see workflow 19 stubs.\nDo **not** invent API keys. No order/execution nodes.\n\n### Invoke\nPOST webhook path `qt-publicapi-research-18`\nBody: `{\"sources\":\"all\"}` or subset list. Optional disabled cron every 6h.\n",
+        "height": 620,
+        "width": 480
+      },
+      "id": "sticky-d9305a1e",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -640,
+        -208
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "qt-publicapi-research-18",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-329e1b44",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        208
+      ],
+      "webhookId": "whid-e6dfb1ac"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 6
+            }
+          ]
+        }
+      },
+      "id": "cron-417c23a2",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        432
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const ALL = [\"CoinGecko\", \"Coinpaprika\", \"DefiLlama\", \"Frankfurter\", \"CurrencyAPI\", \"Econdb\", \"Helious\", \"FuturesClock\", \"TheCalendar\", \"SEC_EDGAR\", \"OpenMeteo\", \"Noozra\"];\nconst body = $json.body || $json || {};\nlet sources = body.sources !== undefined ? body.sources : (body.source || 'all');\nif (sources === 'all' || sources === true || sources == null) sources = ALL.slice();\nelse if (typeof sources === 'string') sources = sources.split(',').map(s => s.trim()).filter(Boolean);\nelse if (!Array.isArray(sources)) sources = ALL.slice();\nsources = sources.filter(s => ALL.includes(s));\nif (!sources.length) sources = ALL.slice();\nreturn [{ json: { sources, requested_at: new Date().toISOString(), mode: 'phase1-public' } }];\n"
+      },
+      "id": "normalize-88765377",
+      "name": "Normalize Sources",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        288,
+        288
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {}
+      },
+      "id": "respond-c4851623",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        5568,
+        288
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,solana&vs_currencies=usd&include_24hr_change=true",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          },
+          "timeout": 30000
+        }
+      },
+      "id": "coinge-e0acdb8a",
+      "name": "HTTP CoinGecko",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        560,
+        288
+      ],
+      "continueOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "https://api.coinpaprika.com/v1/tickers/btc-bitcoin",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          },
+          "timeout": 30000
+        }
+      },
+      "id": "coinpa-c29b322e",
+      "name": "HTTP Coinpaprika",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        960,
+        288
+      ],
+      "continueOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "https://api.llama.fi/v2/chains",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          },
+          "timeout": 30000
+        }
+      },
+      "id": "defill-fe585fd3",
+      "name": "HTTP DefiLlama",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1360,
+        288
+      ],
+      "continueOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "https://api.frankfurter.app/latest?from=USD&to=EUR,GBP,JPY,CHF",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          },
+          "timeout": 30000
+        }
+      },
+      "id": "frankf-5b3d6ecc",
+      "name": "HTTP Frankfurter",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1760,
+        288
+      ],
+      "continueOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/usd.json",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          },
+          "timeout": 30000
+        }
+      },
+      "id": "curren-a5e7f69d",
+      "name": "HTTP CurrencyAPI",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2160,
+        288
+      ],
+      "continueOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "https://www.econdb.com/api/series/?page_size=5&format=json",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          },
+          "timeout": 30000
+        }
+      },
+      "id": "econdb-7998ee8e",
+      "name": "HTTP Econdb",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2560,
+        288
+      ],
+      "continueOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "https://api.helious.io/v1/series",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          },
+          "timeout": 30000
+        }
+      },
+      "id": "heliou-eca523e6",
+      "name": "HTTP Helious",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2960,
+        288
+      ],
+      "continueOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "https://futuresclock.com/data/trading-hours.json",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          },
+          "timeout": 30000
+        }
+      },
+      "id": "future-7fced01c",
+      "name": "HTTP FuturesClock",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3360,
+        288
+      ],
+      "continueOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "https://the-calendar.net/api/finance/fomc/2026.json",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          },
+          "timeout": 30000
+        }
+      },
+      "id": "thecal-c548e67b",
+      "name": "HTTP TheCalendar",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3760,
+        288
+      ],
+      "continueOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "https://data.sec.gov/submissions/CIK0000320193.json",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "QuantumTradeResearch/1.0 (contact@thorinvest.org)"
+            },
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          },
+          "timeout": 30000
+        }
+      },
+      "id": "sec_ed-04e31bd9",
+      "name": "HTTP SEC_EDGAR",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4160,
+        288
+      ],
+      "continueOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "https://api.open-meteo.com/v1/forecast?latitude=40.71&longitude=-74.01&current=temperature_2m,wind_speed_10m,relative_humidity_2m",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          },
+          "timeout": 30000
+        }
+      },
+      "id": "openme-e07547cd",
+      "name": "HTTP OpenMeteo",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4560,
+        288
+      ],
+      "continueOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "https://noozra.com/api/articles?category=business&limit=10",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          },
+          "timeout": 30000
+        }
+      },
+      "id": "noozra-6e7c4cbd",
+      "name": "HTTP Noozra",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4960,
+        288
+      ],
+      "continueOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const name = 'CoinGecko';\nlet j = $input.first().json;\nfunction trim(v){\n  if (Array.isArray(v)) return {truncated:true, count:v.length, sample:v.slice(0,8)};\n  if (v && typeof v==='object'){\n    const keys=Object.keys(v);\n    if (keys.length>30){\n      const s={};\n      for (const k of keys.slice(0,20)) {\n        const val=v[k];\n        s[k]= (typeof val==='object'&&val&&!Array.isArray(val)) ? '{\u2026}' : (Array.isArray(val)?`[${val.length}]`:val);\n      }\n      return {truncated:true,key_count:keys.length,sample:s};\n    }\n    const out={};\n    for (const k of keys){\n      const val=v[k];\n      if (Array.isArray(val)) out[k]={count:val.length,sample:val.slice(0,5)};\n      else out[k]=val;\n    }\n    return out;\n  }\n  return v;\n}\nconst ok = !(j && (j.error || j.message) && (j.statusCode || j.status || j.error));\nreturn [{json:{source:name, ok:ok, data:trim(j)}}];\n"
+      },
+      "id": "slim-682c34fc",
+      "name": "CoinGecko",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        768,
+        288
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const name = 'Coinpaprika';\nlet j = $input.first().json;\nfunction trim(v){\n  if (Array.isArray(v)) return {truncated:true, count:v.length, sample:v.slice(0,8)};\n  if (v && typeof v==='object'){\n    const keys=Object.keys(v);\n    if (keys.length>30){\n      const s={};\n      for (const k of keys.slice(0,20)) {\n        const val=v[k];\n        s[k]= (typeof val==='object'&&val&&!Array.isArray(val)) ? '{\u2026}' : (Array.isArray(val)?`[${val.length}]`:val);\n      }\n      return {truncated:true,key_count:keys.length,sample:s};\n    }\n    const out={};\n    for (const k of keys){\n      const val=v[k];\n      if (Array.isArray(val)) out[k]={count:val.length,sample:val.slice(0,5)};\n      else out[k]=val;\n    }\n    return out;\n  }\n  return v;\n}\nconst ok = !(j && (j.error || j.message) && (j.statusCode || j.status || j.error));\nreturn [{json:{source:name, ok:ok, data:trim(j)}}];\n"
+      },
+      "id": "slim-f7c73034",
+      "name": "Coinpaprika",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1168,
+        288
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const name = 'DefiLlama';\nlet j = $input.first().json;\nfunction trim(v){\n  if (Array.isArray(v)) return {truncated:true, count:v.length, sample:v.slice(0,8)};\n  if (v && typeof v==='object'){\n    const keys=Object.keys(v);\n    if (keys.length>30){\n      const s={};\n      for (const k of keys.slice(0,20)) {\n        const val=v[k];\n        s[k]= (typeof val==='object'&&val&&!Array.isArray(val)) ? '{\u2026}' : (Array.isArray(val)?`[${val.length}]`:val);\n      }\n      return {truncated:true,key_count:keys.length,sample:s};\n    }\n    const out={};\n    for (const k of keys){\n      const val=v[k];\n      if (Array.isArray(val)) out[k]={count:val.length,sample:val.slice(0,5)};\n      else out[k]=val;\n    }\n    return out;\n  }\n  return v;\n}\nconst ok = !(j && (j.error || j.message) && (j.statusCode || j.status || j.error));\nreturn [{json:{source:name, ok:ok, data:trim(j)}}];\n"
+      },
+      "id": "slim-c22d23c0",
+      "name": "DefiLlama",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1568,
+        288
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const name = 'Frankfurter';\nlet j = $input.first().json;\nfunction trim(v){\n  if (Array.isArray(v)) return {truncated:true, count:v.length, sample:v.slice(0,8)};\n  if (v && typeof v==='object'){\n    const keys=Object.keys(v);\n    if (keys.length>30){\n      const s={};\n      for (const k of keys.slice(0,20)) {\n        const val=v[k];\n        s[k]= (typeof val==='object'&&val&&!Array.isArray(val)) ? '{\u2026}' : (Array.isArray(val)?`[${val.length}]`:val);\n      }\n      return {truncated:true,key_count:keys.length,sample:s};\n    }\n    const out={};\n    for (const k of keys){\n      const val=v[k];\n      if (Array.isArray(val)) out[k]={count:val.length,sample:val.slice(0,5)};\n      else out[k]=val;\n    }\n    return out;\n  }\n  return v;\n}\nconst ok = !(j && (j.error || j.message) && (j.statusCode || j.status || j.error));\nreturn [{json:{source:name, ok:ok, data:trim(j)}}];\n"
+      },
+      "id": "slim-bbbdbdf3",
+      "name": "Frankfurter",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1968,
+        288
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const name = 'CurrencyAPI';\nlet j = $input.first().json;\nfunction trim(v){\n  if (Array.isArray(v)) return {truncated:true, count:v.length, sample:v.slice(0,8)};\n  if (v && typeof v==='object'){\n    const keys=Object.keys(v);\n    if (keys.length>30){\n      const s={};\n      for (const k of keys.slice(0,20)) {\n        const val=v[k];\n        s[k]= (typeof val==='object'&&val&&!Array.isArray(val)) ? '{\u2026}' : (Array.isArray(val)?`[${val.length}]`:val);\n      }\n      return {truncated:true,key_count:keys.length,sample:s};\n    }\n    const out={};\n    for (const k of keys){\n      const val=v[k];\n      if (Array.isArray(val)) out[k]={count:val.length,sample:val.slice(0,5)};\n      else out[k]=val;\n    }\n    return out;\n  }\n  return v;\n}\nconst ok = !(j && (j.error || j.message) && (j.statusCode || j.status || j.error));\nreturn [{json:{source:name, ok:ok, data:trim(j)}}];\n"
+      },
+      "id": "slim-abbf8f27",
+      "name": "CurrencyAPI",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2368,
+        288
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const name = 'Econdb';\nlet j = $input.first().json;\nfunction trim(v){\n  if (Array.isArray(v)) return {truncated:true, count:v.length, sample:v.slice(0,8)};\n  if (v && typeof v==='object'){\n    const keys=Object.keys(v);\n    if (keys.length>30){\n      const s={};\n      for (const k of keys.slice(0,20)) {\n        const val=v[k];\n        s[k]= (typeof val==='object'&&val&&!Array.isArray(val)) ? '{\u2026}' : (Array.isArray(val)?`[${val.length}]`:val);\n      }\n      return {truncated:true,key_count:keys.length,sample:s};\n    }\n    const out={};\n    for (const k of keys){\n      const val=v[k];\n      if (Array.isArray(val)) out[k]={count:val.length,sample:val.slice(0,5)};\n      else out[k]=val;\n    }\n    return out;\n  }\n  return v;\n}\nconst ok = !(j && (j.error || j.message) && (j.statusCode || j.status || j.error));\nreturn [{json:{source:name, ok:ok, data:trim(j)}}];\n"
+      },
+      "id": "slim-00d3046a",
+      "name": "Econdb",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2768,
+        288
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const name = 'Helious';\nlet j = $input.first().json;\nfunction trim(v){\n  if (Array.isArray(v)) return {truncated:true, count:v.length, sample:v.slice(0,8)};\n  if (v && typeof v==='object'){\n    const keys=Object.keys(v);\n    if (keys.length>30){\n      const s={};\n      for (const k of keys.slice(0,20)) {\n        const val=v[k];\n        s[k]= (typeof val==='object'&&val&&!Array.isArray(val)) ? '{\u2026}' : (Array.isArray(val)?`[${val.length}]`:val);\n      }\n      return {truncated:true,key_count:keys.length,sample:s};\n    }\n    const out={};\n    for (const k of keys){\n      const val=v[k];\n      if (Array.isArray(val)) out[k]={count:val.length,sample:val.slice(0,5)};\n      else out[k]=val;\n    }\n    return out;\n  }\n  return v;\n}\nconst ok = !(j && (j.error || j.message) && (j.statusCode || j.status || j.error));\nreturn [{json:{source:name, ok:ok, data:trim(j)}}];\n"
+      },
+      "id": "slim-1284355e",
+      "name": "Helious",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3168,
+        288
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const name = 'FuturesClock';\nlet j = $input.first().json;\nfunction trim(v){\n  if (Array.isArray(v)) return {truncated:true, count:v.length, sample:v.slice(0,8)};\n  if (v && typeof v==='object'){\n    const keys=Object.keys(v);\n    if (keys.length>30){\n      const s={};\n      for (const k of keys.slice(0,20)) {\n        const val=v[k];\n        s[k]= (typeof val==='object'&&val&&!Array.isArray(val)) ? '{\u2026}' : (Array.isArray(val)?`[${val.length}]`:val);\n      }\n      return {truncated:true,key_count:keys.length,sample:s};\n    }\n    const out={};\n    for (const k of keys){\n      const val=v[k];\n      if (Array.isArray(val)) out[k]={count:val.length,sample:val.slice(0,5)};\n      else out[k]=val;\n    }\n    return out;\n  }\n  return v;\n}\nconst ok = !(j && (j.error || j.message) && (j.statusCode || j.status || j.error));\nreturn [{json:{source:name, ok:ok, data:trim(j)}}];\n"
+      },
+      "id": "slim-157e37eb",
+      "name": "FuturesClock",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3568,
+        288
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const name = 'TheCalendar';\nlet j = $input.first().json;\nfunction trim(v){\n  if (Array.isArray(v)) return {truncated:true, count:v.length, sample:v.slice(0,8)};\n  if (v && typeof v==='object'){\n    const keys=Object.keys(v);\n    if (keys.length>30){\n      const s={};\n      for (const k of keys.slice(0,20)) {\n        const val=v[k];\n        s[k]= (typeof val==='object'&&val&&!Array.isArray(val)) ? '{\u2026}' : (Array.isArray(val)?`[${val.length}]`:val);\n      }\n      return {truncated:true,key_count:keys.length,sample:s};\n    }\n    const out={};\n    for (const k of keys){\n      const val=v[k];\n      if (Array.isArray(val)) out[k]={count:val.length,sample:val.slice(0,5)};\n      else out[k]=val;\n    }\n    return out;\n  }\n  return v;\n}\nconst ok = !(j && (j.error || j.message) && (j.statusCode || j.status || j.error));\nreturn [{json:{source:name, ok:ok, data:trim(j)}}];\n"
+      },
+      "id": "slim-f87aa406",
+      "name": "TheCalendar",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3968,
+        288
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const name = 'SEC_EDGAR';\nlet j = $input.first().json;\nfunction trim(v){\n  if (Array.isArray(v)) return {truncated:true, count:v.length, sample:v.slice(0,8)};\n  if (v && typeof v==='object'){\n    const keys=Object.keys(v);\n    if (keys.length>30){\n      const s={};\n      for (const k of keys.slice(0,20)) {\n        const val=v[k];\n        s[k]= (typeof val==='object'&&val&&!Array.isArray(val)) ? '{\u2026}' : (Array.isArray(val)?`[${val.length}]`:val);\n      }\n      return {truncated:true,key_count:keys.length,sample:s};\n    }\n    const out={};\n    for (const k of keys){\n      const val=v[k];\n      if (Array.isArray(val)) out[k]={count:val.length,sample:val.slice(0,5)};\n      else out[k]=val;\n    }\n    return out;\n  }\n  return v;\n}\nconst ok = !(j && (j.error || j.message) && (j.statusCode || j.status || j.error));\nreturn [{json:{source:name, ok:ok, data:trim(j)}}];\n"
+      },
+      "id": "slim-2bc95d15",
+      "name": "SEC_EDGAR",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4368,
+        288
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const name = 'OpenMeteo';\nlet j = $input.first().json;\nfunction trim(v){\n  if (Array.isArray(v)) return {truncated:true, count:v.length, sample:v.slice(0,8)};\n  if (v && typeof v==='object'){\n    const keys=Object.keys(v);\n    if (keys.length>30){\n      const s={};\n      for (const k of keys.slice(0,20)) {\n        const val=v[k];\n        s[k]= (typeof val==='object'&&val&&!Array.isArray(val)) ? '{\u2026}' : (Array.isArray(val)?`[${val.length}]`:val);\n      }\n      return {truncated:true,key_count:keys.length,sample:s};\n    }\n    const out={};\n    for (const k of keys){\n      const val=v[k];\n      if (Array.isArray(val)) out[k]={count:val.length,sample:val.slice(0,5)};\n      else out[k]=val;\n    }\n    return out;\n  }\n  return v;\n}\nconst ok = !(j && (j.error || j.message) && (j.statusCode || j.status || j.error));\nreturn [{json:{source:name, ok:ok, data:trim(j)}}];\n"
+      },
+      "id": "slim-be34e64d",
+      "name": "OpenMeteo",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4768,
+        288
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const name = 'Noozra';\nlet j = $input.first().json;\nfunction trim(v){\n  if (Array.isArray(v)) return {truncated:true, count:v.length, sample:v.slice(0,8)};\n  if (v && typeof v==='object'){\n    const keys=Object.keys(v);\n    if (keys.length>30){\n      const s={};\n      for (const k of keys.slice(0,20)) {\n        const val=v[k];\n        s[k]= (typeof val==='object'&&val&&!Array.isArray(val)) ? '{\u2026}' : (Array.isArray(val)?`[${val.length}]`:val);\n      }\n      return {truncated:true,key_count:keys.length,sample:s};\n    }\n    const out={};\n    for (const k of keys){\n      const val=v[k];\n      if (Array.isArray(val)) out[k]={count:val.length,sample:val.slice(0,5)};\n      else out[k]=val;\n    }\n    return out;\n  }\n  return v;\n}\nconst ok = !(j && (j.error || j.message) && (j.statusCode || j.status || j.error));\nreturn [{json:{source:name, ok:ok, data:trim(j)}}];\n"
+      },
+      "id": "slim-7e6718d6",
+      "name": "Noozra",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        5168,
+        288
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const ALL = [\"CoinGecko\", \"Coinpaprika\", \"DefiLlama\", \"Frankfurter\", \"CurrencyAPI\", \"Econdb\", \"Helious\", \"FuturesClock\", \"TheCalendar\", \"SEC_EDGAR\", \"OpenMeteo\", \"Noozra\"];\nconst requested = ($('Normalize Sources').first().json.sources) || ALL;\nconst out = { ok: true, phase: 1, oom_fix: true, requested_at: $('Normalize Sources').first().json.requested_at,\n  sources_requested: requested, results: {}, errors: {} };\nfor (const name of ALL) {\n  if (!requested.includes(name)) { out.results[name] = { skipped: true }; continue; }\n  try {\n    const item = $(name).first(); const j = item ? item.json : null;\n    if (!j) { out.results[name] = { error: true }; out.errors[name] = { message: 'no data' }; continue; }\n    if (j.ok === false || (j.data && (j.data.error || j.data.message) && (j.data.statusCode || j.data.status || j.data.error))) {\n      const d = j.data || j;\n      out.errors[name] = { message: d.message || d.error || 'request failed', status: d.statusCode || d.status };\n      out.results[name] = { error: true };\n    } else {\n      out.results[name] = j.data !== undefined ? j.data : j;\n    }\n  } catch (e) {\n    out.errors[name] = { message: String(e.message || e) };\n    out.results[name] = { error: true };\n  }\n}\nreturn [{ json: out }];\n"
+      },
+      "id": "merge-0f3b8e8a",
+      "name": "Merge Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        5360,
+        288
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst res = $input.first().json.results || {};\nconst items = [];\n\n// 1. CoinGecko crypto sentiment\nconst cg = res.CoinGecko;\nif (cg && !cg.skipped && !cg.error) {\n  const map = [\n    { key: 'bitcoin', symbol: 'BTCUSDT' },\n    { key: 'ethereum', symbol: 'ETHUSDT' },\n    { key: 'solana', symbol: 'SOLUSDT' }\n  ];\n  for (const m of map) {\n    const d = cg[m.key];\n    if (d && typeof d.usd_24h_change === 'number') {\n      const chg = d.usd_24h_change;\n      const score = Math.max(-1, Math.min(1, chg / 5.0));\n      items.push({\n        json: {\n          type: 'sentiment',\n          endpoint: 'http://backend:8000/api/news/sentiment',\n          payload: {\n            symbol: m.symbol,\n            sentiment_score: Math.round(score * 100) / 100,\n            impact_score: 0.6,\n            source: 'coingecko',\n            time_horizon: 'short',\n            topics: 'crypto,macro_scan'\n          }\n        }\n      });\n    }\n  }\n}\n\n// 2. Frankfurter FX rates\nconst ff = res.Frankfurter;\nif (ff && !ff.skipped && !ff.error && ff.rates) {\n  const rates = ff.rates;\n  const events = [];\n  for (const [curr, rate] of Object.entries(rates)) {\n    events.push({\n      time_utc: new Date().toISOString(),\n      currency: curr,\n      impact: 'LOW',\n      title: `USD/${curr} Reference Rate: ${rate}`,\n      forecast: String(rate),\n      previous: '',\n      source: 'frankfurter'\n    });\n  }\n  if (events.length > 0) {\n    items.push({\n      json: {\n        type: 'calendar',\n        endpoint: 'http://backend:8000/api/calendar/batch',\n        payload: { events }\n      }\n    });\n  }\n}\n\nreturn items.length > 0 ? items : [{ json: { type: 'empty' } }];\n"
+      },
+      "id": "extract-ingest-wf18",
+      "name": "Extract Ingest Payloads",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        5568,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.type }}",
+              "rightValue": "empty",
+              "operator": {
+                "type": "string",
+                "operation": "notEquals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "filter-ingest-wf18",
+      "name": "Filter Non-Empty",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2.2,
+      "position": [
+        5760,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.endpoint }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.payload) }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "={{ $env.BACKEND_API_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "http-ingest-wf18",
+      "name": "HTTP: Ingest to Trading Platform",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        5952,
+        480
+      ],
+      "continueOnFail": true
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Normalize Sources",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Normalize Sources",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Results": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Extract Ingest Payloads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Sources": {
+      "main": [
+        [
+          {
+            "node": "HTTP CoinGecko",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP CoinGecko": {
+      "main": [
+        [
+          {
+            "node": "CoinGecko",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CoinGecko": {
+      "main": [
+        [
+          {
+            "node": "HTTP Coinpaprika",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Coinpaprika": {
+      "main": [
+        [
+          {
+            "node": "Coinpaprika",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Coinpaprika": {
+      "main": [
+        [
+          {
+            "node": "HTTP DefiLlama",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP DefiLlama": {
+      "main": [
+        [
+          {
+            "node": "DefiLlama",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DefiLlama": {
+      "main": [
+        [
+          {
+            "node": "HTTP Frankfurter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Frankfurter": {
+      "main": [
+        [
+          {
+            "node": "Frankfurter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Frankfurter": {
+      "main": [
+        [
+          {
+            "node": "HTTP CurrencyAPI",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP CurrencyAPI": {
+      "main": [
+        [
+          {
+            "node": "CurrencyAPI",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CurrencyAPI": {
+      "main": [
+        [
+          {
+            "node": "HTTP Econdb",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Econdb": {
+      "main": [
+        [
+          {
+            "node": "Econdb",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Econdb": {
+      "main": [
+        [
+          {
+            "node": "HTTP Helious",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Helious": {
+      "main": [
+        [
+          {
+            "node": "Helious",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Helious": {
+      "main": [
+        [
+          {
+            "node": "HTTP FuturesClock",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP FuturesClock": {
+      "main": [
+        [
+          {
+            "node": "FuturesClock",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FuturesClock": {
+      "main": [
+        [
+          {
+            "node": "HTTP TheCalendar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP TheCalendar": {
+      "main": [
+        [
+          {
+            "node": "TheCalendar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "TheCalendar": {
+      "main": [
+        [
+          {
+            "node": "HTTP SEC_EDGAR",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP SEC_EDGAR": {
+      "main": [
+        [
+          {
+            "node": "SEC_EDGAR",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SEC_EDGAR": {
+      "main": [
+        [
+          {
+            "node": "HTTP OpenMeteo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP OpenMeteo": {
+      "main": [
+        [
+          {
+            "node": "OpenMeteo",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenMeteo": {
+      "main": [
+        [
+          {
+            "node": "HTTP Noozra",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Noozra": {
+      "main": [
+        [
+          {
+            "node": "Noozra",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Noozra": {
+      "main": [
+        [
+          {
+            "node": "Merge Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Ingest Payloads": {
+      "main": [
+        [
+          {
+            "node": "Filter Non-Empty",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Non-Empty": {
+      "main": [
+        [
+          {
+            "node": "HTTP: Ingest to Trading Platform",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": true,
+    "binaryMode": "separate"
+  },
+  "staticData": {
+    "node:Schedule Trigger": {
+      "recurrenceRules": [
+        0
+      ],
+      "recurrenceRuleSignatures": [
+        "hours:6"
+      ]
+    }
+  },
+  "meta": null,
+  "pinData": {},
+  "versionId": "ffad6c74-1726-42b8-b2a2-21b1f38ef7ef",
+  "activeVersionId": "ffad6c74-1726-42b8-b2a2-21b1f38ef7ef",
+  "triggerCount": 2
+}

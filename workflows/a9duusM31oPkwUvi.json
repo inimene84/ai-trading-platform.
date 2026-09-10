@@ -1,0 +1,1358 @@
+{
+  "id": "a9duusM31oPkwUvi",
+  "name": "1.-Main agent (Hourly Scanner)",
+  "active": true,
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -416,
+        368
+      ],
+      "name": "When clicking \u2018Execute workflow\u2019",
+      "id": "ca46b09d-9f40-4c8c-9575-6b25e99ab90f"
+    },
+    {
+      "parameters": {
+        "url": "https://api.coingecko.com/api/v3/search/trending",
+        "options": {}
+      },
+      "name": "Get Trending",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        32,
+        16
+      ],
+      "typeVersion": 1,
+      "id": "f0cb984f-c2b0-4ffd-babd-9aa18a1daed1"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 2
+            }
+          ]
+        }
+      },
+      "name": "Every Hour",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "position": [
+        -416,
+        144
+      ],
+      "typeVersion": 1.2,
+      "id": "2c076f90-c98e-422f-868f-2d251d08a890"
+    },
+    {
+      "parameters": {
+        "url": "https://pro-api.coinmarketcap.com/v1/cryptocurrency/listings/latest",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "limit",
+              "value": "200"
+            },
+            {
+              "name": "sort",
+              "value": "percent_change_24h"
+            },
+            {
+              "name": "sort_dir",
+              "value": "desc"
+            },
+            {
+              "name": "convert",
+              "value": "USD"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Fetch Top 200 Gainers from CMC1",
+      "type": "n8n-nodes-base.httpRequest",
+      "position": [
+        32,
+        288
+      ],
+      "typeVersion": 4.3,
+      "id": "16a6b26a-2f65-4380-86cc-6f52cc516589",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "MdKY8WfrdRYeDsho",
+          "name": "CMC"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get exchange info from input[0] and CMC data from input[1]\nconst allInputs = $input.all();\nconst exchangeInfo = allInputs[0]?.json || {};\nconst cmcDataNode = allInputs[allInputs.length - 1];\n\nconst symbols = exchangeInfo.symbols || [];\nconst futuresSymbols = new Set(\n  symbols\n    .filter(s => s.quoteAsset === 'USDT' && s.status === 'TRADING')\n    .map(s => s.symbol)\n);\n\nconst cryptoData = cmcDataNode?.json?.data || [];\n\nconst MIN_PERCENT_CHANGE = 5;\nconst MIN_MARKET_CAP = 5000000;\nconst MIN_VOLUME = 500000;\n\nconst filteredTokens = [];\n\nfor (const token of cryptoData) {\n  const q = token.quote?.USD;\n  if (!q) continue;\n\n  const percentChange = q.percent_change_24h || 0;\n  const marketCap = q.market_cap || 0;\n  const volume = q.volume_24h || 0;\n  const price = q.price || 0;\n\n  if (percentChange >= MIN_PERCENT_CHANGE &&\n      marketCap >= MIN_MARKET_CAP &&\n      volume >= MIN_VOLUME &&\n      price > 0) {\n\n    const symbol = token.symbol.toUpperCase();\n    const binancePair = `${symbol}USDT`;\n\n    if (!futuresSymbols.has(binancePair)) continue;\n\n    filteredTokens.push({\n      json: {\n        name: token.name,\n        symbol: symbol,\n        binancePair: binancePair,\n        price: price,\n        percent_change_1h: q.percent_change_1h || 0,\n        percent_change_24h: percentChange,\n        percent_change_7d: q.percent_change_7d || 0,\n        market_cap: marketCap,\n        market_cap_rank: token.cmc_rank || 0,\n        volume_24h: volume,\n        volume_change_24h: q.volume_change_24h || 0,\n        tags: token.tags || [],\n        source: 'CMC',\n        market: 'FUTURES'\n      }\n    });\n  }\n}\n\nreturn filteredTokens;\n"
+      },
+      "name": "Filter Top Gainers (40% gain, $10M MC, $1M vol)1",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        464,
+        304
+      ],
+      "typeVersion": 2,
+      "id": "db395d1d-a182-48c7-8e22-1e15f9c4b946"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\n\nconst sectorMapping = {\n  'ai': ['ai', 'artificial-intelligence', 'ai-big-data', 'gpt', 'machine-learning', 'large-language-model'],\n  'depin': ['depin', 'infrastructure', 'storage', 'oracle', 'iot', 'wireless'],\n  'defi': ['defi', 'dex', 'lending', 'yield-farming', 'derivatives', 'stablecoin', 'amm', 'liquid-staking'],\n  'gaming': ['gaming', 'metaverse', 'nft', 'play-to-earn', 'collectibles', 'gamefi'],\n  'rwa': ['rwa', 'real-world-assets', 'tokenized-assets', 'real-estate'],\n  'layer1': ['layer-1', 'platform', 'smart-contracts', 'pos', 'pow'],\n  'layer2': ['layer-2', 'scaling', 'rollup', 'zk', 'optimistic'],\n  'meme': ['meme', 'memes', 'dog-themed', 'cat-themed', 'animal'],\n  'infrastructure': ['oracle', 'data', 'privacy', 'interoperability', 'bridge', 'cross-chain'],\n  'social': ['social', 'dao', 'governance', 'identity'],\n  'payments': ['payments', 'remittance', 'currency', 'stablecoin']\n};\n\nfunction determineSector(tags) {\n  if (!tags || tags.length === 0) return 'other';\n  for (const [sector, keywords] of Object.entries(sectorMapping)) {\n    for (const tag of tags) {\n      const t = (typeof tag === 'string' ? tag : tag.slug || '').toLowerCase();\n      for (const kw of keywords) {\n        if (t.includes(kw)) return sector;\n      }\n    }\n  }\n  return 'other';\n}\n\n// Assign sectors\nconst tokensWithSectors = items.map(item => ({\n  ...item.json,\n  sector: determineSector(item.json.tags)\n}));\n\n// Group by sector\nconst sectorGroups = {};\nfor (const tkn of tokensWithSectors) {\n  if (!sectorGroups[tkn.sector]) sectorGroups[tkn.sector] = [];\n  sectorGroups[tkn.sector].push(tkn);\n}\n\n// Build sector stats\nconst sectorStats = Object.entries(sectorGroups).map(([sector, tokens]) => {\n  const avgGain = (tokens.reduce((s, t) => s + t.percent_change_24h, 0) / tokens.length).toFixed(2);\n  const totalVolume = tokens.reduce((s, t) => s + t.volume_24h, 0);\n  return {\n    sector,\n    count: tokens.length,\n    avgGain: parseFloat(avgGain),\n    totalVolume,\n    tokens: tokens.sort((a, b) => b.percent_change_24h - a.percent_change_24h)\n  };\n}).sort((a, b) => b.avgGain - a.avgGain);\n\n// Return single item with all data for the Main Agent\nreturn [{\n  json: {\n    sectorStats,\n    allTokens: tokensWithSectors,\n    totalTokensFound: tokensWithSectors.length,\n    source: items[0]?.json?.source || 'CMC',\n    timestamp: new Date().toISOString()\n  }\n}];"
+      },
+      "name": "Group Tokens by Sector1",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        688,
+        304
+      ],
+      "typeVersion": 2,
+      "id": "a7c2b552-bbf8-4df0-a3bf-f6d4c6395d2b"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "name": "Merge Sector Data with Analysis1",
+      "type": "n8n-nodes-base.merge",
+      "position": [
+        912,
+        304
+      ],
+      "typeVersion": 3.2,
+      "id": "2724c6c9-21a7-4a9f-b657-60722b81d93f"
+    },
+    {
+      "parameters": {
+        "endpointUrl": "https://mcp.api.coingecko.com/mcp",
+        "options": {}
+      },
+      "name": "CoinGecko Free MCP",
+      "type": "@n8n/n8n-nodes-langchain.mcpClientTool",
+      "position": [
+        1968,
+        528
+      ],
+      "typeVersion": 1.2,
+      "id": "b94c7f68-481b-403a-9e63-9c2dbbe9c29b"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.message }}{{ $json.content }}",
+        "needsFallback": true,
+        "options": {
+          "systemMessage": "You are the **Crypto Hype & Trend Intelligence Agent** \u2014 the main orchestrator of a multi-layer trading intelligence system.\n\n## YOUR MISSION\nAnalyze trending and high-momentum crypto market data to identify genuine narrative-driven opportunities and dispatch them to deep technical analysis sub-agents.\n\n## INPUT YOU RECEIVE\n- Pre-processed market data: top movers from CoinMarketCap (top 200) + CoinGecko trending coins\n- Sector momentum stats (AI, DeFi, GameFi, RWA, Meme, L1/L2, etc.)\n\n\n## YOUR ANALYSIS TASKS\n1. **Identify the dominant narrative**: Which sector or theme is driving today's pumps? Is it AI tokens, DeFi, memes, a specific chain ecosystem, or a macro event?\n2. **Separate real hype from noise**: Tokens with sector-wide moves (2+ tokens in same sector moving together) signal a NARRATIVE. Single token moves may be pump-and-dump.\n3. **Prioritize candidates**: Rank tokens by: (a) sector momentum confirmation, (b) volume-to-market-cap ratio > 0.1 = high activity, (c) market cap $5M\u2013$500M = sweet spot for explosive moves.\n4. **Cross-reference with CoinGecko trending**: If a token appears in BOTH CMC top gainers AND CoinGecko trending \u2192 HIGH CONVICTION signal.\n\n## WHAT TO DISPATCH TO THE NEXT WORKFLOW\nAfter your analysis, call the Sub Agent Tool with a structured list of the TOP 8\u201312 Binance spot pairs (UPPERCASE, e.g. SOLUSDT) that have the strongest narrative + momentum combination. Send them ONE BY ONE using the sub-workflow tool.\n\n## OUTPUT FORMAT\nAlways produce:\n1. **Narrative Summary** (2-3 sentences): What's the story of today's market?\n2. **Top Picks Table**: Symbol | Sector | 24h% | MC | Conviction Level\n3. **Dispatched pairs**: List of pairs sent to technical analysis\n4. **Risk flags**: Any tokens to avoid (extreme low liquidity, known scam patterns, etc.)\n\n## TOOLS AVAILABLE\n\n- Tavily: Real-time web search for catalyst events\n- CoinGecko MCP: Get additional coin details\n\n## IMPORTANT RULES\n- Only dispatch Binance Futures market pairs (format: SYMBOLUSDT or SYMBOLUSDC)\n- Never dispatch stablecoins or wrapped tokens (USDT, USDC, WBTC, etc.)\n- Always confirm a token trades on Binance futures before dispatching\n- Market cap minimum $1M, volume minimum $200K in last 24h",
+          "enableStreaming": true
+        }
+      },
+      "name": "UI Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "position": [
+        1776,
+        304
+      ],
+      "typeVersion": 3,
+      "id": "f6d66cfd-e257-40d7-a516-750330645e10"
+    },
+    {
+      "parameters": {
+        "model": "grok-4-1-fast-reasoning",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatXAiGrok",
+      "typeVersion": 1,
+      "position": [
+        1584,
+        528
+      ],
+      "name": "xAI Grok Chat Model1",
+      "id": "abf978e1-270a-4708-97da-9badf488a865",
+      "credentials": {
+        "xAiApi": {
+          "id": "ouYLIj5rpi6DRpMe",
+          "name": "xAi account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get exchange info from input[0] and CoinGecko data from input[1]\nconst allInputs = $input.all();\nconst exchangeInfo = allInputs[0]?.json || {};\nconst cgDataNode = allInputs[allInputs.length - 1];\n\nconst symbols = exchangeInfo.symbols || [];\nconst futuresSymbols = new Set(\n  symbols\n    .filter(s => s.quoteAsset === 'USDT' && s.status === 'TRADING')\n    .map(s => s.symbol)\n);\n\nconst coins = cgDataNode?.json?.coins || [];\n\nconst trendingCoins = coins.map((coin, index) => {\n  const item = coin.item;\n  const data = item.data || {};\n  const price = data.price || 0;\n  const priceChange = data.price_change_percentage_24h?.usd || 0;\n  const volume = parseFloat((data.total_volume || '').replace(/[^0-9.]/g, '')) || 0;\n  const marketCap = parseFloat((data.market_cap || '').replace(/[^0-9.]/g, '')) || 0;\n  const symbol = (item.symbol || '').toUpperCase();\n\n  return {\n    rank: index + 1,\n    name: item.name,\n    symbol: symbol,\n    binancePair: `${symbol}USDT`,\n    price: typeof price === 'number' ? price : parseFloat(price) || 0,\n    percent_change_24h: priceChange,\n    market_cap: marketCap,\n    market_cap_rank: item.market_cap_rank || 999,\n    volume_24h: volume,\n    score: item.score || 0,\n    source: 'CoinGecko_Trending',\n    market: 'FUTURES'\n  };\n}).filter(coin => futuresSymbols.has(coin.binancePair));\n\nreturn [{\n  json: {\n    sectorStats: [{\n      sector: 'trending',\n      count: trendingCoins.length,\n      avgGain: trendingCoins.length > 0\n        ? parseFloat((trendingCoins.reduce((s, t) => s + t.percent_change_24h, 0) / trendingCoins.length).toFixed(2))\n        : 0,\n      totalVolume: trendingCoins.reduce((s, t) => s + t.volume_24h, 0),\n      tokens: trendingCoins\n    }],\n    allTokens: trendingCoins,\n    totalTokensFound: trendingCoins.length,\n    source: 'CoinGecko_Trending',\n    timestamp: new Date().toISOString()\n  }\n}];\n"
+      },
+      "name": "Group Tokens by Sector2",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        464,
+        112
+      ],
+      "typeVersion": 2,
+      "id": "b1e11f6d-e979-4479-ae9c-709d96bdb4d9"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get exchange info from input[0] and CoinGecko data from input[1]\nconst allInputs = $input.all();\nconst exchangeInfo = allInputs[0]?.json || {};\nconst cgDataNode = allInputs[allInputs.length - 1];\n\nconst symbols = exchangeInfo.symbols || [];\nconst futuresSymbols = new Set(\n  symbols\n    .filter(s => s.quoteAsset === 'USDT' && s.status === 'TRADING')\n    .map(s => s.symbol)\n);\n\nconst coins = cgDataNode?.json?.coins || [];\n\nconst trendingCoins = coins.map((coin, index) => {\n  const item = coin.item;\n  const data = item.data || {};\n  const price = data.price || 0;\n  const priceChange = data.price_change_percentage_24h?.usd || 0;\n  const volume = parseFloat((data.total_volume || '').replace(/[^0-9.]/g, '')) || 0;\n  const marketCap = parseFloat((data.market_cap || '').replace(/[^0-9.]/g, '')) || 0;\n  const symbol = (item.symbol || '').toUpperCase();\n\n  return {\n    rank: index + 1,\n    name: item.name,\n    symbol: symbol,\n    binancePair: `${symbol}USDT`,\n    price: typeof price === 'number' ? price : parseFloat(price) || 0,\n    percent_change_24h: priceChange,\n    market_cap: marketCap,\n    market_cap_rank: item.market_cap_rank || 999,\n    volume_24h: volume,\n    score: item.score || 0,\n    source: 'CoinGecko_Trending',\n    market: 'FUTURES'\n  };\n}).filter(coin => futuresSymbols.has(coin.binancePair));\n\nreturn [{\n  json: {\n    sectorStats: [{\n      sector: 'trending',\n      count: trendingCoins.length,\n      avgGain: trendingCoins.length > 0\n        ? parseFloat((trendingCoins.reduce((s, t) => s + t.percent_change_24h, 0) / trendingCoins.length).toFixed(2))\n        : 0,\n      totalVolume: trendingCoins.reduce((s, t) => s + t.volume_24h, 0),\n      tokens: trendingCoins\n    }],\n    allTokens: trendingCoins,\n    totalTokensFound: trendingCoins.length,\n    source: 'CoinGecko_Trending',\n    timestamp: new Date().toISOString()\n  }\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        688,
+        496
+      ],
+      "name": "Code in JavaScript",
+      "id": "9882f20f-ab83-447b-bb63-74e18025e659"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get exchange info from input[0] and CoinGecko data from input[1]\nconst allInputs = $input.all();\nconst exchangeInfo = allInputs[0]?.json || {};\nconst cgDataNode = allInputs[allInputs.length - 1];\n\nconst symbols = exchangeInfo.symbols || [];\nconst futuresSymbols = new Set(\n  symbols\n    .filter(s => s.quoteAsset === 'USDT' && s.status === 'TRADING')\n    .map(s => s.symbol)\n);\n\nconst coins = cgDataNode?.json?.coins || [];\n\nconst trendingCoins = coins.map((coin, index) => {\n  const item = coin.item;\n  const data = item.data || {};\n  const price = data.price || 0;\n  const priceChange = data.price_change_percentage_24h?.usd || 0;\n  const volume = parseFloat((data.total_volume || '').replace(/[^0-9.]/g, '')) || 0;\n  const marketCap = parseFloat((data.market_cap || '').replace(/[^0-9.]/g, '')) || 0;\n  const symbol = (item.symbol || '').toUpperCase();\n\n  return {\n    rank: index + 1,\n    name: item.name,\n    symbol: symbol,\n    binancePair: `${symbol}USDT`,\n    price: typeof price === 'number' ? price : parseFloat(price) || 0,\n    percent_change_24h: priceChange,\n    market_cap: marketCap,\n    market_cap_rank: item.market_cap_rank || 999,\n    volume_24h: volume,\n    score: item.score || 0,\n    source: 'CoinGecko_Trending',\n    market: 'FUTURES'\n  };\n}).filter(coin => futuresSymbols.has(coin.binancePair));\n\nreturn [{\n  json: {\n    sectorStats: [{\n      sector: 'trending',\n      count: trendingCoins.length,\n      avgGain: trendingCoins.length > 0\n        ? parseFloat((trendingCoins.reduce((s, t) => s + t.percent_change_24h, 0) / trendingCoins.length).toFixed(2))\n        : 0,\n      totalVolume: trendingCoins.reduce((s, t) => s + t.volume_24h, 0),\n      tokens: trendingCoins\n    }],\n    allTokens: trendingCoins,\n    totalTokensFound: trendingCoins.length,\n    source: 'CoinGecko_Trending',\n    timestamp: new Date().toISOString()\n  }\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        688,
+        112
+      ],
+      "name": "Code in JavaScript1",
+      "id": "423a4f0d-8282-4a06-8e29-9cf81dd00134"
+    },
+    {
+      "parameters": {
+        "query": "Latest crypto news and prices",
+        "options": {}
+      },
+      "type": "@tavily/n8n-nodes-tavily.tavilyTool",
+      "typeVersion": 1,
+      "position": [
+        2096,
+        528
+      ],
+      "name": "Search in Tavily",
+      "id": "3978c433-8b30-4ea6-bbb9-73461100bbc2",
+      "credentials": {
+        "tavilyApi": {
+          "id": "sRbX1VrU96OQta09",
+          "name": "Tavily account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": "google/gemini-2.5-flash",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenRouter",
+      "typeVersion": 1,
+      "position": [
+        16,
+        816
+      ],
+      "name": "OpenRouter Chat Model1",
+      "id": "e50505c2-952d-49f4-9a82-d5a24c2e608e",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\n\n// Collect all tokens from both sources\nlet allTokens = [];\nlet allSectorStats = [];\n\nfor (const item of items) {\n  const data = item.json;\n  if (data.allTokens) allTokens.push(...data.allTokens);\n  if (data.sectorStats) allSectorStats.push(...data.sectorStats);\n}\n\n// Deduplicate by symbol (prefer CMC data if duplicate)\nconst seen = new Set();\nconst dedupedTokens = [];\nfor (const token of allTokens) {\n  if (!seen.has(token.symbol)) {\n    seen.add(token.symbol);\n    dedupedTokens.push(token);\n  }\n}\n\n// Sort by percent_change_24h descending (handle undefined)\ndedupedTokens.sort((a, b) => (b.percent_change_24h || 0) - (a.percent_change_24h || 0));\n\n// Build the prompt context for the Main Agent\nconst top20 = dedupedTokens.slice(0, 20);\nconst binancePairs = [...new Set(dedupedTokens.map(t => t.binancePair).filter(Boolean))];\n\nlet marketSummary = `=== CRYPTO HYPE & TREND SCANNER REPORT ===\\n`;\nmarketSummary += `Generated: ${new Date().toISOString()}\\n`;\nmarketSummary += `Total tokens found: ${dedupedTokens.length}\\n\\n`;\n\nmarketSummary += `--- TOP 20 MOVERS ---\\n`;\nfor (const t of top20) {\n  const change = (t.percent_change_24h || 0).toFixed(2);\n  const mc = ((t.market_cap || 0) / 1e6).toFixed(1);\n  const vol = ((t.volume_24h || 0) / 1e6).toFixed(1);\n  marketSummary += `${t.symbol} (${t.name}): +${change}% | MC: $${mc}M | Vol: $${vol}M | Pair: ${t.binancePair || 'N/A'} | Source: ${t.source}\\n`;\n}\n\n// Sector momentum\nmarketSummary += `\\n--- SECTOR MOMENTUM ---\\n`;\nconst sectorMap = {};\nfor (const t of dedupedTokens) {\n  const s = t.sector || 'trending';\n  if (!sectorMap[s]) sectorMap[s] = [];\n  if (t.percent_change_24h !== undefined && t.percent_change_24h !== null) {\n    sectorMap[s].push(t.percent_change_24h || 0);\n  }\n}\nfor (const [sector, gains] of Object.entries(sectorMap)) {\n  if (gains.length > 0) {\n    const avg = (gains.reduce((a, b) => a + b, 0) / gains.length).toFixed(1);\n    marketSummary += `${sector.toUpperCase()}: ${gains.length} tokens, avg +${avg}%\\n`;\n  } else {\n    marketSummary += `${sector.toUpperCase()}: 0 tokens\\n`;\n  }\n}\n\n// Build AI instructions\nlet aiInstructions = `\\n\\n=== QUANT AI INSTRUCTIONS ===\\n`;\naiInstructions += `You are a Senior Quantitative Crypto Strategist. Your mission: analyze the market data above and generate actionable trading intelligence.\\n\\n`;\n\naiInstructions += `STEP 1 - SCREENER ANALYSIS:\\n`;\naiInstructions += `- Identify which tokens from the TOP 20 are showing genuine breakout momentum (not just low-cap pumps)\\n`;\naiInstructions += `- Look for: volume spike + price acceleration + Binance futures availability\\n`;\naiInstructions += `- Flag any suspicious patterns (artificial pumps, wash trading indicators)\\n\\n`;\n\naiInstructions += `STEP 2 - SECTOR ROTATION SCAN:\\n`;\naiInstructions += `- Analyze which sectors are gaining momentum\\n`;\naiInstructions += `- Cross-reference with broader market narrative (DeFi summer, AI crypto, RWA, etc.)\\n`;\naiInstructions += `- Identify sector leaders vs laggards\\n\\n`;\n\naiInstructions += `STEP 3 - BINANCE FUTURES FILTER:\\n`;\naiInstructions += `- Focus ONLY on tokens with Binance perpetual futures\\n`;\naiInstructions += `- Available pairs: ${binancePairs.slice(0, 20).join(', ')}${binancePairs.length > 20 ? '...' : ''}\\n`;\naiInstructions += `- Priority: high-volume, established pairs over low-cap futures\\n\\n`;\n\naiInstructions += `STEP 4 - WATCHLIST BUILDER:\\n`;\naiInstructions += `Based on your analysis, build a PRIORITY WATCHLIST of 3-5 tokens with:\\n`;\naiInstructions += `1. Strong technical setup (momentum + volume + futures availability)\\n`;\naiInstructions += `2. Clear narrative alignment (sector/theme catalyst)\\n`;\naiInstructions += `3. Risk-adjusted potential (not just highest % gain)\\n`;\naiInstructions += `4. Entry trigger levels (key support/resistance)\\n\\n`;\n\naiInstructions += `OUTPUT FORMAT:\\n`;\naiInstructions += `Return a JSON array like this:\\n`;\naiInstructions += `[{\\n`;\naiInstructions += `  \"symbol\": \"BTCUSDT\",\\n`;\naiInstructions += `  \"reasoning\": \"Breakout above $45k resistance, futures open interest +15%, sector rotation into large caps\",\\n`;\naiInstructions += `  \"trigger\": \"long above $45200, stop below $44500\",\\n`;\naiInstructions += `  \"confidence\": \"high|medium|low\",\\n`;\naiInstructions += `  \"risk\": \"medium\"\\n`;\naiInstructions += `}]\\n\\n`;\n\naiInstructions += `If no tokens meet criteria, return empty array [] with explanation why.\\n`;\n\nreturn {\n  json: {\n    marketSummary,\n    aiInstructions,\n    top20Tokens: top20,\n    binancePairs,\n    totalTokens: dedupedTokens.length\n  }\n};"
+      },
+      "name": "Prepare Ai Research Prompts1",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        1136,
+        304
+      ],
+      "typeVersion": 2,
+      "alwaysOutputData": false,
+      "id": "bdfd6d12-99e7-4051-81ba-d147cb694a6a"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Prepare payload for TradingAgents multi-agent system\n// TradingAgents expects: ticker symbol + date\nconst agentOutput = $input.first().json.output || $input.first().json;\nconst today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD\n\n// Extract HIGH conviction pairs from agent output\n// The agent returns text - parse it for high confidence pairs\nconst outputText = typeof agentOutput === 'string' ? agentOutput : JSON.stringify(agentOutput);\n\n// Build payload array for TradingAgents\n// TradingAgents.propagate(ticker, date) - crypto tickers need to be adapted\n// For crypto, use the base symbol (BTC, ETH, SOL etc)\nconst cryptoSymbols = [];\nconst pairRegex = /\\b([A-Z]{2,10})USDT\\b/g;\nlet match;\nwhile ((match = pairRegex.exec(outputText)) !== null) {\n  const baseSymbol = match[1];\n  if (!cryptoSymbols.includes(baseSymbol) && \n      !['USDC', 'USDT', 'BUSD', 'DAI', 'WBTC'].includes(baseSymbol)) {\n    cryptoSymbols.push(baseSymbol);\n  }\n}\n\nreturn cryptoSymbols.slice(0, 5).map(symbol => ({\n  json: {\n    ticker: symbol,\n    date: today,\n    binancePair: `${symbol}USDT`,\n    source: 'hype_scanner',\n    tradingAgentsEndpoint: 'http://tradingagents-api:8001/analyze'\n  }\n}));"
+      },
+      "name": "Prepare TradingAgents Payload",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        2304,
+        208
+      ],
+      "typeVersion": 2,
+      "id": "c9b48316-b6ce-45b2-9169-c70a39f4d306"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "47598bf1-e55f-4cc0-ae75-272085e7ce02",
+              "name": "=sessionId",
+              "type": "string",
+              "value": "={{ $workflow.id }}"
+            },
+            {
+              "id": "daa49d74-e55e-47bc-ac52-8686d591ab83",
+              "name": "message",
+              "type": "string",
+              "value": "={{ $json.message }}{{ $json.binancePairs }}{{ $json.allTokens }}{{ $json.timestamp }}{{ $json.totalTokens }}"
+            },
+            {
+              "id": "28919adf-e2d3-469c-96af-3e3af4601e14",
+              "name": "",
+              "value": "",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "404b0238-9dea-4cb7-9a75-506cbe7a615b",
+      "name": "Adds \"SessionId\"",
+      "type": "n8n-nodes-base.set",
+      "position": [
+        1360,
+        304
+      ],
+      "typeVersion": 3.4
+    },
+    {
+      "parameters": {
+        "url": "https://n8n1.thorinvest.org/webhook/b3a5f935-7ed2-4e55-afde-a2486d438a1f",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "timeout": 180000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        2768,
+        128
+      ],
+      "id": "41c5bcd4-6e16-4fc5-af4b-d888ec93ed20",
+      "name": "HTTP Request"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gpt-5-mini"
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        1712,
+        528
+      ],
+      "id": "6f73ed60-82f9-44b2-b35d-a043f92f366b",
+      "name": "OpenAI Chat Model",
+      "credentials": {
+        "openAiApi": {
+          "id": "UYj9dQYadJXRuYGS",
+          "name": "OpenAI account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "crypto_main_agent"
+      },
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "typeVersion": 1.3,
+      "position": [
+        1840,
+        528
+      ],
+      "id": "1feb22ac-1274-4df5-967d-323af24c89f4",
+      "name": "Simple Memory"
+    },
+    {
+      "parameters": {
+        "aggregate": "aggregateAllItemData",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.aggregate",
+      "typeVersion": 1,
+      "position": [
+        2528,
+        208
+      ],
+      "id": "d8429225-f842-4517-b505-ddd457472ab8",
+      "name": "Aggregate"
+    },
+    {
+      "parameters": {
+        "options": {
+          "prompt": "Instructions:\n--------------\n{instructions}\n\nCompletion:\n--------------\n{completion}\n\nError:\n--------------\n{error}\n\nThe above completion did not match the required format. Please correct it according to the instructions and return a valid JSON."
+        }
+      },
+      "id": "aef45982-5446-45b6-afe9-648b3bc7b65e",
+      "name": "Auto-fixing Output Parser2",
+      "type": "@n8n/n8n-nodes-langchain.outputParserAutofixing",
+      "position": [
+        3056,
+        208
+      ],
+      "typeVersion": 1
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-4.1-nano",
+          "mode": "list",
+          "cachedResultName": "gpt-4.1-nano"
+        },
+        "options": {}
+      },
+      "id": "d0321670-9b06-4d2d-b5df-545e120dd86e",
+      "name": "OpenAI Chat Model8",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "position": [
+        2992,
+        416
+      ],
+      "typeVersion": 1.2,
+      "credentials": {
+        "openAiApi": {
+          "id": "UYj9dQYadJXRuYGS",
+          "name": "OpenAI account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsonSchemaExample": "{\n  \"response\": {\n    \"part_1\": \"Part one of the response (required)\",\n    \"part_2\": \"Part two of the response (optional)\",\n    \"part_3\": \"Part three of the response (optional)\",\n    \"part_4\": \"Part four of the response (optional)\"\n  }\n}"
+      },
+      "id": "1b86cd4a-f7a1-4795-80f5-515b274a15ab",
+      "name": "Structured Output Parser2",
+      "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+      "position": [
+        3168,
+        416
+      ],
+      "typeVersion": 1.2
+    },
+    {
+      "parameters": {
+        "amount": 3
+      },
+      "id": "63482f24-d35b-4b7e-b7d7-ff854ff2babf",
+      "name": "Wait5",
+      "type": "n8n-nodes-base.wait",
+      "position": [
+        3872,
+        128
+      ],
+      "webhookId": "18fffbcd-ee7e-4994-99ba-7076e13d62fe",
+      "typeVersion": 1.1
+    },
+    {
+      "parameters": {
+        "amount": 3
+      },
+      "id": "97a1b069-2733-45f0-a70c-a87585cabda0",
+      "name": "Wait6",
+      "type": "n8n-nodes-base.wait",
+      "position": [
+        4544,
+        128
+      ],
+      "webhookId": "18fffbcd-ee7e-4994-99ba-7076e13d62fe",
+      "typeVersion": 1.1
+    },
+    {
+      "parameters": {
+        "amount": 3
+      },
+      "id": "656ca22b-ecba-4a98-8703-5818c55d24a5",
+      "name": "Wait7",
+      "type": "n8n-nodes-base.wait",
+      "position": [
+        5216,
+        192
+      ],
+      "webhookId": "18fffbcd-ee7e-4994-99ba-7076e13d62fe",
+      "typeVersion": 1.1
+    },
+    {
+      "parameters": {
+        "jsCode": "const maxChars = 400;\n\nfunction normalizeMarkdownLists(text) {\n  if (!text) return '';\n\n  const originalLines = String(text).split('\\n');\n  const newLines = [];\n  const isListLine = [];\n\n  let inList = false;\n  let counter = 0;\n\n  for (let i = 0; i < originalLines.length; i++) {\n    let line = originalLines[i].trimEnd();\n    const match = line.match(/^\\s*(?:([-*\u2022])\\s+|(\\d+)[\\.\\)]\\s+)(.+)$/);\n\n    if (match) {\n      const content = (match[3] || '').trim();\n      if (!content) continue;\n\n      if (!inList) {\n        inList = true;\n        counter = 1;\n      } else {\n        counter++;\n      }\n\n      line = `${counter}. ${content}`;\n      newLines.push(line.trim());\n      isListLine.push(true);\n    } else {\n      inList = false;\n      counter = 0;\n\n      if (line === '') {\n        newLines.push('');\n        isListLine.push(false);\n      } else {\n        newLines.push(line);\n        isListLine.push(false);\n      }\n    }\n  }\n\n  let result = '';\n\n  for (let i = 0; i < newLines.length; i++) {\n    const line = newLines[i];\n\n    if (i > 0) {\n      if (isListLine[i] && isListLine[i - 1]) {\n        result += '\\n\\n';\n      } else {\n        result += '\\n';\n      }\n    }\n\n    result += line;\n  }\n\n  result = result.replace(/\\n{3,}/g, '\\n\\n');\n  return result.trim();\n}\n\nfunction formatText(rawText) {\n  let text = String(rawText || '').replace(/\\r\\n/g, '\\n').trim();\n  if (!text) return '';\n\n  text = text.replace(/\\s*((?:\\d+[\\.\\)]\\s+|[-*\u2022]\\s+))/g, '\\n\\n$1').trim();\n\n  if (text.includes('\\n\\n')) {\n    return normalizeMarkdownLists(text);\n  }\n\n  const sentences = text.match(/[^.!?]+[.!?]?/g) || [text];\n  const paragraphs = [];\n  let current = '';\n\n  for (const sentence of sentences) {\n    const s = sentence.trim();\n    if (!s) continue;\n\n    const candidate = current ? current + ' ' + s : s;\n\n    if (candidate.length > maxChars && current) {\n      paragraphs.push(current.trim());\n      current = s;\n    } else {\n      current = candidate;\n    }\n  }\n\n  if (current.trim()) {\n    paragraphs.push(current.trim());\n  }\n\n  const textWithParagraphs = paragraphs.join('\\n\\n');\n  return normalizeMarkdownLists(textWithParagraphs);\n}\n\nconst items = $input.all();\nconst results = [];\n\nfor (const item of items) {\n  const data = item.json || {};\n  let text = data.bot_response ?? data.output ?? data.text ?? '';\n\n  if (text && typeof text === 'object') {\n    if (typeof text.text === 'string') {\n      text = text.text;\n    } else if (Array.isArray(text)) {\n      text = text.join(' ');\n    } else {\n      text = JSON.stringify(text);\n    }\n  }\n\n  if (typeof text !== 'string' || !text.trim()) {\n    results.push(item);\n    continue;\n  }\n\n  const formattedText = formatText(text);\n\n  results.push({\n    json: {\n      ...data,\n      output: formattedText,\n    },\n  });\n}\n\nreturn results;"
+      },
+      "id": "3b086945-8673-4222-93d0-f5fbfc4c8a07",
+      "name": "Transform Text",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        2304,
+        400
+      ],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first();\nconst text = (item.json.output ?? '').toString().trim();\n\nif (!text) {\n  return [\n    {\n      json: {\n        wordCount: 0\n      }\n    }\n  ];\n}\n\nconst normalized = text.replace(/\\s+/g, ' ').trim();\nconst words = normalized.length > 0 ? normalized.split(' ') : [];\nconst count = words.length;\n\nreturn [\n  {\n    json: {\n      wordCount: count\n    }\n  }\n];"
+      },
+      "id": "612749fd-cd84-4f88-93bf-44eb6f253210",
+      "name": "switch",
+      "type": "n8n-nodes-base.code",
+      "position": [
+        2528,
+        400
+      ],
+      "typeVersion": 2
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "24b9e5f2-896f-42f0-85c4-df0ad7bdeed2",
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              },
+              "leftValue": "={{ $json.wordCount }}",
+              "rightValue": 15
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "b8d60c0a-3d66-4269-b82b-935ccacd1189",
+      "name": "Path",
+      "type": "n8n-nodes-base.if",
+      "position": [
+        2752,
+        400
+      ],
+      "typeVersion": 2.2
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $('UI Agent').item.json.output }}",
+        "hasOutputParser": true,
+        "messages": {
+          "messageValues": [
+            {
+              "message": "=# CONTEXT\nYou are an expert formatter of outputs for WhatsApp.\n\n# OBJECTIVE\nTake the input text and return the output in JSON format exactly as described in the Output Parser. You must split the output into 4 parts, but only one part is required. If the response is short, part_2, part_3, and part_4 may be empty.\n\n# KEY INSTRUCTIONS AND RULES\n- The input must always contain text. part_2, part_3, and part_4 may be empty (\"\") or omitted if they are not necessary.\n- Never return anything in the output that does not come from the input.\n- Make sure the response is in English.\n- Remove all the characters: \"*, |, !, #.\"\n- Split the input into up to 4 logical parts while preserving the original meaning.\n- If the input contains a list, place it entirely in a single part.\n- VERY IMPORTANT: Whenever you provide a list or enumeration, each item must always be on a separate line, with a blank line between them. Always return numbered lists in Markdown format, using a blank line between each item. For example:\n\n\"1. How long have you been having trouble making the payments?\n\n2. Do you have other debts besides that loan?\n\n3. How many...\"\n\n- Do not add, remove, or reorder information.\n- Never send text outside the JSON; no explanations and no stray quotation marks.\n\n# BEHAVIOR\n- Read the content of the input to be formatted.\n- Apply the rules to clean and segment it.\n- Return only the resulting JSON.\n\n### SIMPLE EXAMPLE\n- Input:\nHello, I am here to help you. How can I assist you today?\n\n- Expected output:\n{\n  \"response\": {\n    \"part_1\": \"Hello, I am here to help you.\",\n    \"part_2\": \"How can I assist you today?\",\n    \"part_3\": \"\",\n    \"part_4\": \"\"\n  }\n}\n"
+            }
+          ]
+        }
+      },
+      "id": "7059718c-5c64-4cf7-bb13-24b5ab1afb3c",
+      "name": "Message Breakdown",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "position": [
+        2976,
+        -16
+      ],
+      "typeVersion": 1.6
+    },
+    {
+      "parameters": {
+        "chatId": "=6184893463",
+        "text": "={{ $('UI Agent').item.json.output }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "id": "be52f207-3bb0-4239-b246-e62ab8e6165b",
+      "name": "Message",
+      "type": "n8n-nodes-base.telegram",
+      "position": [
+        3088,
+        592
+      ],
+      "webhookId": "12045ee8-11e5-4040-8e56-80c8d11ed0ba",
+      "typeVersion": 1.2,
+      "credentials": {
+        "telegramApi": {
+          "id": "VTy1F6FBvMhLAM3E",
+          "name": "Binance bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "78de0084-4e66-4d1c-9aa7-74ca033a4d7c",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              },
+              "leftValue": "={{ $('Message Breakdown').item.json.output.response.part_2 }}",
+              "rightValue": ""
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "69594db0-3604-4883-bff6-b3a0de167a73",
+      "name": "2nd?",
+      "type": "n8n-nodes-base.if",
+      "position": [
+        3648,
+        192
+      ],
+      "typeVersion": 2.2
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "10e08bab-8587-4a0d-92aa-1c8e834e9ed5",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              },
+              "leftValue": "={{ $('Message Breakdown').item.json.output.response.part_3 }}",
+              "rightValue": ""
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "10785980-1364-4c7a-83cb-a2e9d1758e7c",
+      "name": "3rd?",
+      "type": "n8n-nodes-base.if",
+      "position": [
+        4320,
+        192
+      ],
+      "typeVersion": 2.2
+    },
+    {
+      "parameters": {
+        "chatId": "=6184893463",
+        "text": "={{ $('Message Breakdown').item.json.output.response.part_2 }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "id": "6db10e6b-bb8b-47a1-b69d-10686dd50123",
+      "name": "2nd Bubble",
+      "type": "n8n-nodes-base.telegram",
+      "position": [
+        4096,
+        128
+      ],
+      "webhookId": "97c7514c-f539-4d13-9f36-45cb2a99c324",
+      "typeVersion": 1.2,
+      "credentials": {
+        "telegramApi": {
+          "id": "VTy1F6FBvMhLAM3E",
+          "name": "Binance bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "=6184893463",
+        "text": "={{ $('Message Breakdown').item.json.output.response.part_3 }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "id": "d467dfa5-3c66-4e69-8bd6-2a924b679d62",
+      "name": "3rd Bubble",
+      "type": "n8n-nodes-base.telegram",
+      "position": [
+        4768,
+        128
+      ],
+      "webhookId": "97c7514c-f539-4d13-9f36-45cb2a99c324",
+      "typeVersion": 1.2,
+      "credentials": {
+        "telegramApi": {
+          "id": "VTy1F6FBvMhLAM3E",
+          "name": "Binance bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "10e08bab-8587-4a0d-92aa-1c8e834e9ed5",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              },
+              "leftValue": "={{ $('Message Breakdown').item.json.output.response.part_4 }}",
+              "rightValue": ""
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "be774055-8060-48d3-ae9b-cc0a9500aa88",
+      "name": "4th?",
+      "type": "n8n-nodes-base.if",
+      "position": [
+        4992,
+        192
+      ],
+      "typeVersion": 2.2
+    },
+    {
+      "parameters": {
+        "chatId": "=6184893463",
+        "text": "={{ $('Message Breakdown').item.json.output.response.part_4 }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "id": "27a34c04-f738-4d4d-a533-121ebd9c2ce8",
+      "name": "4th Bubble",
+      "type": "n8n-nodes-base.telegram",
+      "position": [
+        5440,
+        192
+      ],
+      "webhookId": "97c7514c-f539-4d13-9f36-45cb2a99c324",
+      "typeVersion": 1.2,
+      "credentials": {
+        "telegramApi": {
+          "id": "VTy1F6FBvMhLAM3E",
+          "name": "Binance bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "=6184893463",
+        "text": "={{ $json.output.response.part_1 }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "id": "ed3cd6f5-f338-4bec-ae0b-796d944ff7aa",
+      "name": "1st Bubble",
+      "type": "n8n-nodes-base.telegram",
+      "position": [
+        3424,
+        192
+      ],
+      "webhookId": "fc49c8cf-889e-4be1-b08d-1773ac5acad3",
+      "typeVersion": 1.2,
+      "credentials": {
+        "telegramApi": {
+          "id": "VTy1F6FBvMhLAM3E",
+          "name": "Binance bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "http://ai-trading-backend:8000/api/trading/binance/exchangeInfo",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        16,
+        592
+      ],
+      "id": "e18461b8-c919-4440-a16a-986e4574e0de",
+      "name": "Fetch Binance Futures Pairs",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        272,
+        320
+      ],
+      "id": "8d5facd5-d658-478f-8b47-0ccaf7239148",
+      "name": "Merge CMC + Binance"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        288,
+        96
+      ],
+      "id": "29877f8d-1dc9-4648-8e1f-d0c1f864d952",
+      "name": "Merge CoinGecko + Binance"
+    }
+  ],
+  "connections": {
+    "When clicking \u2018Execute workflow\u2019": {
+      "main": [
+        [
+          {
+            "node": "Fetch Binance Futures Pairs",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Fetch Top 200 Gainers from CMC1",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Get Trending",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Trending": {
+      "main": [
+        [
+          {
+            "node": "Merge CoinGecko + Binance",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Top 200 Gainers from CMC1": {
+      "main": [
+        [
+          {
+            "node": "Merge CMC + Binance",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Top Gainers (40% gain, $10M MC, $1M vol)1": {
+      "main": [
+        [
+          {
+            "node": "Group Tokens by Sector1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Group Tokens by Sector1": {
+      "main": [
+        [
+          {
+            "node": "Merge Sector Data with Analysis1",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge Sector Data with Analysis1": {
+      "main": [
+        [
+          {
+            "node": "Prepare Ai Research Prompts1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CoinGecko Free MCP": {
+      "ai_tool": [
+        [
+          {
+            "node": "UI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "UI Agent": {
+      "main": [
+        [
+          {
+            "node": "Prepare TradingAgents Payload",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Transform Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "xAI Grok Chat Model1": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "UI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Group Tokens by Sector2": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Merge Sector Data with Analysis1",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript1": {
+      "main": [
+        [
+          {
+            "node": "Merge Sector Data with Analysis1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search in Tavily": {
+      "ai_tool": [
+        [
+          {
+            "node": "UI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenRouter Chat Model1": {
+      "ai_languageModel": [
+        []
+      ]
+    },
+    "Prepare Ai Research Prompts1": {
+      "main": [
+        [
+          {
+            "node": "Adds \"SessionId\"",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare TradingAgents Payload": {
+      "main": [
+        [
+          {
+            "node": "Aggregate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Every Hour": {
+      "main": [
+        [
+          {
+            "node": "Fetch Binance Futures Pairs",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Get Trending",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Fetch Top 200 Gainers from CMC1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Adds \"SessionId\"": {
+      "main": [
+        [
+          {
+            "node": "UI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "UI Agent",
+            "type": "ai_languageModel",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Simple Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "UI Agent",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Auto-fixing Output Parser2": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "Message Breakdown",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model8": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Auto-fixing Output Parser2",
+            "type": "ai_languageModel",
+            "index": 0
+          },
+          {
+            "node": "Message Breakdown",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Structured Output Parser2": {
+      "ai_outputParser": [
+        [
+          {
+            "node": "Auto-fixing Output Parser2",
+            "type": "ai_outputParser",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait5": {
+      "main": [
+        [
+          {
+            "node": "2nd Bubble",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait6": {
+      "main": [
+        [
+          {
+            "node": "3rd Bubble",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait7": {
+      "main": [
+        [
+          {
+            "node": "4th Bubble",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Transform Text": {
+      "main": [
+        [
+          {
+            "node": "switch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "switch": {
+      "main": [
+        [
+          {
+            "node": "Path",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Path": {
+      "main": [
+        [
+          {
+            "node": "Message Breakdown",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Message Breakdown": {
+      "main": [
+        [
+          {
+            "node": "1st Bubble",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "2nd?": {
+      "main": [
+        [
+          {
+            "node": "Wait5",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "3rd?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "3rd?": {
+      "main": [
+        [
+          {
+            "node": "Wait6",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "4th?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "2nd Bubble": {
+      "main": [
+        [
+          {
+            "node": "3rd?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "3rd Bubble": {
+      "main": [
+        [
+          {
+            "node": "4th?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "4th?": {
+      "main": [
+        [
+          {
+            "node": "Wait7",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "1st Bubble": {
+      "main": [
+        [
+          {
+            "node": "2nd?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Binance Futures Pairs": {
+      "main": [
+        [
+          {
+            "node": "Merge CMC + Binance",
+            "type": "main",
+            "index": 1
+          },
+          {
+            "node": "Merge CoinGecko + Binance",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge CMC + Binance": {
+      "main": [
+        [
+          {
+            "node": "Filter Top Gainers (40% gain, $10M MC, $1M vol)1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge CoinGecko + Binance": {
+      "main": [
+        [
+          {
+            "node": "Group Tokens by Sector2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": true,
+    "timeSavedMode": "fixed",
+    "errorWorkflow": "p8vhXj53RK8MUxb7",
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": {
+    "node:Every Hour": {
+      "recurrenceRules": [
+        0
+      ],
+      "recurrenceRuleSignatures": [
+        "hours:2"
+      ]
+    }
+  },
+  "meta": {
+    "aiBuilderAssisted": true,
+    "builderVariant": "mcp"
+  },
+  "pinData": {},
+  "versionId": "6c40d42e-0058-4f47-8468-e48f0fa19a17",
+  "activeVersionId": "6c40d42e-0058-4f47-8468-e48f0fa19a17",
+  "triggerCount": 1
+}

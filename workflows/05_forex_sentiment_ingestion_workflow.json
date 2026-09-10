@@ -1,5 +1,6 @@
 {
-  "name": "05 Forex & Macro News Sentiment Ingestion",
+  "id": "QT05ForexSent01",
+  "name": "05 - Forex & Macro News Sentiment Ingestion",
   "nodes": [
     {
       "parameters": {
@@ -12,7 +13,7 @@
           ]
         }
       },
-      "id": "trigger-schedule",
+      "id": "trigger-schedule-05",
       "name": "Every 15 Minutes",
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.2,
@@ -20,38 +21,30 @@
     },
     {
       "parameters": {
-        "url": "https://forexnewsapi.com/api/v1",
+        "url": "http://backend:8000/api/news/feed",
         "sendQuery": true,
         "queryParameters": {
           "parameters": [
             {
-              "name": "items",
-              "value": "50"
-            },
-            {
-              "name": "page",
-              "value": "1"
-            },
-            {
-              "name": "token",
-              "value": "={{$env.FOREXNEWSAPI_KEY}}"
+              "name": "limit",
+              "value": "30"
             }
           ]
         },
         "options": {}
       },
-      "id": "fetch-forex-news",
-      "name": "Fetch Forex News",
+      "id": "fetch-macro-feed",
+      "name": "Fetch Macro & Forex Feed",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [-980, 0]
     },
     {
       "parameters": {
-        "fieldToSplitOut": "data",
+        "fieldToSplitOut": "articles",
         "options": {}
       },
-      "id": "split-articles",
+      "id": "split-articles-05",
       "name": "Split Articles",
       "type": "n8n-nodes-base.splitOut",
       "typeVersion": 1,
@@ -67,7 +60,7 @@
           },
           "conditions": [
             {
-              "leftValue": "={{$json.news_url}}",
+              "leftValue": "={{$json.title}}",
               "rightValue": "",
               "operator": {
                 "type": "string",
@@ -78,7 +71,7 @@
           "combinator": "and"
         }
       },
-      "id": "filter-valid",
+      "id": "filter-valid-05",
       "name": "Filter Valid Articles",
       "type": "n8n-nodes-base.filter",
       "typeVersion": 2.2,
@@ -86,58 +79,42 @@
     },
     {
       "parameters": {
-        "modelId": {
-          "__rl": true,
-          "mode": "list",
-          "value": "models/gemini-2.0-flash"
-        },
-        "messages": {
-          "values": [
-            {
-              "content": "=You are a forex market sentiment analyst. Given the news headline and text below, identify which currency pairs it is relevant to (use standard 6-letter forex codes like EURUSD, GBPJPY, XAUUSD - use XAUUSD for gold), and score sentiment for each pair from -1 (very bearish for base currency) to +1 (very bullish for base currency). Respond ONLY with valid JSON, no markdown, in this exact format: {\"pairs\": [{\"pair\": \"EURUSD\", \"sentiment\": \"bullish\", \"score\": 0.6, \"confidence\": 0.8, \"reasoning\": \"short reason\"}]}. If not relevant to any tradeable pair, respond {\"pairs\": []}.\n\nHeadline: {{$json.title}}\nText: {{$json.text}}"
-            }
-          ]
-        },
-        "options": {
-          "temperature": 0.2
-        }
+        "jsCode": "const items = [];\nfor (const item of $input.all()) {\n  const a = item.json;\n  if (!a.title) continue;\n  items.push({\n    json: {\n      source: a.source || 'macro_feed',\n      external_id: a.url || `feed_${Date.now()}_${Math.random()}`,\n      title: a.title,\n      description: a.summary || a.title,\n      url: a.url || '',\n      published_at: a.published || new Date().toISOString(),\n      auto_score: true\n    }\n  });\n}\nreturn items;"
       },
-      "id": "score-sentiment-gemini",
-      "name": "Score Sentiment (Gemini)",
-      "type": "@n8n/n8n-nodes-langchain.googleGemini",
-      "typeVersion": 1,
-      "position": [-320, 0],
-      "credentials": {
-        "googlePalmApi": {
-          "id": "GEMINI_CRED_ID",
-          "name": "Google Gemini account"
-        }
-      }
-    },
-    {
-      "parameters": {
-        "jsCode": "const items = [];\nfor (const item of $input.all()) {\n  let parsed;\n  try {\n    const raw = item.json.content || item.json.text || item.json.message?.content || '';\n    const cleaned = raw.replace(/```json|```/g, '').trim();\n    parsed = JSON.parse(cleaned);\n  } catch (e) {\n    continue;\n  }\n  const pairs = parsed.pairs || [];\n  const parent = $('Filter Valid Articles').item.json;\n  items.push({\n    json: {\n      source: 'forexnewsapi',\n      external_id: parent.news_url,\n      title: parent.title,\n      description: parent.text,\n      url: parent.news_url,\n      published_at: parent.date,\n      scores: pairs.map(p => ({\n        pair: p.pair,\n        sentiment: p.sentiment,\n        score: p.score,\n        confidence: p.confidence,\n        reasoning: p.reasoning,\n        model: 'gemini-2.0-flash'\n      }))\n    }\n  });\n}\nreturn items;"
-      },
-      "id": "format-ingest-payload",
+      "id": "format-ingest-payload-05",
       "name": "Format Ingest Payload",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
-      "position": [-100, 0]
+      "position": [-300, 0]
     },
     {
       "parameters": {
         "method": "POST",
-        "url": "={{$env.BACKEND_API_URL || 'http://backend:8000'}}/api/sentiment/ingest",
+        "url": "http://backend:8000/api/sentiment/ingest",
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={{JSON.stringify($json)}}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "={{$env.BACKEND_API_KEY}}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
         "options": {}
       },
-      "id": "post-to-backend",
+      "id": "post-to-backend-05",
       "name": "Post to QuantumTrade Ingestion",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
-      "position": [140, 0]
+      "position": [-80, 0],
+      "continueOnFail": true
     }
   ],
   "connections": {
@@ -145,14 +122,14 @@
       "main": [
         [
           {
-            "node": "Fetch Forex News",
+            "node": "Fetch Macro & Forex Feed",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Fetch Forex News": {
+    "Fetch Macro & Forex Feed": {
       "main": [
         [
           {
@@ -178,17 +155,6 @@
       "main": [
         [
           {
-            "node": "Score Sentiment (Gemini)",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Score Sentiment (Gemini)": {
-      "main": [
-        [
-          {
             "node": "Format Ingest Payload",
             "type": "main",
             "index": 0
@@ -208,7 +174,7 @@
       ]
     }
   },
-  "active": false,
+  "active": true,
   "settings": {
     "executionOrder": "v1"
   },

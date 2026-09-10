@@ -73,6 +73,20 @@ def paper_starting_balance() -> float:
     return value if value > 0 else _DEFAULT_PAPER_BALANCE
 
 
+BINANCE_PAPER_SESSION_ID = "binance_paper"
+
+
+def binance_paper_parallel_enabled() -> bool:
+    """Run a local Binance paper book beside a live/demo cTrader session.
+
+    TRADING_MODE is process-wide, so paper crypto cannot be enabled by flipping
+    that flag without also blocking cTrader. This opt-in keeps FX orders on
+    cTrader and routes the crypto loop / smart-order crypto path through
+    PaperTradingEngine. It never sends Binance private API orders.
+    """
+    return os.getenv("BINANCE_PAPER_PARALLEL", "false").strip().lower() == "true"
+
+
 def live_exchange_orders_allowed() -> bool:
     """Whether any exchange adapter may send live orders.
 
@@ -85,6 +99,8 @@ def live_exchange_orders_allowed() -> bool:
 
 def live_binance_orders_allowed() -> bool:
     """Whether BinanceFuturesService may hit the live/testnet private API."""
+    if binance_paper_parallel_enabled():
+        return False
     return live_exchange_orders_allowed()
 
 

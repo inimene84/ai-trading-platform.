@@ -1276,7 +1276,13 @@ async def place_smart_order(req: SmartOrderRequest):
     from backend.services.ctrader_service import ctrader_broker
     from backend.services.broker_circuit_breaker import broker_circuit_breaker
     from backend.services.sentry_state import is_trading_allowed
-    from backend.services.trading_mode import TradingMode, get_trading_mode, paper_starting_balance
+    from backend.services.trading_mode import (
+        BINANCE_PAPER_SESSION_ID,
+        TradingMode,
+        binance_paper_parallel_enabled,
+        get_trading_mode,
+        paper_starting_balance,
+    )
 
     if not is_trading_allowed():
         raise HTTPException(status_code=403, detail="Trading is halted by sentry.")
@@ -1302,13 +1308,22 @@ async def place_smart_order(req: SmartOrderRequest):
     # 3. Route to Target Broker
     db = SessionLocal()
     try:
-        if get_trading_mode() != TradingMode.LIVE:
+        paper_crypto = (
+            binance_paper_parallel_enabled()
+            and target_broker_name == "binance_futures"
+        )
+        if get_trading_mode() != TradingMode.LIVE or paper_crypto:
             ut = UnifiedTrading()
+            paper_sid = (
+                BINANCE_PAPER_SESSION_ID
+                if target_broker_name == "binance_futures"
+                else f"{target_broker_name}_paper"
+            )
             ut.init_session(
                 target_broker_name,
                 mode="paper",
                 paper_balance=paper_starting_balance(),
-                session_id=f"{target_broker_name}_paper",
+                session_id=paper_sid,
             )
             px = float(req.price or 0)
             if px <= 0:
@@ -1326,7 +1341,7 @@ async def place_smart_order(req: SmartOrderRequest):
                     stop_loss=float(req.stop_loss or 0),
                     take_profit=float(req.take_profit or 0),
                 ),
-                session_id=f"{target_broker_name}_paper",
+                session_id=paper_sid,
             )
             result = {
                 "status": "filled" if paper_resp.success else "error",
@@ -1725,20 +1740,44 @@ async def close_ctrader_live_position(
 # ── Position Management ────────────────────────────────────────────────────────
 
 @router.post("/positions/{position_id}/close")
-async def close_position(position_id: int):
+async def close_position(position_id: str):
     """Close a position on its originating broker, then persist the actual fill."""
     from backend.services.ctrader_service import ctrader_broker
     from backend.services.binance_futures_service import binance_futures_broker
-    from backend.services.trading_mode import get_trading_mode, TradingMode
+    from backend.services.trading_mode import (
+        get_trading_mode,
+        TradingMode,
+        live_binance_orders_allowed,
+        binance_paper_parallel_enabled,
+        BINANCE_PAPER_SESSION_ID,
+    )
 
     db = SessionLocal()
     try:
-        trade = db.query(Trade).filter(Trade.id == position_id, Trade.status.in_(["open", "filled"])).first()
+        trade = None
+        str_pos = str(position_id).strip()
+        if str_pos.isdigit():
+            trade = db.query(Trade).filter(Trade.id == int(str_pos), Trade.status.in_(["open", "filled"])).first()
+        if not trade:
+            trade = db.query(Trade).filter(
+                (Trade.broker_position_id == str_pos)
+                | (Trade.broker_order_id == str_pos)
+                | (Trade.binance_order_id == str_pos),
+                Trade.status.in_(["open", "filled"]),
+            ).first()
         if not trade:
             raise HTTPException(status_code=404, detail=f"Open position {position_id} not found")
 
         target_broker = getattr(trade, "broker", None) or getattr(trade, "exchange", None) or "binance_futures"
-        paper_mode = get_trading_mode() != TradingMode.LIVE
+        is_binance_paper = (
+            target_broker != "ctrader"
+            and (
+                not live_binance_orders_allowed()
+                or binance_paper_parallel_enabled()
+                or (bool(trade.binance_order_id) and str(trade.binance_order_id).startswith("paper_"))
+            )
+        )
+        paper_mode = (get_trading_mode() != TradingMode.LIVE) or is_binance_paper
 
         if target_broker == "ctrader":
             res = ctrader_broker.close_position(
@@ -1786,17 +1825,29 @@ async def close_position(position_id: int):
                     exit_price = float(tick["lastPrice"])
             except Exception:
                 pass
+            if not exit_price or exit_price == float(trade.entry_price or 0):
+                try:
+                    ep = binance_futures_broker.get_exit_price(trade.symbol)
+                    if ep and float(ep) > 0:
+                        exit_price = float(ep)
+                except Exception:
+                    pass
+
             if trade.direction == "BUY":
                 pnl = (exit_price - float(trade.entry_price or 0)) * float(trade.quantity or 0)
             else:
                 pnl = (float(trade.entry_price or 0) - exit_price) * float(trade.quantity or 0)
+
         else:
             close_side = OrderSide.SELL if trade.direction == "BUY" else OrderSide.BUY
+            ref_price = binance_futures_broker.get_exit_price(trade.symbol)
+            order_price = float(ref_price) if ref_price else 0.0
             response = UnifiedTrading().place_order(UnifiedOrder(
                 symbol=trade.symbol,
                 side=close_side,
                 order_type=OrderType.MARKET,
                 quantity=trade.quantity,
+                price=order_price,
                 reduce_only=True,
             ))
             if not response.success:
@@ -1847,11 +1898,21 @@ async def close_position(position_id: int):
 
 
 @router.put("/positions/{position_id}/modify")
-async def modify_position(position_id: int, body: ModifyPositionRequest):
+async def modify_position(position_id: str, body: ModifyPositionRequest):
     """Modify exchange SL/TP first, then persist levels that succeeded."""
     db = SessionLocal()
     try:
-        trade = db.query(Trade).filter(Trade.id == position_id, Trade.status.in_(["open", "filled"])).first()
+        trade = None
+        str_pos = str(position_id).strip()
+        if str_pos.isdigit():
+            trade = db.query(Trade).filter(Trade.id == int(str_pos), Trade.status.in_(["open", "filled"])).first()
+        if not trade:
+            trade = db.query(Trade).filter(
+                (Trade.broker_position_id == str_pos)
+                | (Trade.broker_order_id == str_pos)
+                | (Trade.binance_order_id == str_pos),
+                Trade.status.in_(["open", "filled"]),
+            ).first()
         if not trade:
             raise HTTPException(status_code=404, detail=f"Open position {position_id} not found")
 
@@ -2158,6 +2219,7 @@ async def session_status():
         "broker": sess.broker,
         "mode": sess.mode,
         "paper_portfolio_id": sess.paper_portfolio_id,
+        "sessions": ut.list_sessions(),
     }
 
 

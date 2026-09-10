@@ -942,14 +942,19 @@ export default function App() {
 
   const handleClosePosition = async (tradeId: number | string) => {
     try {
-      if (typeof tradeId === 'number') {
+      try {
         await apiService.closePosition(tradeId);
         showToast('Position closed successfully', 'success');
         await fetchBackendPositions();
-      } else {
+      } catch (backendErr: any) {
         setOpenPositions((prev) => prev.filter((p) => String(p.id) !== String(tradeId)));
-        showToast('Position closed', 'success');
+        if (backendErr.message?.includes('404')) {
+          showToast('Position closed', 'success');
+          return;
+        }
+        throw backendErr;
       }
+      setOpenPositions((prev) => prev.filter((p) => String(p.id) !== String(tradeId)));
     } catch (err: any) {
       showToast(`Failed to close: ${err.message}`, 'error');
     }
@@ -961,11 +966,9 @@ export default function App() {
     tp: number | null
   ) => {
     try {
-      if (typeof tradeId === 'number') {
-        await apiService.modifyPosition(tradeId, sl, tp);
-        showToast('SL/TP updated', 'success');
-        await fetchBackendPositions();
-      }
+      await apiService.modifyPosition(tradeId, sl, tp);
+      showToast('SL/TP updated', 'success');
+      await fetchBackendPositions();
     } catch (err: any) {
       showToast(`Failed to modify: ${err.message}`, 'error');
     }

@@ -27,7 +27,9 @@ from backend.services.unified_trading import UnifiedTrading, UnifiedOrder, Order
 from backend.services.position_manager import get_position_manager
 from backend.services.sentry_state import get_trading_status, is_trading_allowed
 from backend.services.trading_mode import (
+    BINANCE_PAPER_SESSION_ID,
     TradingMode,
+    binance_paper_parallel_enabled,
     get_trading_mode,
     paper_leverage_for_broker,
     paper_reported_equity,
@@ -229,7 +231,21 @@ class TradingLoopService:
         return (
             os.getenv("ACTIVE_BROKER", "ctrader") == "binance_futures"
             and get_trading_mode() == TradingMode.LIVE
+            and not binance_paper_parallel_enabled()
         )
+
+    @staticmethod
+    def _crypto_session_id() -> str | None:
+        """Paper-parallel crypto fills use a dedicated session, not live cTrader."""
+        if binance_paper_parallel_enabled() and not TradingLoopService._is_live_binance():
+            return BINANCE_PAPER_SESSION_ID
+        return None
+
+    @staticmethod
+    def _crypto_broker_name() -> str:
+        if TradingLoopService._crypto_session_id():
+            return "binance_futures"
+        return get_active_broker_name()
 
     @staticmethod
     def _paper_balance_payload(cash: float, equity: float, margin_used: float = 0.0) -> dict:
@@ -269,9 +285,10 @@ class TradingLoopService:
         live account must not trip the kill switch. Prefer the in-memory
         paper portfolio, then the last DB paper book, then PAPER_BALANCE.
         """
-        if get_trading_mode() != TradingMode.LIVE:
+        paper_sid = self._crypto_session_id()
+        if get_trading_mode() != TradingMode.LIVE or paper_sid:
             try:
-                pf = UnifiedTrading().get_paper_portfolio()
+                pf = UnifiedTrading().get_paper_portfolio(paper_sid)
                 if pf:
                     cash = float(pf.get("cash", 0.0) or 0.0)
                     margin = float(pf.get("margin_used", 0.0) or 0.0)
@@ -313,7 +330,7 @@ class TradingLoopService:
     def _paper_cycle_positions(self) -> list:
         """Map the local paper book to the loop's exchange-position shape."""
         try:
-            positions = UnifiedTrading().get_paper_positions()
+            positions = UnifiedTrading().get_paper_positions(self._crypto_session_id())
             out = []
             for p in positions:
                 qty = float(getattr(p, "quantity", 0) or 0)
@@ -378,6 +395,18 @@ class TradingLoopService:
         self._state = "running"
         self._error = None
         self._unified_trading = UnifiedTrading()  # Set singleton instance
+        sid = self._crypto_session_id()
+        if sid:
+            if not self._unified_trading.get_session(sid):
+                self._unified_trading.init_session(
+                    "binance_futures",
+                    mode="paper",
+                    paper_balance=paper_starting_balance(),
+                    leverage=paper_leverage_for_broker("binance_futures"),
+                    session_id=sid,
+                )
+            self._unified_trading.set_default_session(sid)
+            logger.info("Trading loop crypto fills → Binance paper session %s", sid)
 
         mode = get_trading_mode()
         logger.info(f"TradingLoopService starting in mode={mode.value.upper()}")
@@ -850,7 +879,7 @@ class TradingLoopService:
                                 quantity=trade.quantity,
                                 price=float(curr_price or 0),
                                 reduce_only=True,
-                            ))
+                            ), session_id=self._crypto_session_id())
                             if res.success:
                                 trade.exit_price = res.filled_price or curr_price
                                 if res.realized_pnl is not None:
@@ -1208,9 +1237,9 @@ class TradingLoopService:
             )
             decision_engine.account_equity = getattr(self, "_cycle_equity", 0.0)
             decision_engine.account_available = getattr(self, "_cycle_available", 0.0)
-            if get_trading_mode() == TradingMode.PAPER:
+            if get_trading_mode() == TradingMode.PAPER or self._crypto_session_id():
                 decision_engine.account_leverage = paper_leverage_for_broker(
-                    get_active_broker_name()
+                    self._crypto_broker_name()
                 )
             else:
                 try:
@@ -1364,7 +1393,7 @@ class TradingLoopService:
                         )
 
                         order_result = await asyncio.get_event_loop().run_in_executor(
-                            None, lambda: ut.place_order(order)
+                            None, lambda: ut.place_order(order, session_id=self._crypto_session_id())
                         )
                         if order_result.success and not existing:
                             self._open_count += 1
@@ -1388,8 +1417,8 @@ class TradingLoopService:
                         binance_order_id=order_result.order_id,
                         stop_loss=decision.stop_loss, take_profit=decision.take_profit,
                         notes=f"pyramid_layer_{len(self._pyramid_layers.get(symbol, []))}" if decision.is_pyramid else None,
-                        broker=get_active_broker_name(),
-                        exchange=get_active_broker_name(),
+                        broker=self._crypto_broker_name(),
+                        exchange=self._crypto_broker_name(),
                     )
                     db.add(trade)
                     db.commit()
@@ -1627,7 +1656,7 @@ class TradingLoopService:
                     quantity=trade.quantity,
                     price=float(current_price or 0),
                     reduce_only=True
-                ))
+                ), session_id=self._crypto_session_id())
 
                 if res.success:
                     trade.exit_price = res.filled_price or current_price
@@ -1643,6 +1672,12 @@ class TradingLoopService:
                     trade.status = "closed"
                     trade.closed_at = datetime.now(timezone.utc)
                     trade.notes = (trade.notes or "") + f" | Closed via SL/TP ({res.mode})"
+                    if "SL hit" in (trade.notes or "") or (pnl is not None and pnl < 0):
+                        try:
+                            from backend.services.signal_candidate_engine import signal_candidate_engine
+                            signal_candidate_engine.set_symbol_cooldown(symbol)
+                        except Exception as cd_err:
+                            logger.debug("Failed to set symbol cooldown on %s: %s", symbol, cd_err)
                     self._high_water.pop(trade.id, None)
                     if self._pyramid_mode:
                         remove_closed_pyramid_layer(self._pyramid_layers, trade)

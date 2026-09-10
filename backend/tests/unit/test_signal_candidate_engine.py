@@ -665,3 +665,111 @@ def test_get_ready_signals_prunes_stale_terminal_store():
          patch.object(engine, "_ctrader_execution_slots_remaining", return_value=10):
         engine.get_ready_signals(current_ts=now, enforce_ctrader_position_cap=False)
     assert "stale" not in engine.candidates
+
+
+def test_momentum_veto_low_adx_chop():
+    """Verify MOMENTUM_TREND_PULSE rejects trades when ADX < min_adx."""
+    engine = SignalCandidateEngine()
+    features = {
+        "last_close": 1.0850,
+        "atr": 0.0015,
+        "rsi": 60,
+        "adx": 15.0,  # Below default min 22
+        "ema_fast": 1.0855,
+        "ema_slow": 1.0845,
+        "trend": "BULLISH",
+        "h1_trend": "BULLISH",
+    }
+    sig = engine._evaluate_momentum("EURUSD", features, "ctrader")
+    assert sig is None, "Momentum must be vetoed in low-ADX chop"
+
+
+def test_momentum_veto_opposing_h1_trend():
+    """Verify MOMENTUM_TREND_PULSE rejects BUY when H1 is BEARISH and SELL when H1 is BULLISH."""
+    engine = SignalCandidateEngine()
+    features_buy = {
+        "last_close": 1.0850,
+        "atr": 0.0015,
+        "rsi": 62,
+        "adx": 28.0,
+        "ema_fast": 1.0855,
+        "ema_slow": 1.0845,
+        "trend": "BULLISH",
+        "h1_trend": "BEARISH",  # Counter-trend!
+    }
+    assert engine._evaluate_momentum("EURUSD", features_buy, "ctrader") is None
+
+    features_sell = {
+        "last_close": 1.0850,
+        "atr": 0.0015,
+        "rsi": 35,
+        "adx": 28.0,
+        "ema_fast": 1.0840,
+        "ema_slow": 1.0850,
+        "trend": "BEARISH",
+        "h1_trend": "BULLISH",  # Counter-trend!
+    }
+    assert engine._evaluate_momentum("EURUSD", features_sell, "ctrader") is None
+
+
+def test_momentum_accepts_when_adx_and_h1_aligned():
+    """Verify MOMENTUM_TREND_PULSE accepts when ADX is strong and H1 is aligned."""
+    engine = SignalCandidateEngine()
+    features = {
+        "last_close": 1.0850,
+        "atr": 0.0015,
+        "rsi": 62,
+        "adx": 28.0,
+        "ema_fast": 1.0855,
+        "ema_slow": 1.0845,
+        "trend": "BULLISH",
+        "h1_trend": "BULLISH",
+    }
+    sig = engine._evaluate_momentum("EURUSD", features, "ctrader")
+    assert sig is not None
+    assert sig["direction"] == "BUY"
+    assert sig["strategy"] == "MOMENTUM_TREND_PULSE"
+
+
+def test_anti_whipsaw_symbol_cooldown():
+    """Verify that cooling down a symbol locks it out from candidate execution."""
+    engine = SignalCandidateEngine()
+    sym = "USDJPY"
+    assert not engine.is_symbol_cooling_down(sym)
+
+    engine.set_symbol_cooldown(sym, duration_sec=1800)
+    assert engine.is_symbol_cooling_down(sym)
+
+    # Candidate execution should be skipped for cooling symbol
+    now = int(time.time())
+    cand_id = "test-cooldown-cand"
+    engine.candidates[cand_id] = {
+        "id": cand_id,
+        "symbol": sym,
+        "direction": "BUY",
+        "broker": "ctrader",
+        "status": CandidateStatus.READY,
+        "earliest_exec_at": now - 10,
+        "latest_exec_at": now + 60,
+        "entry_price": 150.0,
+        "stop_loss": 149.0,
+        "take_profit": 152.0,
+        "sizing": {"lots": 0.01, "quantity": 0.01},
+    }
+    import asyncio
+    res = asyncio.run(engine.execute_candidate(cand_id, force=False))
+    assert res.get("skipped") is True
+    assert "cooldown" in res.get("error", "").lower()
+
+    # Force=True bypasses cooldown
+    with patch("backend.services.sentry_state.is_trading_allowed", return_value=True), \
+         patch.object(engine, "_ctrader_execution_slot_available", return_value=True), \
+         patch.object(engine, "_open_ctrader_symbols", return_value=set()), \
+         patch.object(engine, "_same_base_slots_available", return_value=True), \
+         patch.object(engine, "_currency_exposure_slots_available", return_value=True), \
+         patch("backend.services.signal_candidate_engine.live_ctrader_orders_allowed", return_value=False), \
+         patch("backend.services.signal_candidate_engine.ctrader_service.get_spread_pips", return_value=0.5), \
+         patch("backend.services.signal_candidate_engine.ctrader_service.place_order", return_value={"status": "sent", "order_id": "test-123"}):
+        res_forced = asyncio.run(engine.execute_candidate(cand_id, force=True))
+        assert res_forced.get("success") is True
+

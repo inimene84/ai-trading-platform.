@@ -149,6 +149,10 @@ async def predict(
         )
         return _make_neutral("Sidecar unreachable (fail-closed)")
 
+    logger.warning(
+        "KronosService: sidecar missed for %s — using local stub (KRONOS_ALLOW_LOCAL_STUB=true)",
+        symbol,
+    )
     # Explicit opt-in local stub for offline tests only.
     try:
         from backend.services.kronos import KronosPredictor

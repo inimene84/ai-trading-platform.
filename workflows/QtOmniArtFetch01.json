@@ -1,0 +1,741 @@
+{
+  "id": "QtOmniArtFetch01",
+  "name": "13 - QuantumTrade OmniRoute Article Fetch (15m)",
+  "active": true,
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 15
+            }
+          ]
+        }
+      },
+      "id": "a13-sched-0001-0000-000000000001",
+      "name": "Schedule Trigger (15m)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        192,
+        416
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://cointelegraph.com/rss",
+        "options": {}
+      },
+      "id": "a13-rss-0002-0000-000000000002",
+      "name": "RSS CoinTelegraph",
+      "type": "n8n-nodes-base.rssFeedRead",
+      "typeVersion": 1.1,
+      "position": [
+        480,
+        432
+      ],
+      "alwaysOutputData": true,
+      "continueOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all();\nconst out = [];\nfor (const i of items) {\n  const j = i.json || {};\n  const url = String(j.link || j.url || j.guid || '').trim();\n  if (!url.startsWith('http')) continue;\n  out.push({\n    json: {\n      title: String(j.title || '').slice(0, 240),\n      url,\n      published_at: String(j.pubDate || j.isoDate || new Date().toISOString()),\n      source: 'cointelegraph-rss',\n    }\n  });\n  if (out.length >= 2) break;\n}\nreturn out;"
+      },
+      "id": "a13-code-0003-0000-000000000003",
+      "name": "Limit News URLs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        688,
+        272
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://omni.allikas.online/v1/web/fetch",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ url: $json.url, provider: 'firecrawl', format: 'markdown', depth: 0 }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          },
+          "timeout": 60000
+        }
+      },
+      "id": "a13-http-0004-0000-000000000004",
+      "name": "OmniRoute Firecrawl Fetch",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2480,
+        272
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "httpBearerAuth": {
+          "id": "OmniRtTradV3n801",
+          "name": "OmniRoute Trading v3"
+        }
+      },
+      "continueOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const POS = ['rally','surge','bullish','gains','gain','rises','rise','soar','jump','jumps','record','high','recover','recovery','boom','growth','profit','profits','strong','positive','upward','breakout','outperform','beat','beats','upgrade','buy','hawkish','stimulus','approval','inflow','etf','adopt','adoption'];\nconst NEG = ['crash','drop','drops','bearish','loss','losses','fall','falls','plunge','plunges','sink','sinks','decline','declines','fear','risk','warn','warning','sell','downgrade','weak','negative','slump','tumble','tumbles','panic','collapse','recession','hack','lawsuit','outflow','ban','fraud','default'];\nconst SYMBOLS = [\n  {sym:'BTCUSDT', keys:['bitcoin','btc']},\n  {sym:'ETHUSDT', keys:['ethereum','eth']},\n  {sym:'SOLUSDT', keys:['solana','sol']},\n  {sym:'XRPUSDT', keys:['ripple','xrp']},\n  {sym:'BNBUSDT', keys:['bnb','binance coin']},\n];\n\nfunction scoreText(t) {\n  const w = String(t || '').toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);\n  let p = 0, n = 0;\n  for (const x of w) {\n    if (POS.includes(x)) p++;\n    if (NEG.includes(x)) n++;\n  }\n  const tot = p + n;\n  if (!tot) return {sentiment_score: 0, impact_score: 0.2};\n  const s = (p - n) / tot;\n  const impact = Math.min(1, 0.2 + tot / 14);\n  return {\n    sentiment_score: Math.round(Math.max(-1, Math.min(1, s)) * 1000) / 1000,\n    impact_score: Math.round(impact * 1000) / 1000,\n  };\n}\n\nfunction extractFetchText(j) {\n  const data = (j && j.data && typeof j.data === 'object') ? j.data : (j || {});\n  const chunks = [\n    data.content, data.markdown, data.text, data.html,\n    j.content, j.markdown, j.text,\n    data.body, j.body,\n  ];\n  for (const c of chunks) {\n    if (typeof c === 'string' && c.trim().length > 40) return c.trim().slice(0, 8000);\n  }\n  try {\n    const s = JSON.stringify(j);\n    return s.length > 40 ? s.slice(0, 4000) : '';\n  } catch (e) {\n    return '';\n  }\n}\n\nconst fetchItems = $input.all();\nconst prevItems = $('Limit News URLs').all();\nconst out = [];\nfor (let i = 0; i < fetchItems.length; i++) {\n  const j = fetchItems[i].json || {};\n  const prev = ((prevItems[i] || prevItems[0] || {}).json) || {};\n  const text = extractFetchText(j);\n  const title = prev.title || ((j.data && j.data.metadata && j.data.metadata.title) || j.title || '');\n  if (!text || text.length < 40) continue;\n  const blob = (title + ' ' + text).toLowerCase();\n  let matched = SYMBOLS.filter(s => s.keys.some(k => blob.includes(k))).map(s => s.sym);\n  if (!matched.length) matched = ['BTCUSDT'];\n  matched = matched.slice(0, 3);\n  const scored = scoreText(title + ' ' + text);\n  const headline = String(title || prev.url || 'article').slice(0, 180);\n  out.push({\n    json: {\n      title: String(title || '').slice(0, 500),\n      content: text,\n      source: prev.source || 'omniroute-firecrawl-fetch',\n      url: prev.url,\n      published_at: String(prev.published_at || new Date().toISOString()),\n      sentiment: scored.sentiment_score,\n      symbols: matched,\n      embed_text: (String(title || '') + '\\n' + text).slice(0, 8000),\n      sentiment_score: scored.sentiment_score,\n      impact_score: scored.impact_score,\n      time_horizon: 'short',\n      topics: headline,\n    }\n  });\n}\nreturn out;\n"
+      },
+      "id": "a13-code-0005-0000-000000000005",
+      "name": "Score Article Sentiment",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2704,
+        272
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://backend:8000/api/news/sentiment",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "X-API-Key",
+              "value": "={{ $env.BACKEND_API_KEY }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ symbol: $json.symbol, sentiment_score: $json.sentiment_score, impact_score: $json.impact_score, source: $json.source, time_horizon: $json.time_horizon, topics: $json.topics }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          },
+          "timeout": 20000
+        }
+      },
+      "id": "a13-http-0006-0000-000000000006",
+      "name": "POST QT News Sentiment",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3152,
+        176
+      ],
+      "alwaysOutputData": true,
+      "continueOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "content": "## OmniRoute article fetch + Qdrant archive\nRSS (2 URLs) -> POST /v1/web/fetch provider=firecrawl -> keyword sentiment -> POST /api/news/sentiment.\nArchive: OpenRouter embeddings openai/text-embedding-3-small (1536-d) -> POST /api/news/archive.\nChat/LLM not used here. Search/fetch stay on OmniRoute. No Telegram. No order execution.\n\n### QT enrichment\nTavily/SerpAPI/Jina/Firecrawl Direct/CMC wired after RSS limit; merged URLs then OmniRoute fetch.",
+        "height": 240,
+        "width": 360
+      },
+      "id": "a13-note-0007-0000-000000000007",
+      "name": "Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        240,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "qt-omni-art-fetch-13-manual",
+        "options": {}
+      },
+      "id": "qt-omni-art-fetch-13-manual",
+      "name": "Manual Test Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        208,
+        656
+      ],
+      "webhookId": "qt-omni-art-fetch-13-manual"
+    },
+    {
+      "parameters": {
+        "jsCode": "const out = [];\nfor (const it of $input.all()) {\n  const j = it.json || {};\n  const symbols = Array.isArray(j.symbols) && j.symbols.length ? j.symbols : ['BTCUSDT'];\n  const headline = String(j.topics || j.title || '').slice(0, 180);\n  for (const sym of symbols.slice(0, 3)) {\n    out.push({\n      json: {\n        symbol: String(sym),\n        sentiment_score: Number(j.sentiment_score || 0),\n        impact_score: Number(j.impact_score || 0),\n        source: j.source || 'omniroute-firecrawl-fetch',\n        time_horizon: j.time_horizon || 'short',\n        topics: headline,\n      }\n    });\n  }\n}\nreturn out;\n"
+      },
+      "id": "a13-code-explode-0008",
+      "name": "Explode Sentiment Rows",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2928,
+        176
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://openrouter.ai/api/v1/embeddings",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openRouterApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "HTTP-Referer",
+              "value": "https://n8n1.thorinvest.org"
+            },
+            {
+              "name": "X-Title",
+              "value": "QuantumTrade News Archive"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'openai/text-embedding-3-small', input: String($json.embed_text || $json.content || $json.title || 'crypto news') }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          },
+          "timeout": 45000
+        }
+      },
+      "id": "a13-http-embed-0009",
+      "name": "OpenRouter Embeddings",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2928,
+        368
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "openRouterApi": {
+          "id": "zmYwhM8HcJMN2zIy",
+          "name": "OpenRouter account"
+        }
+      },
+      "continueOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const embItems = $input.all();\nconst prevItems = $('Score Article Sentiment').all();\nconst out = [];\nfor (let i = 0; i < embItems.length; i++) {\n  const j = embItems[i].json || {};\n  const prev = ((prevItems[i] || prevItems[0] || {}).json) || {};\n  let emb = [];\n  const data = j.data ? j.data : j;\n  if (Array.isArray(data) && data[0] && Array.isArray(data[0].embedding)) {\n    emb = data[0].embedding;\n  } else if (data && Array.isArray(data.data) && data.data[0] && Array.isArray(data.data[0].embedding)) {\n    emb = data.data[0].embedding;\n  } else if (Array.isArray(j.embedding)) {\n    emb = j.embedding;\n  }\n  const dim = Array.isArray(emb) ? emb.length : 0;\n  if (!dim) {\n    out.push({ json: { archive_skipped: true, reason: 'no_embedding', embedding_dim: 0 } });\n    continue;\n  }\n  out.push({\n    json: {\n      title: String(prev.title || '').slice(0, 500),\n      content: String(prev.content || '').slice(0, 20000),\n      source: String(prev.source || 'omniroute-firecrawl-fetch'),\n      url: String(prev.url || ''),\n      published_at: String(prev.published_at || new Date().toISOString()),\n      sentiment: Number(prev.sentiment || 0),\n      symbols: Array.isArray(prev.symbols) ? prev.symbols : [],\n      embedding: emb,\n      embedding_dim: dim,\n    }\n  });\n}\nreturn out;\n"
+      },
+      "id": "a13-code-arch-000a",
+      "name": "Build Archive Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3152,
+        368
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://backend:8000/api/news/archive",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "X-API-Key",
+              "value": "={{ $env.BACKEND_API_KEY }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ title: $json.title, content: $json.content, source: $json.source, url: $json.url, published_at: $json.published_at, sentiment: $json.sentiment, symbols: $json.symbols, embedding: $json.embedding }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          },
+          "timeout": 20000
+        }
+      },
+      "id": "a13-http-arch-000b",
+      "name": "POST QT News Archive",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3376,
+        368
+      ],
+      "alwaysOutputData": true,
+      "continueOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items=$input.all();\nconst base=items.map(i=>i.json);\nreturn [{json:{query:'bitcoin OR ethereum OR solana OR crypto market news today', max_results:10, rss_items: base}}];"
+      },
+      "id": "seed-cfa29955",
+      "name": "QT Search Seed",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        912,
+        272
+      ]
+    },
+    {
+      "parameters": {
+        "query": "={{ $('QT Search Seed').item.json.query }}",
+        "options": {
+          "topic": "news",
+          "search_depth": "basic",
+          "max_results": 8,
+          "time_range": "day"
+        }
+      },
+      "id": "tavily-4b2eb067",
+      "name": "Tavily Search QT",
+      "type": "@tavily/n8n-nodes-tavily.tavily",
+      "typeVersion": 1,
+      "position": [
+        1136,
+        272
+      ],
+      "credentials": {
+        "tavilyApi": {
+          "id": "UHByjDyHzlJNVG00",
+          "name": "Tavily account QT"
+        }
+      },
+      "continueOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "https://serpapi.com/search.json",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpQueryAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "engine",
+              "value": "google_news"
+            },
+            {
+              "name": "q",
+              "value": "={{ $('QT Search Seed').item.json.query }}"
+            },
+            {
+              "name": "num",
+              "value": "8"
+            },
+            {
+              "name": "hl",
+              "value": "en"
+            },
+            {
+              "name": "gl",
+              "value": "us"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          },
+          "timeout": 45000
+        }
+      },
+      "id": "serp-b03e8d33",
+      "name": "SerpAPI News QT",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1360,
+        272
+      ],
+      "credentials": {
+        "httpQueryAuth": {
+          "id": "3Ud8WFZyh0tmSXj3",
+          "name": "SerpAPI QT HTTP"
+        }
+      },
+      "continueOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "search",
+        "searchQuery": "={{ $('QT Search Seed').item.json.query }}",
+        "options": {},
+        "requestOptions": {}
+      },
+      "id": "jina-c3e7e22d",
+      "name": "Jina Search QT",
+      "type": "n8n-nodes-base.jinaAi",
+      "typeVersion": 1,
+      "position": [
+        1584,
+        272
+      ],
+      "credentials": {
+        "jinaAiApi": {
+          "id": "Ux17uNU330bMbSXG",
+          "name": "Jina AI"
+        }
+      },
+      "continueOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.firecrawl.dev/v1/search",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ query: $('QT Search Seed').item.json.query, limit: 8 }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          },
+          "timeout": 60000
+        }
+      },
+      "id": "fcd-be4e52e5",
+      "name": "Firecrawl Direct QT",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1808,
+        272
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "nYBzRsXyPRMZmCB4",
+          "name": "Firecrawl QT"
+        }
+      },
+      "continueOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "symbol",
+              "value": "BTC,ETH,SOL"
+            },
+            {
+              "name": "convert",
+              "value": "USD"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          },
+          "timeout": 30000
+        }
+      },
+      "id": "cmc-f577bc3f",
+      "name": "CMC Quotes QT",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2032,
+        272
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "fToVIx7c2EALHAhR",
+          "name": "CMC QT"
+        }
+      },
+      "continueOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "function extractHits(j) {\n  const hits=[]; const pools=[];\n  if (!j || typeof j !== 'object') return hits;\n  if (Array.isArray(j.results)) pools.push(j.results);\n  if (Array.isArray(j.data)) pools.push(j.data);\n  if (j.data && Array.isArray(j.data.results)) pools.push(j.data.results);\n  if (Array.isArray(j.organic)) pools.push(j.organic);\n  if (Array.isArray(j.news_results)) pools.push(j.news_results);\n  if (Array.isArray(j.items)) pools.push(j.items);\n  for (const arr of pools) {\n    for (const r of arr) {\n      if (!r || typeof r !== 'object') continue;\n      const title=String(r.title||r.name||'').trim();\n      const url=String(r.url||r.link||r.href||'').trim();\n      const snippet=String(r.snippet||r.description||r.content||'').trim().slice(0,240);\n      if (url.startsWith('http')) hits.push({title,url,snippet,link:url,source:'qt-search'});\n    }\n  }\n  return hits;\n}\nfunction safe(n){ try{return $(n).first().json||{};}catch(e){return {};} }\nconst seed = safe('QT Search Seed');\nconst rss = Array.isArray(seed.rss_items) ? seed.rss_items : [];\nconst seen=new Set();\nconst out=[];\nfor (const r of rss) {\n  const url=String(r.link||r.url||r.guid||'').trim();\n  if (!url.startsWith('http')) continue;\n  const key=url.toLowerCase();\n  if (seen.has(key)) continue; seen.add(key);\n  out.push({ json: { ...r, link:url, url, source: r.source||'rss' } });\n}\nfor (const name of ['Tavily Search QT','SerpAPI News QT','Jina Search QT','Firecrawl Direct QT']) {\n  for (const h of extractHits(safe(name))) {\n    const key=h.url.toLowerCase();\n    if (seen.has(key)) continue; seen.add(key);\n    out.push({ json: { title:h.title, link:h.url, url:h.url, contentSnippet:h.snippet, source:h.source } });\n  }\n}\n// stash CMC on static for later nodes via first item meta\nlet market=null;\ntry {\n  const cmc=safe('CMC Quotes QT');\n  const d=cmc.data||cmc; market={};\n  for (const sym of ['BTC','ETH','SOL']) {\n    const row=d[sym]; if(!row) continue;\n    const q=(row.quote&&row.quote.USD)||{};\n    market[sym]={price:q.price, change_24h:q.percent_change_24h};\n  }\n  if (!Object.keys(market).length) market=null;\n} catch(e) {}\nif (!out.length) return [{ json: { link:'', url:'', title:'', skip:true, market } }];\nout[0].json.market = market;\nreturn out.slice(0, 12);\n"
+      },
+      "id": "mergeqt-cfcc1e03",
+      "name": "Merge QT + RSS URLs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2256,
+        272
+      ]
+    }
+  ],
+  "connections": {
+    "Schedule Trigger (15m)": {
+      "main": [
+        [
+          {
+            "node": "RSS CoinTelegraph",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "RSS CoinTelegraph": {
+      "main": [
+        [
+          {
+            "node": "Limit News URLs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Limit News URLs": {
+      "main": [
+        [
+          {
+            "node": "QT Search Seed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OmniRoute Firecrawl Fetch": {
+      "main": [
+        [
+          {
+            "node": "Score Article Sentiment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Score Article Sentiment": {
+      "main": [
+        [
+          {
+            "node": "Explode Sentiment Rows",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "OpenRouter Embeddings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Test Webhook": {
+      "main": [
+        [
+          {
+            "node": "RSS CoinTelegraph",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Explode Sentiment Rows": {
+      "main": [
+        [
+          {
+            "node": "POST QT News Sentiment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenRouter Embeddings": {
+      "main": [
+        [
+          {
+            "node": "Build Archive Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Archive Payload": {
+      "main": [
+        [
+          {
+            "node": "POST QT News Archive",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "QT Search Seed": {
+      "main": [
+        [
+          {
+            "node": "Tavily Search QT",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tavily Search QT": {
+      "main": [
+        [
+          {
+            "node": "SerpAPI News QT",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SerpAPI News QT": {
+      "main": [
+        [
+          {
+            "node": "Jina Search QT",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Jina Search QT": {
+      "main": [
+        [
+          {
+            "node": "Firecrawl Direct QT",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Firecrawl Direct QT": {
+      "main": [
+        [
+          {
+            "node": "CMC Quotes QT",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CMC Quotes QT": {
+      "main": [
+        [
+          {
+            "node": "Merge QT + RSS URLs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge QT + RSS URLs": {
+      "main": [
+        [
+          {
+            "node": "OmniRoute Firecrawl Fetch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Europe/Tallinn",
+    "binaryMode": "separate"
+  },
+  "staticData": {
+    "node:Schedule Trigger (15m)": {
+      "recurrenceRules": [
+        null
+      ],
+      "recurrenceRuleSignatures": [
+        null
+      ]
+    }
+  },
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "pinData": {},
+  "versionId": "f6be9f3c-7796-4195-97a9-0fe71bdec565",
+  "activeVersionId": "54086664-63e8-4802-91e6-367a504d93f2",
+  "triggerCount": 2
+}

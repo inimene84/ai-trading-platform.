@@ -1,0 +1,177 @@
+{
+  "id": "2Wo50hT9z1xqjBXT",
+  "name": "03 - QuantumTrade Execution Scheduler (30s Cron)",
+  "active": true,
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "seconds"
+            }
+          ]
+        }
+      },
+      "id": "11111111-2222-3333-4444-555555555501",
+      "name": "Schedule Trigger (30s)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        240,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "url": "http://backend:8000/api/signals/ready-for-execution?limit=10",
+        "options": {}
+      },
+      "id": "22222222-3333-4444-5555-666666666602",
+      "name": "HTTP: Fetch Ready Signals",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        480,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{ $json.ready_count }}",
+              "operation": "larger",
+              "value2": 0
+            }
+          ],
+          "combinator": "and",
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          }
+        },
+        "options": {}
+      },
+      "id": "33333333-4444-5555-6666-777777777703",
+      "name": "Signals Ready to Execute?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        720,
+        304
+      ]
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "signals",
+        "options": {}
+      },
+      "id": "44444444-5555-6666-7777-888888888804",
+      "name": "Item Lists: Split Signals",
+      "type": "n8n-nodes-base.itemLists",
+      "typeVersion": 3,
+      "position": [
+        960,
+        224
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://backend:8000/api/signals/execute-candidate",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "={{ $env.BACKEND_API_KEY }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"candidate_id\": \"{{ $json.id }}\",\n  \"force\": false\n}",
+        "options": {}
+      },
+      "id": "55555555-6666-7777-8888-999999999905",
+      "name": "HTTP: Execute Candidate Order",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1200,
+        224
+      ],
+      "continueOnFail": true,
+      "onError": "continueRegularOutput"
+    }
+  ],
+  "connections": {
+    "Schedule Trigger (30s)": {
+      "main": [
+        [
+          {
+            "node": "HTTP: Fetch Ready Signals",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP: Fetch Ready Signals": {
+      "main": [
+        [
+          {
+            "node": "Signals Ready to Execute?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Signals Ready to Execute?": {
+      "main": [
+        [
+          {
+            "node": "Item Lists: Split Signals",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Item Lists: Split Signals": {
+      "main": [
+        [
+          {
+            "node": "HTTP: Execute Candidate Order",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "staticData": {
+    "node:Schedule Trigger (30s)": {
+      "recurrenceRules": [
+        null
+      ],
+      "recurrenceRuleSignatures": [
+        null
+      ]
+    }
+  },
+  "meta": null,
+  "pinData": {},
+  "versionId": "dab714a9-4e70-49b9-99a4-4473929c64a2",
+  "activeVersionId": "4fa1d90a-ed8b-4f58-9aa8-3f7640355aa7",
+  "triggerCount": 1
+}

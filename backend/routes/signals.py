@@ -117,15 +117,20 @@ async def get_all_candidates(
 @router.get("/ready-for-execution")
 async def get_ready_signals(
     broker: Optional[str] = Query(None, description="Filter by broker: ctrader, binance_futures"),
-    forex_only: bool = Query(False, description="Only cTrader forex/metal candidates"),
+    forex_only: Optional[bool] = Query(None, description="Only cTrader forex/metal candidates"),
     limit: Optional[int] = Query(None, ge=1, le=50, description="Max signals returned this poll"),
 ):
     """Polled by n8n or execution workers to get signals currently inside their active timing window."""
     now_ts = int(time.time())
+    fx_only = (
+        forex_only
+        if forex_only is not None
+        else signal_candidate_engine.execution_config.get("forex_only", False)
+    )
     ready = signal_candidate_engine.get_ready_signals(
         now_ts,
         broker=broker,
-        forex_only=forex_only,
+        forex_only=fx_only,
         limit=limit,
         enforce_ctrader_position_cap=True,
     )

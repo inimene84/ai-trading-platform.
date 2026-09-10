@@ -1,0 +1,166 @@
+{
+  "id": "Nh18cqaTPFZmJMHX",
+  "name": "8.-Binance FM 1day indicators tool",
+  "active": true,
+  "nodes": [
+    {
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $json.sessionId }}"
+      },
+      "id": "01b03812-374f-478f-9015-1a2a26788fd6",
+      "name": "Simple Memory",
+      "type": "@n8n/n8n-nodes-langchain.memoryBufferWindow",
+      "position": [
+        208,
+        448
+      ],
+      "typeVersion": 1.3
+    },
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "message"
+            },
+            {
+              "name": "sessionId"
+            }
+          ]
+        }
+      },
+      "id": "16a6cab6-08da-439e-acb4-6267e806563d",
+      "name": "When Executed by Another Workflow",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "position": [
+        -144,
+        224
+      ],
+      "typeVersion": 1.1
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.message }}",
+        "options": {
+          "systemMessage": "You are the **Binance 1-Day Technical Indicator Agent**, responsible for calculating and returning **1-day interval signals** for any Binance Spot Market pair. You help detect major trend shifts, long-term support/resistance, and macro market behavior.\n\n---\n\n### \ud83d\udd17 Connected Tools (via internal workflow)\n\nYou call the following indicators using `https://treasurium.app.n8n.cloud/webhook/1d-indicators`:\n\n* **RSI** (14-period)\n* **MACD** (12/26/9 config)\n* **Bollinger Bands** (20-period, 2\u00d7STD)\n* **SMA** (20-period)\n* **EMA** (20-period)\n* **ADX** (14-period with DI+ and DI\u2212)\n\n---\n\n### \ud83d\udce5 Expected Input Format\n\n```json\n{\n  \"message\": \"SOLUSDT\",\n  \"sessionId\": \"telegram_chat_id\"\n}\n```\n\n* `message`: A valid Binance Spot Market symbol (e.g., SOLUSDT, MATICUSDT)\n* `sessionId`: For preserving user context and session-based replies\n\n---\n\n### \ud83d\udcca Behavior\n\n* Sends POST request to:\n\n  ```\n  https://treasurium.app.n8n.cloud/webhook/1d-indicators\n  ```\n\n  with:\n\n  ```json\n  {\n    \"symbol\": \"SOLUSDT\"\n  }\n  ```\n\n* Retrieves **at least 40 daily candles** via Binance API\n\n* Calculates and merges results from all indicators listed above\n\n* Returns a single unified array for downstream agent interpretation\n\n---\n\n### \ud83e\udde0 Use Case Scenarios\n\n* Identify **long-term market sentiment and trend shifts**\n* Support **macro trade setups** or high-confidence swing positions\n* Anchor **support/resistance levels** across multi-timeframe views\n* Feed **Financial Analyst Tool** and **Quant AI Agent** with base trend orientation\n\n---\n\n### \u26a0\ufe0f Operational Notes\n\n* Validate that the symbol is correctly formatted (uppercase, no typos)\n* Ensure Binance returns sufficient 1d candles (fallback if not)\n* Timestamp consistency is required across indicators\n* Return all calculated metrics in structured JSON format with labels\n\n"
+        }
+      },
+      "id": "8bfdfc09-ed88-4c4e-87e8-3f6672fde4b9",
+      "name": "Binance SM 1day Indicators Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "position": [
+        128,
+        224
+      ],
+      "typeVersion": 1.9
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://n8n1.thorinvest.org/webhook/23c8ec04-5aec-49c6-9c2c-c352ccec11b4",
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "symbol",
+              "value": "={{ /*n8n-auto-generated-fromAI-override*/ $fromAI('parameters0_Value', ``, 'string') }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "8568eeea-2064-4bea-8a29-46f4feb98f79",
+      "name": "HTTP Request 1d Indicators Tool",
+      "type": "n8n-nodes-base.httpRequestTool",
+      "position": [
+        416,
+        464
+      ],
+      "typeVersion": 4.2
+    },
+    {
+      "parameters": {
+        "model": "deepseek/deepseek-v4-flash",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenRouter",
+      "typeVersion": 1,
+      "position": [
+        80,
+        528
+      ],
+      "id": "e1521fa9-9a6f-465a-98e9-5c7e676f86fc",
+      "name": "OpenRouter Chat Model",
+      "credentials": {
+        "openRouterApi": {
+          "id": "qQi8XDmwL3UdHNax",
+          "name": "OpenRouter account 3"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Simple Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "Binance SM 1day Indicators Agent",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request 1d Indicators Tool": {
+      "ai_tool": [
+        [
+          {
+            "node": "Binance SM 1day Indicators Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "When Executed by Another Workflow": {
+      "main": [
+        [
+          {
+            "node": "Binance SM 1day Indicators Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenRouter Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Binance SM 1day Indicators Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "timeSavedMode": "fixed",
+    "errorWorkflow": "p8vhXj53RK8MUxb7",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": true
+  },
+  "staticData": null,
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "pinData": {},
+  "versionId": "0f79af67-8151-4c9d-8738-0b4c1fe0b006",
+  "activeVersionId": "0f79af67-8151-4c9d-8738-0b4c1fe0b006",
+  "triggerCount": 0
+}

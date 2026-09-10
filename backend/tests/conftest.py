@@ -30,3 +30,4 @@ def clean_trading_mode_for_tests(monkeypatch):
     monkeypatch.setenv("TRADING_MODE", "live")
     monkeypatch.setenv("PAPER_TRADING", "false")
     monkeypatch.setenv("DRY_RUN_ALL", "false")
+    monkeypatch.setenv("BINANCE_PAPER_PARALLEL", "false")
