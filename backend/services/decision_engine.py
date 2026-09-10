@@ -540,7 +540,7 @@ class DecisionEngine:
             except Exception as e:
                 logger.warning(f"[{symbol}] Sentiment gate evaluation error (failing neutral): {e}")
 
-        # 4e. Jesse Machine Learning Directional Consensus Gate
+        # 4e. Jesse Machine Learning Directional Consensus & Meta-Label Gate
         if self.enable_jesse_ml:
             try:
                 from backend.services.jesse_bridge import jesse_bridge
@@ -551,26 +551,41 @@ class DecisionEngine:
                     probs = ml_res.get("probabilities", {})
                     p_bullish = probs.get("bullish", 0.0)
                     p_bearish = probs.get("bearish", 0.0)
+                    uncertainty = ml_res.get("uncertainty", "LOW")
+                    gated = ml_res.get("gated", False)
+                    kelly = ml_res.get("kelly", {})
 
-                    # Hard Veto if ML model strongly opposes candidate direction
-                    if signal.signal == "BUY" and p_bearish >= 0.55 and p_bearish > p_bullish * 1.4:
-                        logger.info(f"[{symbol}] Jesse ML Gate VETO: Strong Bearish probability ({p_bearish*100:.1f}% vs {p_bullish*100:.1f}%) blocks BUY")
+                    # Conformal Uncertainty Veto: reject trades in high ambiguity or wide conformal sets
+                    if uncertainty == "HIGH" or gated:
+                        reason = ml_res.get("gated_reason") or f"Conformal uncertainty is HIGH (margin={ml_res.get('conformal_margin', 0):.3f})"
+                        logger.info(f"[{symbol}] Jesse ML Conformal Uncertainty Gate VETO: {reason} blocks {signal.signal}")
+                        self._record_eval(symbol, signal.signal, signal.confidence, f"vetoed by Jesse ML uncertainty gate ({reason})")
+                        return None
+
+                    # Hard Veto if ML model opposes candidate direction
+                    if signal.signal == "BUY" and (p_bearish >= 0.50 or ml_sig == "SELL"):
+                        logger.info(f"[{symbol}] Jesse ML Gate VETO: Bearish drift ({p_bearish*100:.1f}%, sig={ml_sig}) opposes BUY")
                         self._record_eval(symbol, signal.signal, signal.confidence, f"vetoed by Jesse ML gate (bearish prob: {p_bearish:.2f})")
                         return None
-                    elif signal.signal == "SELL" and p_bullish >= 0.55 and p_bullish > p_bearish * 1.4:
-                        logger.info(f"[{symbol}] Jesse ML Gate VETO: Strong Bullish probability ({p_bullish*100:.1f}% vs {p_bearish*100:.1f}%) blocks SELL")
+                    elif signal.signal == "SELL" and (p_bullish >= 0.50 or ml_sig == "BUY"):
+                        logger.info(f"[{symbol}] Jesse ML Gate VETO: Bullish drift ({p_bullish*100:.1f}%, sig={ml_sig}) opposes SELL")
                         self._record_eval(symbol, signal.signal, signal.confidence, f"vetoed by Jesse ML gate (bullish prob: {p_bullish:.2f})")
                         return None
 
                     # Confidence boost on directional consensus
                     if (signal.signal == "BUY" and ml_sig == "BUY") or (signal.signal == "SELL" and ml_sig == "SELL"):
-                        boost = min(0.10, ml_conf * 0.12)
+                        boost = min(0.12, ml_conf * 0.15)
                         signal.confidence = min(1.0, signal.confidence + boost)
                         logger.info(f"[{symbol}] Jesse ML Gate BOOST: Consensus {ml_sig} (+{boost:.2f} -> conf={signal.confidence:.2f})")
                     elif (signal.signal == "BUY" and ml_sig == "SELL") or (signal.signal == "SELL" and ml_sig == "BUY"):
                         dampen = min(0.15, ml_conf * 0.15)
                         signal.confidence = max(0.0, signal.confidence - dampen)
                         logger.info(f"[{symbol}] Jesse ML Gate DAMPEN: Disagreement {ml_sig} (-{dampen:.2f} -> conf={signal.confidence:.2f})")
+
+                    # Capture Fractional Kelly size multiplier for downstream position sizing
+                    if "size_multiplier" in kelly:
+                        setattr(signal, "kelly_multiplier", float(kelly["size_multiplier"]))
+                        logger.info(f"[{symbol}] Jesse ML Calibrated Edge: Kelly multiplier={kelly['size_multiplier']}x (fractional_kelly={kelly.get('fractional_kelly', 0):.4f})")
 
                     if signal.confidence < self.config.min_signal_strength:
                         self._record_eval(symbol, signal.signal, signal.confidence, "confidence reduced below threshold by Jesse ML gate")
@@ -693,16 +708,25 @@ class DecisionEngine:
         )
 
         # ── Position sizing ──
-        # Risk-based: size so a SL hit costs ~risk_per_trade_pct of equity.
+        # Risk-based: size so a SL hit costs ~risk_per_trade_pct of equity,
+        # modulated by the Fractional Kelly multiplier from calibrated ML.
         # Falls back to the fixed trade_usdt_amount notional when equity or the
         # SL distance aren't usable. Pyramid layers keep their fixed notional.
         trade_usdt = self.config.pyramid_usdt_per_layer if is_pyramid else self.config.trade_usdt_amount
+        kelly_mult = getattr(signal, "kelly_multiplier", None)
+
+        # Apply Kelly sizing to baseline notional for primary entries
+        if not is_pyramid and kelly_mult is not None and kelly_mult > 0:
+            trade_usdt = trade_usdt * float(kelly_mult)
+            logger.info(f"[{symbol}] Base notional scaled by Fractional Kelly ({kelly_mult:.2f}x) -> {trade_usdt:.2f} USDT")
+
         notional = trade_usdt
         if (not is_pyramid and getattr(self.config, "equity_sizing_enabled", False)
                 and self.account_equity > 0 and sl and entry_price > 0):
             per_unit_risk = abs(entry_price - sl)
             if per_unit_risk > 0:
-                risk_amount = self.account_equity * self.config.risk_per_trade_pct
+                k_factor = float(kelly_mult) if (kelly_mult is not None and kelly_mult > 0) else 1.0
+                risk_amount = self.account_equity * (self.config.risk_per_trade_pct * k_factor)
                 qty_by_risk = risk_amount / per_unit_risk
                 notional = max(trade_usdt, qty_by_risk * entry_price)
                 max_affordable = affordable_notional(

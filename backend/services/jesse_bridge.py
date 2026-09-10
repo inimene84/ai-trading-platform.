@@ -295,6 +295,36 @@ class JesseBridgeService:
             logger.error(f"Failed to query ML prediction endpoint: {e}")
             return {"status": "error", "error": str(e)}
 
+    async def get_meta_prediction(
+        self,
+        symbol: str,
+        primary_signal: str,
+        timeframe: str = "1h",
+        model_type: str = "lightgbm",
+        min_prob: float = 0.45,
+    ) -> Dict[str, Any]:
+        """Fetch secondary meta-model trade filter and Fractional Kelly sizing recommendation."""
+        base_ml = await self._resolve_ml_url()
+        try:
+            async with httpx.AsyncClient(timeout=4.0) as client:
+                res = await client.post(
+                    f"{base_ml}/meta-predict",
+                    json={
+                        "symbol": symbol,
+                        "primary_signal": primary_signal,
+                        "timeframe": timeframe,
+                        "model_type": model_type,
+                        "min_prob": min_prob,
+                    },
+                )
+                if res.status_code == 200:
+                    return res.json()
+                return {"action": "EXECUTE", "reason": f"ML server returned HTTP {res.status_code} (fail-open)"}
+        except Exception as e:
+            logger.debug(f"Jesse meta-predict notice (fail-open): {e}")
+            return {"action": "EXECUTE", "reason": f"ML query error (fail-open): {e}"}
+
+
     async def get_ml_models(self) -> Dict[str, Any]:
         """Fetch status and list of trained ML model artifacts."""
         base_ml = await self._resolve_ml_url()
