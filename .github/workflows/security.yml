@@ -159,7 +159,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Trivy filesystem
-        uses: aquasecurity/trivy-action@0.32.0
+        uses: aquasecurity/trivy-action@v0.36.0
         continue-on-error: true
         with:
           scan-type: fs
@@ -171,7 +171,7 @@ jobs:
           exit-code: "0"
 
       - name: Trivy config (compose / Dockerfile)
-        uses: aquasecurity/trivy-action@0.32.0
+        uses: aquasecurity/trivy-action@v0.36.0
         continue-on-error: true
         with:
           scan-type: config
