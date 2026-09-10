@@ -1,0 +1,181 @@
+name: Security
+
+# Blocking: leaked secrets and known burned control-plane markers.
+# Advisory: dependency and container CVEs (uploaded as artifacts).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+
+concurrency:
+  group: security-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  secrets:
+    name: Secrets (working tree)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Guard known burned markers
+        run: bash scripts/ci/secret_guards.sh
+
+      - name: Install gitleaks
+        env:
+          GITLEAKS_VERSION: "8.24.3"
+        run: |
+          set -euo pipefail
+          curl -sSfL \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            | tar -xz -C /usr/local/bin gitleaks
+          gitleaks version
+
+      - name: Gitleaks (current tree)
+        run: |
+          gitleaks detect \
+            --source . \
+            --no-git \
+            --redact \
+            --verbose \
+            --config .gitleaks.toml \
+            --report-path gitleaks-working-tree.json \
+            --report-format json
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gitleaks-working-tree
+          path: gitleaks-working-tree.json
+          if-no-files-found: ignore
+
+  secrets-history:
+    name: Secrets (git history, advisory)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install gitleaks
+        env:
+          GITLEAKS_VERSION: "8.24.3"
+        run: |
+          set -euo pipefail
+          curl -sSfL \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            | tar -xz -C /usr/local/bin gitleaks
+
+      - name: Gitleaks (full history)
+        run: |
+          gitleaks detect \
+            --source . \
+            --redact \
+            --verbose \
+            --config .gitleaks.toml \
+            --report-path gitleaks-history.json \
+            --report-format json
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gitleaks-history
+          path: gitleaks-history.json
+          if-no-files-found: ignore
+
+  python-advisories:
+    name: Python advisories
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: pip-audit
+        continue-on-error: true
+        run: |
+          python -m pip install --upgrade pip pip-audit
+          pip-audit -r backend/requirements.txt --progress-spinner off --format json --output pip-audit.json
+          pip-audit -r backend/requirements.txt --progress-spinner off --format columns
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pip-audit
+          path: pip-audit.json
+          if-no-files-found: ignore
+
+  frontend-advisories:
+    name: Frontend advisories
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: npm audit (high+)
+        continue-on-error: true
+        working-directory: frontend
+        run: |
+          npm ci --no-fund --ignore-scripts
+          npm audit --audit-level=high --json > ../npm-audit.json || true
+          npm audit --audit-level=high
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: npm-audit
+          path: npm-audit.json
+          if-no-files-found: ignore
+
+  container-fs:
+    name: Filesystem / Dockerfile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Trivy filesystem
+        uses: aquasecurity/trivy-action@0.32.0
+        continue-on-error: true
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          format: sarif
+          output: trivy-fs.sarif
+          exit-code: "0"
+
+      - name: Trivy config (compose / Dockerfile)
+        uses: aquasecurity/trivy-action@0.32.0
+        continue-on-error: true
+        with:
+          scan-type: config
+          scan-ref: .
+          severity: HIGH,CRITICAL
+          format: table
+          exit-code: "0"
+
+      - name: Upload Trivy SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        continue-on-error: true
+        with:
+          sarif_file: trivy-fs.sarif
+          category: trivy-fs
