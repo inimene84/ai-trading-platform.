@@ -1544,7 +1544,10 @@ class TradingLoopService:
             )
 
             # Save snapshot
-            distinct_open_symbols = len({t.symbol for t in open_trades})
+            from backend.services.trading_mode import get_trading_mode, get_active_broker_name
+            active_broker = get_active_broker_name()
+            current_mode = get_trading_mode().value if hasattr(get_trading_mode(), "value") else str(get_trading_mode())
+
             snapshot = PortfolioSnapshot(
                 total_value=real_equity,
                 cash=real_cash,
@@ -1552,6 +1555,9 @@ class TradingLoopService:
                 total_pnl=round(float(realized_pnl), 4),
                 open_positions=distinct_open_symbols,
                 cycle_number=self._cycle_count,
+                broker=active_broker,
+                account_id=os.getenv("CTRADER_ACCOUNT_ID") if active_broker.startswith("ctrader") else "binance_main",
+                mode=current_mode,
             )
             db.add(snapshot)
             db.commit()

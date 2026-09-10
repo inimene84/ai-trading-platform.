@@ -24,14 +24,14 @@ docker network connect $(docker inspect ai-trading-backend --format '{{range .Ne
 ## 3. Create Qdrant collection (if not exists)
 ```bash
 # The collection should be created on first archive call, but verify:
-curl -X GET http://72.60.18.113:8081/api/news/history | jq '.count'
+curl -X GET http://<vps-ip>:8081/api/news/history | jq '.count'
 ```
 
 ## 4. FIXED curl test (use proper JSON)
 ```bash
 # Generate proper 1536-dim embedding array:
 docker exec -it ai-trading-backend python3 -c "import json; print(json.dumps([0.1]*1536))" > /tmp/emb.json
-curl -X POST http://72.60.18.113:8081/api/news/archive \
+curl -X POST http://<vps-ip>:8081/api/news/archive \
   -H "Content-Type: application/json" \
   -d '{"title":"Verify connectivity","content":"test","source":"validation","url":"https://test.com","published_at":"2026-06-02T00:00:00Z","sentiment":0.5,"embedding":'"$(cat /tmp/emb.json)"'}'
 ```

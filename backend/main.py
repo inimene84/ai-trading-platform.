@@ -65,15 +65,21 @@ logger = logging.getLogger(__name__)
 
 
 def validate_live_startup_security() -> None:
-    """Refuse to start a live trading process without admin authentication."""
+    """Refuse to start a live trading process without admin authentication and explicit deployment confirmation."""
     from backend.security import admin_auth_enabled
     from backend.services.trading_mode import TradingMode, get_trading_mode
 
-    if get_trading_mode() == TradingMode.LIVE and not admin_auth_enabled():
-        raise RuntimeError(
-            "Refusing LIVE startup without ADMIN_API_KEY/API_AUTH_TOKEN/"
-            "BACKEND_API_KEY. Configure a strong token before enabling live trading."
-        )
+    if get_trading_mode() == TradingMode.LIVE:
+        if not admin_auth_enabled():
+            raise RuntimeError(
+                "Refusing LIVE startup without ADMIN_API_KEY/API_AUTH_TOKEN/"
+                "BACKEND_API_KEY. Configure a strong token before enabling live trading."
+            )
+        if os.getenv("CONFIRM_LIVE_DEPLOY", "").strip().lower() != "true":
+            raise RuntimeError(
+                "Refusing LIVE startup: CONFIRM_LIVE_DEPLOY=true is required to execute real-money orders. "
+                "Set CONFIRM_LIVE_DEPLOY=true in .env to confirm live execution."
+            )
 
 
 async def run_supervised_task(task_name: str, coro_func, *args, **kwargs):
@@ -263,8 +269,9 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("ℹ Trade memory disabled (TRADE_MEMORY_ENABLED=false)")
 
-    # 6. Skill-Miner
-    if os.getenv("SKILL_MINER_ENABLED", "true").lower() == "true":
+    # 6. Skill-Miner (disabled by default in LIVE mode to prevent unnecessary LLM churn)
+    default_miner = "false" if resolved_mode == TradingMode.LIVE else "true"
+    if os.getenv("SKILL_MINER_ENABLED", default_miner).lower() == "true":
         from backend.services.skill_miner import skill_miner
         task = asyncio.create_task(run_supervised_task("Skill Miner", skill_miner.run_miner_loop))
         background_tasks.append(task)

@@ -43,7 +43,7 @@ docker inspect ai-trading-litellm --format '{{.Config.Env}}' | grep -i database 
 
 ### 4. Update n8n workflow #11 URL
 In n8n UI (hard to SSH-in):
-- Change InfluxDB URL from `http://72.60.18.113:8086` to `http://ai-trading-backend:8000/api/news/sentiment`
+- Change InfluxDB URL from `http://<vps-ip>:8086` to `http://ai-trading-backend:8000/api/news/sentiment`
 - Or: Use public endpoint `https://thorinvest.org/api/news/sentiment`
 
 ### 5. Check A0 trading logs BEFORE restart

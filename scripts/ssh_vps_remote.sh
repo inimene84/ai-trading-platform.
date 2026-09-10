@@ -4,7 +4,11 @@
 # Optional: SSH_PORT (default 22), PROJECT_DIR (default /root/ai-trading-platform-v3)
 set -euo pipefail
 
-SSH_HOST="${SSH_HOST:-72.60.18.113}"
+SSH_HOST="${SSH_HOST:-}"
+if [[ -z "$SSH_HOST" ]]; then
+  echo "Error: SSH_HOST environment variable is required." >&2
+  exit 1
+fi
 SSH_USER="${SSH_USER:-root}"
 SSH_PORT="${SSH_PORT:-22}"
 PROJECT_DIR="${PROJECT_DIR:-/root/ai-trading-platform-v3}"

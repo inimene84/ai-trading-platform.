@@ -56,8 +56,8 @@ def is_sensitive_request(request: Request) -> bool:
     if path.startswith(TRADING_PREFIXES):
         if path in PUBLIC_TRADING_PATHS:
             return False
-        # Dashboard reads (GET) stay open; loop start/stop and config writes require auth.
-        return method not in {"GET", "HEAD"}
+        # Protect operational data (positions, balances, status, history) as well as loop controls.
+        return True
 
     return method not in {"GET", "HEAD"}
 

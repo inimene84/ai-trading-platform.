@@ -29,29 +29,48 @@ def _snapshot_risk_equity(snapshot: PortfolioSnapshot | None) -> float:
     return total_value
 
 
+def _filter_snapshots_for_risk(rows: list[PortfolioSnapshot]) -> list[PortfolioSnapshot]:
+    """Scope snapshot rows to active broker and trading mode when partitioned."""
+    active = _active_broker_name()
+    aliases = {
+        "ctrader": {"ctrader", "ctrader:paper", "ic", "icmarkets"},
+        "binance_futures": {"binance_futures", "binance", "binanceusdm"},
+    }
+    wanted = aliases.get(active, {active})
+    current_mode = get_trading_mode().value if hasattr(get_trading_mode(), "value") else str(get_trading_mode())
+
+    scoped = [
+        r for r in rows
+        if (not getattr(r, "broker", None) or getattr(r, "broker", "").lower() in wanted)
+        and (not getattr(r, "mode", None) or getattr(r, "mode", "").lower() == current_mode.lower())
+    ]
+    return scoped if scoped else rows
+
+
 def _peak_risk_equity(db: Session, window_start: datetime, current_value: float) -> float:
     """Max de-poisoned snapshot equity in the lookback window.
 
-    Ignore paper-era $100k peaks when the live book is a ~$1k cTrader demo
-    (or any book whose current equity is far below those snapshots).
+    Scopes snapshots to the active broker book and mode to prevent paper/live
+    cross-contamination.
     """
-    rows = (
+    raw_rows = (
         db.query(PortfolioSnapshot)
         .filter(PortfolioSnapshot.timestamp >= window_start)
         .all()
     )
+    rows = _filter_snapshots_for_risk(raw_rows)
     values = [_snapshot_risk_equity(row) for row in rows]
     values = [v for v in values if v > 0]
     cur = float(current_value or 0.0)
     if cur > 0 and values:
-        # Drop peaks more than 5x current NAV — classic paper-to-demo contamination.
+        # Drop peaks more than 5x current NAV — fallback against legacy unpartitioned rows.
         sane = [v for v in values if v <= cur * 5.0]
         if sane:
             return max(sane)
         return cur
     if values:
         return max(values)
-    fallback_rows = db.query(PortfolioSnapshot).all()
+    fallback_rows = _filter_snapshots_for_risk(db.query(PortfolioSnapshot).all())
     fallback = [_snapshot_risk_equity(row) for row in fallback_rows]
     fallback = [v for v in fallback if v > 0]
     if cur > 0 and fallback:
@@ -63,25 +82,18 @@ def _peak_risk_equity(db: Session, window_start: datetime, current_value: float)
 
 logger = logging.getLogger(__name__)
 
-# Drawdown peak is computed over a rolling window, NOT all-time. An all-time
-# peak ratchets up permanently after any deposit and never resets, so the
-# drawdown % ends up measured against capital that may since have been
-# withdrawn — the guard then either never trips or trips spuriously. A rolling
-# window (default 30 days) keeps "peak" anchored to recent equity reality.
-# Default 72h (was 720/30d): a long window after a realized crash permanently
-# trips a restored ~20% drawdown gate against the old peak. Recent anchoring
-# keeps the halt meaningful for forward risk.
+# Drawdown peak is computed over a rolling window, NOT all-time.
 PEAK_LOOKBACK_HOURS = float(os.getenv("RISK_PEAK_LOOKBACK_HOURS", "72"))
 
 
-
 def _sane_snapshot_equity(db: Session, current_value: float, *, since: datetime | None = None) -> float | None:
-    """Pick a snapshot equity comparable to the live book (ignore paper $100k rows)."""
+    """Pick a snapshot equity comparable to the active book (ignore cross-broker / paper rows)."""
     cur = float(current_value or 0.0)
     q = db.query(PortfolioSnapshot)
     if since is not None:
         q = q.filter(PortfolioSnapshot.timestamp >= since)
-    rows = q.order_by(PortfolioSnapshot.timestamp.asc()).all()
+    raw_rows = q.order_by(PortfolioSnapshot.timestamp.asc()).all()
+    rows = _filter_snapshots_for_risk(raw_rows)
     vals = []
     for row in rows:
         v = _snapshot_risk_equity(row)

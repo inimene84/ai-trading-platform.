@@ -40,14 +40,14 @@ docker compose up -d --build backend
 ```bash
 # Test archive endpoint (use proper JSON)
 EMB=$(python3 -c "import json; print(json.dumps([0.1]*1536))")
-curl -s -X POST http://72.60.18.113:8081/api/news/archive \
+curl -s -X POST http://<vps-ip>:8081/api/news/archive \
   -H "Content-Type: application/json" \
   -d "{\"title\":\"Network test\",\"content\":\"Verifying Qdrant connection after network fix\",\"source\":\"network_fix\",\"url\":\"https://test.com\",\"published_at\":\"2026-06-02T00:00:00Z\",\"sentiment\":0.5,\"embedding\":$EMB}"
 ```
 
 ## Step 6: Check New Google Drive Endpoints
 ```bash
-curl -s http://72.60.18.113:8081/api/news/gdrive/status
+curl -s http://<vps-ip>:8081/api/news/gdrive/status
 ```
 
 ---

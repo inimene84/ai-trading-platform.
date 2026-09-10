@@ -32,7 +32,7 @@ cd /root/ai-trading-platform-v3
 docker compose up -d --build backend
 
 # 4. Verify Qdrant connectivity
-curl -s http://72.60.18.113:8081/api/news/gdrive/status
+curl -s http://<vps-ip>:8081/api/news/gdrive/status
 ```
 
 ## 🌐 For n8n Workflow #11 (InfluxDB Issue)

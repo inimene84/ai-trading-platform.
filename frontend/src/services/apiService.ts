@@ -24,7 +24,7 @@ function getAdminApiKey(): string {
       if (settings.ADMIN_API_KEY) return settings.ADMIN_API_KEY;
     }
   } catch { /* ignore */ }
-  return '39b2487d5386c4fd52e258721a2170915797f7280b8b0afc';
+  return '';
 }
 
 function getBackendUrl(): string {

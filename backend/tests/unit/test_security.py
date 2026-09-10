@@ -20,7 +20,7 @@ def test_admin_auth_disabled_without_env(monkeypatch):
 def test_sensitive_trading_mutations(monkeypatch):
     monkeypatch.setenv("ADMIN_API_KEY", "secret")
     assert is_sensitive_request(_req("POST", "/trading/loop/start")) is True
-    assert is_sensitive_request(_req("GET", "/trading/status")) is False
+    assert is_sensitive_request(_req("GET", "/trading/status")) is True
     assert is_sensitive_request(_req("GET", "/trading/strategies")) is False
 
 
@@ -48,6 +48,21 @@ def test_live_startup_refuses_missing_admin_token(monkeypatch):
         monkeypatch.delenv(name, raising=False)
     with pytest.raises(RuntimeError, match="Refusing LIVE startup"):
         validate_live_startup_security()
+
+
+def test_live_startup_refuses_missing_confirm_live_deploy(monkeypatch):
+    monkeypatch.setenv("TRADING_MODE", "live")
+    monkeypatch.setenv("ADMIN_API_KEY", "secret")
+    monkeypatch.delenv("CONFIRM_LIVE_DEPLOY", raising=False)
+    with pytest.raises(RuntimeError, match="CONFIRM_LIVE_DEPLOY=true is required"):
+        validate_live_startup_security()
+
+
+def test_live_startup_accepts_when_fully_configured(monkeypatch):
+    monkeypatch.setenv("TRADING_MODE", "live")
+    monkeypatch.setenv("ADMIN_API_KEY", "secret")
+    monkeypatch.setenv("CONFIRM_LIVE_DEPLOY", "true")
+    validate_live_startup_security()
 
 
 def test_paper_startup_allows_missing_admin_token(monkeypatch):

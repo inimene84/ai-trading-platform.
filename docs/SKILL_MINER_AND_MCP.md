@@ -155,7 +155,7 @@ Two modes:
 
 ```bash
 # stdio (Claude Desktop / Cursor spawn the process)
-MCP_TRANSPORT=stdio BACKEND_BASE_URL=http://72.60.18.113:8001 BACKEND_API_PREFIX=/api \
+MCP_TRANSPORT=stdio BACKEND_BASE_URL=http://<your-vps-ip>:8001 BACKEND_API_PREFIX=/api \
   python -m mcp_server.server
 
 # HTTP service (VPS, shared) — serves at http://<host>:9100/mcp

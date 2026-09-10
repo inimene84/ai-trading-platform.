@@ -65,6 +65,19 @@ def init_db_schema():
                     conn.execute(text("ALTER TABLE trades ADD COLUMN broker_account_id VARCHAR(50);"))
                 if "broker_metadata" not in cols:
                     conn.execute(text("ALTER TABLE trades ADD COLUMN broker_metadata JSON;"))
+                if "mode" not in cols:
+                    conn.execute(text("ALTER TABLE trades ADD COLUMN mode VARCHAR(20) DEFAULT 'paper';"))
+                conn.commit()
+
+                # Portfolio snapshots partitioning
+                res_snap = conn.execute(text("PRAGMA table_info(portfolio_snapshots);")).fetchall()
+                cols_snap = {row[1] for row in res_snap}
+                if "broker" not in cols_snap:
+                    conn.execute(text("ALTER TABLE portfolio_snapshots ADD COLUMN broker VARCHAR(50) DEFAULT 'ctrader';"))
+                if "account_id" not in cols_snap:
+                    conn.execute(text("ALTER TABLE portfolio_snapshots ADD COLUMN account_id VARCHAR(50);"))
+                if "mode" not in cols_snap:
+                    conn.execute(text("ALTER TABLE portfolio_snapshots ADD COLUMN mode VARCHAR(20) DEFAULT 'paper';"))
                 conn.commit()
             except Exception:
                 pass

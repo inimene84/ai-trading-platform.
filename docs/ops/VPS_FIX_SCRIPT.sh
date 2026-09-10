@@ -35,11 +35,11 @@ docker compose up -d --no-deps nginx
 echo ""
 echo "=== Verification ==="
 echo "Testing Qdrant endpoint..."
-curl -s http://72.60.18.113:8081/api/news/gdrive/status | head -c 200 || echo "Qdrant check failed"
+curl -s http://<vps-ip>:8081/api/news/gdrive/status | head -c 200 || echo "Qdrant check failed"
 
 echo ""
 echo "Testing InfluxDB proxy..."
-curl -s http://72.60.18.113:8081/api/influxdb/health | head -c 200 || echo "InfluxDB proxy check failed"
+curl -s http://<vps-ip>:8081/api/influxdb/health | head -c 200 || echo "InfluxDB proxy check failed"
 
 echo ""
 echo "=== Done ==="

@@ -40,7 +40,7 @@ These live in `scripts/hostinger_vps_apply.sh` and the application itself:
 ## How to deploy (directly on the VPS)
 
 ```bash
-ssh root@72.60.18.113
+ssh root@<vps-ip>
 cd /root/ai-trading-platform-v3
 git fetch origin main && git checkout main && git pull origin main
 ./scripts/hostinger_vps_apply.sh

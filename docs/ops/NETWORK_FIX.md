@@ -25,7 +25,7 @@ echo 'QDRANT_URL=http://qdrant-13fq-qdrant-1:6333' >> /root/ai-trading-platform-
 ### Option B: Use Public Qdrant API
 Update `.env`:
 ```bash
-QDRANT_URL=http://72.60.18.113:6333
+QDRANT_URL=http://<vps-ip>:6333
 ```
 **But:** This may be blocked by firewall.
 
@@ -37,7 +37,7 @@ If Hostinger provides internal DNS, the backend might need to use:
 ## Test After Fix
 ```bash
 # Test Qdrant connectivity
-curl -X POST http://72.60.18.113:8081/api/news/archive \
+curl -X POST http://<vps-ip>:8081/api/news/archive \
   -H "Content-Type: application/json" \
   -d '{"title":"Test","content":"Test content","source":"test","url":"https://example.com","published_at":"2026-06-02T00:00:00Z","sentiment":0.5,"embedding":[0.1]*1536}'
 

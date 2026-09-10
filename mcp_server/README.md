@@ -38,7 +38,7 @@ set for day-to-day agent use.
 
 | Var | Default | Notes |
 | --- | --- | --- |
-| `BACKEND_BASE_URL` | `http://ai-trading-backend:8000` | Docker-internal. External: `http://72.60.18.113:8001/api` |
+| `BACKEND_BASE_URL` | `http://ai-trading-backend:8000` | Docker-internal. External: `http://<your-vps-ip>:8001/api` |
 | `BACKEND_API_PREFIX` | `/api` | FastAPI mounts routes under this prefix |
 | `MCP_API_TOKEN` | _(empty)_ | Sent as `Authorization: Bearer …` to the backend |
 | `MCP_TRANSPORT` | `http` | `stdio` \| `http` \| `sse` |
@@ -50,7 +50,7 @@ set for day-to-day agent use.
 > **Note on `BACKEND_API_PREFIX`:** the curated tools pass paths like
 > `/trading/opinion/BTCUSDT`. `_url()` automatically prepends the prefix, so the
 > request hits `…/api/trading/opinion/BTCUSDT`. If you point at the **external**
-> base `http://72.60.18.113:8001/api`, set `BACKEND_API_PREFIX=""` to avoid a
+> base `http://<your-vps-ip>:8001/api`, set `BACKEND_API_PREFIX=""` to avoid a
 > double `/api`.
 
 ## Run locally (stdio — for Claude Desktop / Cursor)
@@ -61,7 +61,7 @@ pip install -r requirements.txt
 
 # stdio transport — the host app spawns the process
 MCP_TRANSPORT=stdio \
-BACKEND_BASE_URL=http://72.60.18.113:8001 \
+BACKEND_BASE_URL=http://<your-vps-ip>:8001 \
 BACKEND_API_PREFIX=/api \
 python -m mcp_server.server
 ```
@@ -108,7 +108,7 @@ Edit `claude_desktop_config.json`:
       "cwd": "/absolute/path/to/ai-trading-platform",
       "env": {
         "MCP_TRANSPORT": "stdio",
-        "BACKEND_BASE_URL": "http://72.60.18.113:8001",
+        "BACKEND_BASE_URL": "http://<your-vps-ip>:8001",
         "BACKEND_API_PREFIX": "/api"
       }
     }
@@ -127,7 +127,7 @@ For an already-running **HTTP** server, point the client at
 {
   "mcpServers": {
     "quantumtrade": {
-      "url": "http://72.60.18.113:9100/mcp"
+      "url": "http://<your-vps-ip>:9100/mcp"
     }
   }
 }

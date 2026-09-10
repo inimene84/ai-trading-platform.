@@ -1,7 +1,7 @@
 # 📊 DIAGNOSIS SUMMARY — 7 Broken Pipes
 
 ## ✅ VERIFIED WORKING
-- **Backend**: Live at `http://72.60.18.113:8081`
+- **Backend**: Live at `http://<vps-ip>:8081`
 - **News Feed**: `/api/news/feed` returns 60 items (cached)
 - **Sentiment POST**: `/api/news/sentiment` stores to InfluxDB ✓
 - **Fear & Greed**: Returns 23 - Extreme Fear (live data)

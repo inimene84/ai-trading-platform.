@@ -8,55 +8,31 @@ This is the backend server for QuantumTrade Pro — AI Hedge Fund Platform. It p
 
 This backend application is the core of the AI Hedge Fund system. It exposes endpoints for running the hedge fund trading loop, executing backtests, and interacting with the AI agent ecosystem. It is designed to work seamlessly with the frontend React dashboard.
 
-## Installation
+## Installation & Running
 
-### Using Poetry
+### Using Docker Compose (Recommended)
 
-1. Clone the repository:
+Run the full stack (backend, Litellm, Nginx reverse proxy):
 ```bash
-git clone https://github.com/virattt/ai-hedge-fund.git
-cd ai-hedge-fund
+docker compose up -d backend
 ```
 
-2. Install Poetry (if not already installed):
+### Local Development Setup
+
+1. Install dependencies using `uv` or `pip`:
 ```bash
-curl -sSL https://install.python-poetry.org | python3 -
+uv pip install -r backend/requirements.txt
 ```
 
-3. Install dependencies:
+2. Set up your environment variables:
 ```bash
-# From the root directory
-poetry install
-```
-
-4. Set up your environment variables:
-```bash
-# Create .env file for your API keys (in the root directory)
 cp .env.example .env
+# Edit .env to set your API keys and ADMIN_API_KEY
 ```
 
-5. Edit the .env file to add your API keys:
+3. Run the development server (single worker):
 ```bash
-# For running LLMs hosted by openai (gpt-4o, gpt-4o-mini, etc.)
-OPENAI_API_KEY=your-openai-api-key
-
-# For running LLMs hosted by groq (deepseek, llama3, etc.)
-GROQ_API_KEY=your-groq-api-key
-
-# For getting financial data to power the hedge fund
-FINANCIAL_DATASETS_API_KEY=your-financial-datasets-api-key
-```
-
-## Running the Server
-
-To run the development server:
-
-```bash
-# Navigate to the backend directory
-cd app/backend
-
-# Start the FastAPI server with uvicorn
-poetry run uvicorn main:app --reload
+python3 -m uvicorn backend.main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
 This will start the FastAPI server with hot-reloading enabled.

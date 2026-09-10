@@ -14,4 +14,4 @@ echo
 docker network connect trading-net grafana-k9xk-grafana-1 2>/dev/null || true
 OLD_PASS=$(grep '^GF_SECURITY_ADMIN_PASSWORD=' /docker/grafana-k9xk/.env | cut -d= -f2-)
 ./scripts/fix_grafana_influx.sh http://127.0.0.1:3000 "admin:${OLD_PASS}" .
-echo "Historical Influx restored. Open http://72.60.18.113:3000"
+echo "Historical Influx restored. Open http://${GRAFANA_HOST:-127.0.0.1}:3000"

@@ -30,7 +30,7 @@ echo ""
 echo "=== Fix OLD Grafana (:3000) datasources ==="
 ./scripts/fix_grafana_influx.sh "http://127.0.0.1:3000" "admin:${OLD_GRAFANA_PASS}" .
 
-sed -i 's|^GRAFANA_URL=.*|GRAFANA_URL=http://72.60.18.113:3000|' .env
+sed -i "s|^GRAFANA_URL=.*|GRAFANA_URL=http://${GRAFANA_HOST:-127.0.0.1}:3000|" .env
 
 echo ""
 echo "=== Verify old grafana datasources ==="
@@ -46,5 +46,5 @@ for d in json.load(sys.stdin):
 docker compose -f docker-compose.prod.yml up -d backend
 
 echo ""
-echo "Done. Use OLD Grafana with dashboards: http://72.60.18.113:3000"
+echo "Done. Use Grafana with dashboards: http://${GRAFANA_HOST:-127.0.0.1}:3000"
 echo "Login: admin / (see /docker/grafana-k9xk/.env)"

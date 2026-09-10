@@ -158,6 +158,7 @@ class Trade(Base):
     broker_position_id = Column(String(100), nullable=True, index=True)
     broker_account_id = Column(String(50), nullable=True)
     broker_metadata = Column(JSON, nullable=True)
+    mode = Column(String(20), nullable=True, default='paper', index=True)
 
 
 class CTraderToken(Base):
@@ -187,6 +188,9 @@ class PortfolioSnapshot(Base):
     total_pnl = Column(Float, nullable=False, default=0.0)
     open_positions = Column(Integer, nullable=False, default=0)
     cycle_number = Column(Integer, nullable=True)
+    broker = Column(String(50), nullable=True, default="ctrader", index=True)
+    account_id = Column(String(50), nullable=True, index=True)
+    mode = Column(String(20), nullable=True, default="paper", index=True)
 
 
 # ═══ Paper Trading Persistence Models ═══ (Fincept Port A)

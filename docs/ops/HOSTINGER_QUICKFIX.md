@@ -1,4 +1,4 @@
-# Hostinger VPS quick fix (72.60.18.113)
+# Hostinger VPS quick fix (<vps-ip>)
 
 ## Canonical deploy (main branch)
 
@@ -24,7 +24,7 @@ curl -fsSL "https://raw.githubusercontent.com/inimene84/ai-trading-platform./mai
 From your PC (when SSH works):
 
 ```powershell
-ssh root@72.60.18.113 "cd /root/ai-trading-platform-v3 && git pull origin main && ./scripts/hostinger_vps_apply.sh"
+ssh root@<vps-ip> "cd /root/ai-trading-platform-v3 && git pull origin main && ./scripts/hostinger_vps_apply.sh"
 ```
 
 ## Deprecated scripts

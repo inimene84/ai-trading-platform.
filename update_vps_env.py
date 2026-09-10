@@ -15,7 +15,9 @@ with tempfile.NamedTemporaryFile(mode='w', suffix='_key', delete=False) as f:
     key_path = f.name
 os.chmod(key_path, 0o600)
 
-host = os.environ.get("SSH_HOST", "72.60.18.113")
+host = os.environ.get("SSH_HOST", "")
+if not host:
+    raise ValueError("SSH_HOST environment variable is required")
 user = os.environ.get("SSH_USER", "root")
 
 remote_python = """

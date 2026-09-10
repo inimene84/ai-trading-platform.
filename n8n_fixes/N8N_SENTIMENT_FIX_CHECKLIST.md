@@ -57,7 +57,7 @@ Fix: reconnect n8n to the network (`docker network connect <net> <n8n-container>
 ## Step 4 — Is the backend hostname correct?
 
 `Save Sentiment to Memory1` POSTs to `http://ai-trading-backend:8000/api/news/sentiment`.
-Note Hermes reported the live backend on **port 8001** (`72.60.18.113:8001`). Inside Docker
+Note Hermes reported the live backend on **port 8001** (`<vps-ip>:8001`). Inside Docker
 it’s `ai-trading-backend:8000`; from outside it’s `:8001`. Make sure the n8n node uses the
 **internal** Docker name + port (`ai-trading-backend:8000`), not the external one.
 

@@ -44,7 +44,7 @@ docker inspect influxdb-2-ksyg-influxdb2-1 --format '{{.NetworkSettings.Networks
 
 ```bash
 # Should show: {"status":"archived","qdrant_point_id":"...","title":"Test"...}
-curl -X POST http://72.60.18.113:8081/api/news/archive \
+curl -X POST http://<vps-ip>:8081/api/news/archive \
   -H "Content-Type: application/json" \
   -d '{"title":"Test","content":"Verify Qdrant","source":"validation","url":"https://test.com","published_at":"2026-06-02T00:00:00Z","sentiment":0.5,"embedding":[0.1]*1536}'
 ```

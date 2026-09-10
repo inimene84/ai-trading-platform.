@@ -5,7 +5,7 @@ configuration comes from environment variables, with the documented
 defaults as fallback.
 
 Env vars:
-    SSH_HOST      VPS address (default: 72.60.18.113, same as ssh_vps_remote.sh)
+    SSH_HOST      VPS address (must be provided via environment variable)
     SSH_USER      SSH user (default: root)
     SSH_PORT      SSH port (default: 22)
     SSH_KEY_PATH  Private key file (default: ~/.ssh/id_vps_bot)
@@ -16,7 +16,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-SSH_HOST = os.getenv("SSH_HOST", "72.60.18.113")
+SSH_HOST = os.getenv("SSH_HOST", "")
 SSH_USER = os.getenv("SSH_USER", "root")
 SSH_PORT = os.getenv("SSH_PORT", "22")
 SSH_KEY_PATH = os.getenv("SSH_KEY_PATH", str(Path.home() / ".ssh" / "id_vps_bot"))
