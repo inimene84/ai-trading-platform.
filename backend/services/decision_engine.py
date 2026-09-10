@@ -158,6 +158,7 @@ class DecisionEngine:
         # Injected by the trading loop so per-symbol history survives cycles.
         self.regime_detector = regime_detector or MarketRegimeDetector()
         self.enable_kronos = os.getenv("ENABLE_KRONOS", "true").lower() == "true"
+        self.enable_jesse_ml = os.getenv("JESSE_ML_GATE_ENABLED", "true").lower() == "true" and getattr(self.config, "enable_jesse_ml", True)
         # Snapshot of the most recent evaluation so the loop can persist a
         # signal row for EVERY symbol it scans (not just executed trades).
         self.last_evaluation: Dict[str, Any] = {}
@@ -538,6 +539,44 @@ class DecisionEngine:
                     return None
             except Exception as e:
                 logger.warning(f"[{symbol}] Sentiment gate evaluation error (failing neutral): {e}")
+
+        # 4e. Jesse Machine Learning Directional Consensus Gate
+        if self.enable_jesse_ml:
+            try:
+                from backend.services.jesse_bridge import jesse_bridge
+                ml_res = await jesse_bridge.get_ml_prediction(symbol=symbol, timeframe="1h")
+                if ml_res.get("status") == "success":
+                    ml_sig = ml_res.get("signal")
+                    ml_conf = ml_res.get("confidence", 0.0)
+                    probs = ml_res.get("probabilities", {})
+                    p_bullish = probs.get("bullish", 0.0)
+                    p_bearish = probs.get("bearish", 0.0)
+
+                    # Hard Veto if ML model strongly opposes candidate direction
+                    if signal.signal == "BUY" and p_bearish >= 0.55 and p_bearish > p_bullish * 1.4:
+                        logger.info(f"[{symbol}] Jesse ML Gate VETO: Strong Bearish probability ({p_bearish*100:.1f}% vs {p_bullish*100:.1f}%) blocks BUY")
+                        self._record_eval(symbol, signal.signal, signal.confidence, f"vetoed by Jesse ML gate (bearish prob: {p_bearish:.2f})")
+                        return None
+                    elif signal.signal == "SELL" and p_bullish >= 0.55 and p_bullish > p_bearish * 1.4:
+                        logger.info(f"[{symbol}] Jesse ML Gate VETO: Strong Bullish probability ({p_bullish*100:.1f}% vs {p_bearish*100:.1f}%) blocks SELL")
+                        self._record_eval(symbol, signal.signal, signal.confidence, f"vetoed by Jesse ML gate (bullish prob: {p_bullish:.2f})")
+                        return None
+
+                    # Confidence boost on directional consensus
+                    if (signal.signal == "BUY" and ml_sig == "BUY") or (signal.signal == "SELL" and ml_sig == "SELL"):
+                        boost = min(0.10, ml_conf * 0.12)
+                        signal.confidence = min(1.0, signal.confidence + boost)
+                        logger.info(f"[{symbol}] Jesse ML Gate BOOST: Consensus {ml_sig} (+{boost:.2f} -> conf={signal.confidence:.2f})")
+                    elif (signal.signal == "BUY" and ml_sig == "SELL") or (signal.signal == "SELL" and ml_sig == "BUY"):
+                        dampen = min(0.15, ml_conf * 0.15)
+                        signal.confidence = max(0.0, signal.confidence - dampen)
+                        logger.info(f"[{symbol}] Jesse ML Gate DAMPEN: Disagreement {ml_sig} (-{dampen:.2f} -> conf={signal.confidence:.2f})")
+
+                    if signal.confidence < self.config.min_signal_strength:
+                        self._record_eval(symbol, signal.signal, signal.confidence, "confidence reduced below threshold by Jesse ML gate")
+                        return None
+            except Exception as e:
+                logger.debug(f"[{symbol}] Jesse ML gate evaluation notice (fail-open): {e}")
 
         # 5. AI Opinion Layer — multi-agent weighted consensus
         if self.config.enable_personas:

@@ -38,6 +38,7 @@ def risk_config():
         min_edge_fee_mult=0.0,  # disable min-edge gate for sizing tests
         sl_atr_mult=1.5,
         tp_atr_mult=3.0,
+        enable_jesse_ml=False,
     )
 
 

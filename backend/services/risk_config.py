@@ -151,6 +151,10 @@ class RiskConfig(BaseSettings):
         default=False,
         validation_alias=AliasChoices("enable_personas", "ENABLE_PERSONAS"),
     )
+    enable_jesse_ml: bool = PydanticField(
+        default=True,
+        validation_alias=AliasChoices("enable_jesse_ml", "ENABLE_JESSE_ML", "JESSE_ML_GATE_ENABLED"),
+    )
     
     # Signal thresholds (env-tunable so trade aggressiveness can change without a rebuild)
     min_signal_strength: float = PydanticField(
