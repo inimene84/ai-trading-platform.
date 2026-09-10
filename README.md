@@ -2,7 +2,7 @@
 
 <div align="center">
 
-![QuantumTrade Pro Butterfly Architecture](docs/assets/butterfly_architecture_map.jpg)
+![QuantumTrade Pro Butterfly Architecture](docs/assets/butterfly_architecture_map.svg)
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![Python 3.11](https://img.shields.io/badge/python-3.11-blue.svg)](https://www.python.org/downloads/)
@@ -41,13 +41,12 @@ The system is organized into a balanced, symmetric **Butterfly Architecture**:
 
 ```mermaid
 flowchart LR
-    %% Styles
-    classDef leftWing fill:#0f172a,stroke:#06b6d4,stroke-width:2px,color:#f8fafc;
-    classDef centerCore fill:#1e1b4b,stroke:#a855f7,stroke-width:3px,color:#f8fafc;
-    classDef rightWing fill:#0f172a,stroke:#10b981,stroke-width:2px,color:#f8fafc;
+    classDef leftWing fill:#0f172a,stroke:#22d3ee,stroke-width:2px,color:#f8fafc;
+    classDef centerCore fill:#1e1b4b,stroke:#e879ff,stroke-width:3px,color:#f8fafc;
+    classDef rightWing fill:#0f172a,stroke:#a855f7,stroke-width:2px,color:#f8fafc;
     classDef storage fill:#022c22,stroke:#059669,stroke-width:1px,color:#f8fafc;
 
-    subgraph LeftWing["🦋 LEFT WING — Signals & Ingestion"]
+    subgraph LeftWing["LEFT WING — Signals & Ingestion"]
         direction TB
         NEWS["Alternative Feeds<br/>(NewsAPI, Fred, CryptoCompare)"]:::leftWing
         QD_NEWS[("Qdrant Vector DB<br/>crypto-news (1536-dim)")]:::storage
@@ -61,7 +60,7 @@ flowchart LR
         REGIME --> FINMEM
     end
 
-    subgraph CenterCore["⚡ CORE HUB — Hardened Fail-Closed Risk"]
+    subgraph CenterCore["CORE HUB — Hardened Fail-Closed Risk"]
         direction TB
         LIVE_GATE{"Double-Lock Guard<br/>CONFIRM_LIVE_DEPLOY + Auth"}:::centerCore
         RISK_GUARD["Risk Guard Enforcer<br/>(Rolling Peak Drawdown & Daily Loss)"]:::centerCore
@@ -77,7 +76,7 @@ flowchart LR
         MIN_EDGE --> EXEC_LOCK
     end
 
-    subgraph RightWing["🦋 RIGHT WING — Execution & Venue Management"]
+    subgraph RightWing["RIGHT WING — Execution & Venue Management"]
         direction TB
         ROUTER["Unified Order Router<br/>(Live / Paper Parallel)"]:::rightWing
         BINANCE["Binance Futures Service<br/>(Maker GTX Post-Only)"]:::rightWing
@@ -93,15 +92,12 @@ flowchart LR
         CTRADER --> RECON
     end
 
-    %% Interconnections
     JESSE_ML --> DECISION
     KRONOS --> DECISION
     FINMEM --> DECISION
     REGIME --> DECISION
-
     EXEC_LOCK --> ROUTER
 
-    %% Storage connections
     subgraph Persistence["State & Metrics"]
         SQL[(SQLite / PostgreSQL<br/>Trades & Partitioned Snapshots)]:::storage
         INFLUX[(InfluxDB v2<br/>Telemetry & Equity Curves)]:::storage
@@ -118,9 +114,9 @@ flowchart LR
 
 <div align="center">
 
-![Trading Cockpit Interface](docs/assets/quantumtrade_cockpit_dashboard.jpg)
+![Trading Cockpit Interface](docs/assets/quantumtrade_cockpit_dashboard.svg)
 
-*Real-time multi-asset telemetry, conformal prediction uncertainty intervals, and fail-closed risk gauges.*
+*Paper-mode HUD: multi-asset telemetry, FINMEM tiers, conformal gate, and fail-closed risk limits. Not a live P&amp;L screenshot.*
 
 </div>
 
