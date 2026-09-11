@@ -1,0 +1,102 @@
+{
+  "cost_model": {
+    "fee_per_side": 0.0,
+    "funding_per_8h": 0.0,
+    "slippage_per_side": 0.0
+  },
+  "data_period": {
+    "bars": 23568,
+    "end": "2026-09-08T23:00:00+00:00",
+    "start": "2024-01-01T00:00:00+00:00"
+  },
+  "experiments": [
+    {
+      "confidence_threshold_selected_on_validation": 0.4,
+      "geometry": {
+        "max_holding_bars": 24,
+        "name": "documented_existing_4.0_2.0_24",
+        "profit_atr": 4.0,
+        "stop_atr": 2.0
+      },
+      "temperature_selected_on_validation": 1.930748581270558,
+      "test_metrics": {
+        "annualized_sharpe": 0.6388709052091918,
+        "max_drawdown_pct": -19.54770124291958,
+        "sortino": 1.3453781707431136,
+        "total_return_pct": 7.914321637151489,
+        "trades": 191,
+        "win_rate_pct": 38.7434554973822
+      },
+      "validation_metrics": {
+        "annualized_sharpe": 1.5686493515844806,
+        "max_drawdown_pct": -15.313259957602089,
+        "sortino": 2.885174415659688,
+        "total_return_pct": 30.70622607864777,
+        "trades": 203,
+        "win_rate_pct": 40.39408866995074
+      }
+    },
+    {
+      "confidence_threshold_selected_on_validation": 0.45,
+      "geometry": {
+        "max_holding_bars": 48,
+        "name": "strategy_aligned_5.5_1.75_48",
+        "profit_atr": 5.5,
+        "stop_atr": 1.75
+      },
+      "temperature_selected_on_validation": 1.4658972088782376,
+      "test_metrics": {
+        "annualized_sharpe": 2.426395994096294,
+        "max_drawdown_pct": -12.27525456348979,
+        "sortino": 7.677174034983028,
+        "total_return_pct": 45.546534788669526,
+        "trades": 139,
+        "win_rate_pct": 35.97122302158273
+      },
+      "validation_metrics": {
+        "annualized_sharpe": 2.0060092309300095,
+        "max_drawdown_pct": -9.430521349991105,
+        "sortino": 3.5951145369560784,
+        "total_return_pct": 41.981372191828314,
+        "trades": 159,
+        "win_rate_pct": 37.10691823899371
+      }
+    }
+  ],
+  "generated_at": "2026-09-11T02:11:42.279606+00:00",
+  "notes": [
+    "Models are trained in memory and are not saved or promoted.",
+    "Temperature and confidence threshold are selected on validation only.",
+    "Test is evaluated once after model and threshold selection.",
+    "Signals do not overlap; same-bar TP/SL collisions are resolved as stop-loss first.",
+    "Funding is charged conservatively every completed 8-hour holding interval."
+  ],
+  "splits": {
+    "purge_bars": 48,
+    "test": {
+      "end": "2026-09-06T23:00:00+00:00",
+      "observations": 4661,
+      "start": "2026-02-24T19:00:00+00:00"
+    },
+    "train": {
+      "end": "2025-08-10T13:00:00+00:00",
+      "observations": 14078,
+      "start": "2024-01-02T00:00:00+00:00"
+    },
+    "validation": {
+      "end": "2026-02-22T18:00:00+00:00",
+      "observations": 4661,
+      "start": "2025-08-12T14:00:00+00:00"
+    }
+  },
+  "spot_buy_and_hold_test_baseline": {
+    "annualized_sharpe": 1.253977018702853,
+    "max_drawdown_pct": -28.684545807439243,
+    "sortino": 2.240449002808434,
+    "total_return_pct": 24.680694475929045,
+    "trades": 1,
+    "win_rate_pct": 100.0
+  },
+  "symbol": "BTC-USDT",
+  "timeframe": "1h"
+}
