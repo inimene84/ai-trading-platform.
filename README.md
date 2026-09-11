@@ -12,7 +12,7 @@
 [![Tests Passing](https://img.shields.io/badge/tests-82%20passed-success)](backend/tests/)
 [![Security: Hardened](https://img.shields.io/badge/security-hardened%20%7C%20fail--closed-emerald)](backend/security.py)
 
-**Autonomous Multi-Broker Quantitative Execution Engine with Conformal ML Gating, FINMEM Stratified Memory, and Fail-Closed Risk Enforcers.**
+**Autonomous Multi-Broker Quantitative Execution Engine with Probability-Margin ML Gating, FINMEM Stratified Memory, and Fail-Closed Risk Enforcers.**
 
 [Architecture](#butterfly-architecture-map) • [Quant Stack](#institutional-quant-stack) • [Risk & Safety](#fail-closed-safety-stack) • [Deployment](#quickstart--production-deployment) • [API & Telemetry](#api-telemetry--monitoring)
 
@@ -27,7 +27,7 @@
 Evolving beyond simple rule-based bots or conversational agent experiments, the platform implements a **rigorous quantitative pipeline**:
 - **Execution Architecture**: Non-blocking asynchronous event loop with serialized per-symbol execution locks and GTX maker order routing.
 - **Fail-Closed Safety**: Double-locked live deployment authorization, rolling drawdown halts, exchange clamp validation, and strict book partitioning (`broker + account_id + mode`).
-- **Conformal Machine Learning**: LightGBM meta-labeling trained on Triple-Barrier events with purged cross-validation, sample uniqueness weighting, and split-conformal uncertainty intervals.
+- **Uncertainty-Gated Machine Learning**: LightGBM meta-labeling trained on Triple-Barrier events with purged cross-validation, sample uniqueness weighting, and a probability-margin + entropy uncertainty gate.
 - **Cognitive Memory Layer**: Stratified FINMEM vector memory in Qdrant across shallow (14d), intermediate (90d), and deep (365d) reflection horizons.
 
 ---
@@ -53,7 +53,7 @@ flowchart LR
         FINMEM["FINMEM Engine<br/>(Shallow / Med / Deep Memory)"]:::leftWing
         REGIME["Market Regime Classifier<br/>(Trending / Ranging / Volatile)"]:::leftWing
         KRONOS["Kronos Sidecar<br/>(Time-Series Foundation Model)"]:::leftWing
-        JESSE_ML["Jesse ML Meta-Labeling<br/>(LightGBM + Conformal Gating)"]:::leftWing
+        JESSE_ML["Jesse ML Meta-Labeling<br/>(LightGBM + Uncertainty Gating)"]:::leftWing
 
         NEWS --> QD_NEWS
         QD_NEWS --> FINMEM
@@ -116,7 +116,7 @@ flowchart LR
 
 ![Trading Cockpit Interface](docs/assets/quantumtrade_cockpit_dashboard.svg)
 
-*Paper-mode HUD: multi-asset telemetry, FINMEM tiers, conformal gate, and fail-closed risk limits. Not a live P&amp;L screenshot.*
+*Paper-mode HUD: multi-asset telemetry, FINMEM tiers, ML uncertainty gate, and fail-closed risk limits. Not a live P&amp;L screenshot.*
 
 </div>
 
@@ -131,10 +131,10 @@ The platform embeds financial machine learning practices inspired by Marcos Lóp
 - **Combinatorially Symmetric Cross-Validation (CSCV)**: Evaluates the Probability of Backtest Overfitting ($PBO < 0.30$), ensuring strategies do not memorize historical noise.
 - **Purged K-Fold with Temporal Embargo**: Eliminates information leakage across non-independent financial observations.
 
-### 2. Triple-Barrier Labeling & Conformal Meta-Models
+### 2. Triple-Barrier Labeling & Meta-Models
 - **Triple Barrier Method**: Signals are labeled using dynamic upper take-profit, lower stop-loss (volatility-adjusted via ATR), and time-out horizontal barriers.
 - **Sample Uniqueness Concurrency Weighting**: Overlapping trade windows are down-weighted by inverse concurrency to eliminate label redundancy.
-- **Split-Conformal Uncertainty Gating**: Calibrated LightGBM models output non-conformity scores; candidates with excessive prediction intervals are vetoed before touching capital.
+- **Probability-Margin Uncertainty Gating**: The prediction server scores ambiguity as the top-two class probability margin combined with Shannon entropy; ambiguous candidates are vetoed before touching capital. This is a heuristic threshold, not a split-conformal bound — there is no calibration set and no $\alpha$, so it must not be read as a calibrated error rate.
 - **Fractional Kelly Sizing**: Allocations scale proportionally to model edge and uncertainty while strictly capping max directional exposure.
 
 ### 3. FINMEM Stratified Vector Memory

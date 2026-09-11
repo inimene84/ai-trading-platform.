@@ -389,6 +389,37 @@ async def test_model_health_unreadable_field_fails_closed(ml_risk_config, monkey
         assert "unreadable" in engine.last_evaluation.get("reason", "")
 
 
+# ── Uncertainty veto: honest naming, legacy wire key still accepted ─────────
+
+@pytest.mark.asyncio
+async def test_uncertainty_veto_reads_legacy_conformal_margin_key(ml_risk_config, monkeypatch):
+    """predict_server still sends `conformal_margin`; the veto text names it honestly."""
+    bars = _make_bars(50)
+    engine = _health_engine(ml_risk_config, monkeypatch, bars)
+
+    mock_ml = _healthy_ml_res(uncertainty="HIGH", conformal_margin=0.02)
+    with patch("backend.services.jesse_bridge.jesse_bridge.get_ml_prediction", AsyncMock(return_value=mock_ml)):
+        decision = await engine.evaluate_symbol("BTCUSDC", bars, None, 0, [], False)
+        assert decision is None
+        reason = engine.last_evaluation.get("reason", "")
+        assert "vetoed by Jesse ML uncertainty gate" in reason
+        assert "Probability-margin uncertainty is HIGH (margin=0.020)" in reason
+        assert "onformal" not in reason
+
+
+@pytest.mark.asyncio
+async def test_uncertainty_veto_prefers_probability_margin_key(ml_risk_config, monkeypatch):
+    """If the server is ever renamed upstream, the honest key wins over the legacy one."""
+    bars = _make_bars(50)
+    engine = _health_engine(ml_risk_config, monkeypatch, bars)
+
+    mock_ml = _healthy_ml_res(gated=True, probability_margin=0.04, conformal_margin=0.99)
+    with patch("backend.services.jesse_bridge.jesse_bridge.get_ml_prediction", AsyncMock(return_value=mock_ml)):
+        decision = await engine.evaluate_symbol("BTCUSDC", bars, None, 0, [], False)
+        assert decision is None
+        assert "margin=0.040" in engine.last_evaluation.get("reason", "")
+
+
 # ── jesse_ml_model_health: payload shapes predict_server may send ───────────
 
 @pytest.mark.parametrize("payload,expected", [

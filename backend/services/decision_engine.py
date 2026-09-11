@@ -94,6 +94,14 @@ def _expected_feature_schema_hash() -> str:
     return os.getenv("JESSE_FEATURE_SCHEMA_HASH", "cd15d2380809b247").strip().lower()
 
 
+def _as_float(value: Any, default: float = 0.0) -> float:
+    """Tolerant float read for optional numeric fields on upstream payloads."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 _ABSENT = object()
 _EXPIRED_TRUE = {"true", "1", "yes", "y", "expired", "stale"}
 _EXPIRED_FALSE = {"false", "0", "no", "n", "fresh", "valid", "ok", "current"}
@@ -690,10 +698,19 @@ class DecisionEngine:
                     gated = ml_res.get("gated", False)
                     kelly = ml_res.get("kelly", {})
 
-                    # Conformal Uncertainty Veto: reject trades in high ambiguity or wide conformal sets
+                    # The margin predict_server still sends as `conformal_margin` is a
+                    # top-two class probability margin blended with Shannon entropy —
+                    # no calibration set, no alpha, so it is NOT a split-conformal
+                    # bound and this threshold is NOT a calibrated error rate. Accept
+                    # the legacy wire key; name it honestly everywhere in here.
+                    probability_margin = _as_float(
+                        ml_res.get("probability_margin", ml_res.get("conformal_margin")), 0.0
+                    )
+
+                    # Probability-Margin Uncertainty Veto: reject trades in high ambiguity
                     if uncertainty == "HIGH" or gated:
-                        reason = ml_res.get("gated_reason") or f"Conformal uncertainty is HIGH (margin={ml_res.get('conformal_margin', 0):.3f})"
-                        logger.info(f"[{symbol}] Jesse ML Conformal Uncertainty Gate VETO: {reason} blocks {signal.signal}")
+                        reason = ml_res.get("gated_reason") or f"Probability-margin uncertainty is HIGH (margin={probability_margin:.3f})"
+                        logger.info(f"[{symbol}] Jesse ML Probability-Margin Uncertainty Gate VETO: {reason} blocks {signal.signal}")
                         self._record_eval(symbol, signal.signal, signal.confidence, f"vetoed by Jesse ML uncertainty gate ({reason})")
                         return None
 
