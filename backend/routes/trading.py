@@ -1898,7 +1898,7 @@ async def close_position(position_id: str):
             and (
                 not live_binance_orders_allowed()
                 or binance_paper_parallel_enabled()
-                or (bool(trade.binance_order_id) and str(trade.binance_order_id).startswith("paper_"))
+                or (bool(getattr(trade, "binance_order_id", None)) and str(getattr(trade, "binance_order_id", "") or "").startswith("paper_"))
             )
         )
         paper_mode = (get_trading_mode() != TradingMode.LIVE) or is_binance_paper
