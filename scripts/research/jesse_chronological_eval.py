@@ -359,13 +359,16 @@ def buy_and_hold(frame: pd.DataFrame, sample_index: pd.Index, costs: CostModel) 
     net_return = finish / start - 1 - 2 * (costs.fee_per_side + costs.slippage_per_side)
     subset = frame.loc[sample_index[0] : sample_index[-1], "close"].resample("1D").last().dropna()
     daily = subset.pct_change().dropna()
-    sharpe = float(daily.mean() / daily.std(ddof=1) * math.sqrt(365)) if daily.std(ddof=1) > 0 else 0.0
+    daily_std = float(daily.std(ddof=1))
+    downside_std = float(daily[daily < 0].std(ddof=1))
+    sharpe = float(daily.mean() / daily_std * math.sqrt(365)) if daily_std > 0 else 0.0
+    sortino = float(daily.mean() / downside_std * math.sqrt(365)) if downside_std > 0 else 0.0
     equity = subset / subset.iloc[0]
     drawdown = equity / equity.cummax() - 1
     return {
         "total_return_pct": float(net_return * 100),
         "annualized_sharpe": sharpe,
-        "sortino": 0.0,
+        "sortino": sortino,
         "max_drawdown_pct": float(drawdown.min() * 100),
         "trades": 1,
         "win_rate_pct": float(net_return > 0) * 100,
