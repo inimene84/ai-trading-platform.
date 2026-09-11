@@ -121,26 +121,44 @@ _EXPIRED_TRUE = {"true", "1", "yes", "y", "expired", "stale"}
 _EXPIRED_FALSE = {"false", "0", "no", "n", "fresh", "valid", "ok", "current"}
 _PARITY_TRUE = {"true", "1", "yes", "y", "ok", "match", "matched", "pass", "passed", "same", "identical"}
 _PARITY_FALSE = {"false", "0", "no", "n", "mismatch", "mismatched", "fail", "failed", "drift", "drifted", "unknown"}
+_PROMOTION_TRUE = {"true", "1", "yes", "y", "ok", "approved", "promoted", "pass", "passed", "eligible"}
+_PROMOTION_FALSE = {
+    "false", "0", "no", "n", "rejected", "reject", "blocked", "fail", "failed",
+    "quarantined", "denied", "unknown",
+}
 
 
-def _read_model_expired(value: Any) -> Optional[bool]:
-    """Read predict_server's model_expired field. None when unreadable."""
+def _read_flag(value: Any, true_tokens: set[str], false_tokens: set[str], keys: tuple[str, ...]) -> Optional[bool]:
+    """Tolerant bool read for a predict_server flag. None when unreadable."""
     if isinstance(value, bool):
         return value
     if isinstance(value, (int, float)) and value in (0, 1):
         return bool(value)
     if isinstance(value, dict):
-        for key in ("expired", "is_expired", "model_expired"):
+        for key in keys:
             if key in value:
-                return _read_model_expired(value[key])
+                return _read_flag(value[key], true_tokens, false_tokens, keys)
         return None
     if isinstance(value, str):
         token = value.strip().lower()
-        if token in _EXPIRED_TRUE:
+        if token in true_tokens:
             return True
-        if token in _EXPIRED_FALSE:
+        if token in false_tokens:
             return False
     return None
+
+
+def _read_model_expired(value: Any) -> Optional[bool]:
+    """Read predict_server's model_expired field. None when unreadable."""
+    return _read_flag(value, _EXPIRED_TRUE, _EXPIRED_FALSE, ("expired", "is_expired", "model_expired"))
+
+
+def _read_promotion_ok(value: Any) -> Optional[bool]:
+    """Read predict_server's promotion_ok field. None when unreadable."""
+    return _read_flag(
+        value, _PROMOTION_TRUE, _PROMOTION_FALSE,
+        ("promotion_ok", "ok", "approved", "promoted", "passed"),
+    )
 
 
 def _read_schema_parity(value: Any) -> tuple[Optional[bool], str]:
@@ -215,6 +233,39 @@ def jesse_ml_model_health(ml_res: Dict[str, Any]) -> tuple[str, str]:
     if missing:
         return "unknown", "prediction response omits " + ", ".join(missing)
     return "ok", "model fresh, feature schema in parity"
+
+
+def jesse_ml_promotion_status(ml_res: Dict[str, Any]) -> tuple[str, str]:
+    """Promotion verdict for a Jesse ML prediction: ("ok"|"failed"|"unknown", detail).
+
+    predict_server's promotion gates score each trained artifact and report
+    promotion_ok / promotion_reason. Upstream that verdict is advisory — a
+    rejected artifact is renamed aside, not destroyed — so a rejected model
+    reaching the active filename would still be served. Enforce it here: an
+    artifact the research box refused to promote must never size a position.
+
+    Only the upstream verdict is read. The numeric metrics alongside it
+    (deflated_sharpe_ratio, prob_backtest_overfitting) are deliberately NOT
+    thresholded: both are known to be computed wrong in the current pipeline,
+    and gating on a broken metric would put that breakage in the live path.
+
+    Same three-state contract as jesse_ml_model_health, so the caller applies
+    one absent-field policy to both.
+    """
+    raw = ml_res.get("promotion_ok", _ABSENT)
+    reason = str(ml_res.get("promotion_reason") or "").strip()
+    if raw is _ABSENT:
+        return "unknown", "prediction response omits promotion_ok"
+
+    if isinstance(raw, dict) and not reason:
+        reason = str(raw.get("reason") or raw.get("promotion_reason") or "").strip()
+
+    approved = _read_promotion_ok(raw)
+    if approved is None:
+        return "failed", f"promotion_ok unreadable ({raw!r})"
+    if not approved:
+        return "failed", f"promotion rejected ({reason or 'no promotion_reason given'})"
+    return "ok", reason or "promotion approved"
 
 
 
@@ -688,20 +739,24 @@ class DecisionEngine:
                 from backend.services.jesse_bridge import jesse_bridge
                 ml_res = await jesse_bridge.get_ml_prediction(symbol=symbol, timeframe="1h")
                 if ml_res.get("status") == "success":
-                    # Model-health gate, evaluated before anything else in the
-                    # response is trusted: an expired model, or one trained on
-                    # a different feature schema than we now feed it, must not
-                    # reach the direction veto, the confidence boost or Kelly
-                    # sizing. Hard veto in every mode; absent fields only veto
-                    # where live orders are allowed (see _ml_model_health_fail_open).
-                    health, health_detail = jesse_ml_model_health(ml_res)
-                    if health == "failed" or (health == "unknown" and not _ml_model_health_fail_open()):
-                        logger.warning(f"[{symbol}] Jesse ML Model Health Gate VETO: {health_detail} blocks {signal.signal}")
-                        self._record_eval(symbol, signal.signal, signal.confidence,
-                                          f"vetoed by Jesse ML model health gate ({health_detail})")
-                        return None
-                    if health == "unknown":
-                        logger.warning(f"[{symbol}] Jesse ML model health unverified ({health_detail}) — fail-open outside live")
+                    # Artifact gates, evaluated before anything else in the
+                    # response is trusted: an expired model, one trained on a
+                    # different feature schema than we now feed it, or one the
+                    # research box refused to promote must not reach the
+                    # direction veto, the confidence boost or Kelly sizing.
+                    # Hard veto in every mode; absent fields only veto where
+                    # live orders are allowed (see _ml_model_health_fail_open).
+                    for gate_name, (verdict, detail) in (
+                        ("model health", jesse_ml_model_health(ml_res)),
+                        ("promotion", jesse_ml_promotion_status(ml_res)),
+                    ):
+                        if verdict == "failed" or (verdict == "unknown" and not _ml_model_health_fail_open()):
+                            logger.warning(f"[{symbol}] Jesse ML {gate_name} gate VETO: {detail} blocks {signal.signal}")
+                            self._record_eval(symbol, signal.signal, signal.confidence,
+                                              f"vetoed by Jesse ML {gate_name} gate ({detail})")
+                            return None
+                        if verdict == "unknown":
+                            logger.warning(f"[{symbol}] Jesse ML {gate_name} unverified ({detail}) — fail-open outside live")
 
                     ml_sig = ml_res.get("signal")
                     ml_conf = ml_res.get("confidence", 0.0)

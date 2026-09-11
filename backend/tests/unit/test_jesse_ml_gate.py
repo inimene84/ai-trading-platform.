@@ -3,7 +3,11 @@
 import pytest
 from unittest.mock import patch, AsyncMock, MagicMock
 
-from backend.services.decision_engine import DecisionEngine, jesse_ml_model_health
+from backend.services.decision_engine import (
+    DecisionEngine,
+    jesse_ml_model_health,
+    jesse_ml_promotion_status,
+)
 from backend.services.risk_config import RiskConfig
 from backend.strategies.base import StrategySignal
 
@@ -61,6 +65,7 @@ async def test_jesse_ml_gate_veto_buy_on_strong_bearish(ml_risk_config, monkeypa
         "probabilities": {"bullish": 0.10, "bearish": 0.70, "neutral": 0.20},
         "model_expired": False,
         "feature_schema_parity": True,
+        "promotion_ok": True,
     }
 
     with patch("backend.services.jesse_bridge.jesse_bridge.get_ml_prediction", AsyncMock(return_value=mock_ml_res)):
@@ -93,6 +98,7 @@ async def test_jesse_ml_gate_veto_sell_on_strong_bullish(ml_risk_config, monkeyp
         "probabilities": {"bullish": 0.75, "bearish": 0.08, "neutral": 0.17},
         "model_expired": False,
         "feature_schema_parity": True,
+        "promotion_ok": True,
     }
 
     with patch("backend.services.jesse_bridge.jesse_bridge.get_ml_prediction", AsyncMock(return_value=mock_ml_res)):
@@ -124,6 +130,7 @@ async def test_jesse_ml_gate_boost_on_consensus(ml_risk_config, monkeypatch):
         "probabilities": {"bullish": 0.80, "bearish": 0.05, "neutral": 0.15},
         "model_expired": False,
         "feature_schema_parity": True,
+        "promotion_ok": True,
     }
 
     with patch("backend.services.jesse_bridge.jesse_bridge.get_ml_prediction", AsyncMock(return_value=mock_ml_res)):
@@ -206,6 +213,7 @@ async def test_jesse_ml_kelly_clipping_below_30_partition_trades(ml_risk_config,
         "kelly": {"size_multiplier": 1.8},
         "model_expired": False,
         "feature_schema_parity": True,
+        "promotion_ok": True,
     }
 
     with patch("backend.services.jesse_bridge.jesse_bridge.get_ml_prediction", AsyncMock(return_value=mock_ml)):
@@ -230,6 +238,7 @@ def _healthy_ml_res(**overrides) -> dict:
         "gated": False,
         "model_expired": False,
         "feature_schema_parity": True,
+        "promotion_ok": True,
     }
     res.update(overrides)
     return res
@@ -387,6 +396,144 @@ async def test_model_health_unreadable_field_fails_closed(ml_risk_config, monkey
         decision = await engine.evaluate_symbol("BTCUSDC", bars, None, 0, [], False)
         assert decision is None
         assert "unreadable" in engine.last_evaluation.get("reason", "")
+
+
+# ── Promotion gate: promotion_ok / promotion_reason ────────────────────────
+
+@pytest.mark.asyncio
+async def test_promotion_veto_on_rejected_artifact(ml_risk_config, monkeypatch):
+    """An artifact the research box refused to promote must not size a position."""
+    bars = _make_bars(50)
+    engine = _health_engine(ml_risk_config, monkeypatch, bars)
+
+    mock_ml = _healthy_ml_res(
+        promotion_ok=False,
+        promotion_reason="PBO 0.46 >= 0.30; bullish_recall 0.0325",
+    )
+    with patch("backend.services.jesse_bridge.jesse_bridge.get_ml_prediction", AsyncMock(return_value=mock_ml)):
+        decision = await engine.evaluate_symbol("BTCUSDC", bars, None, 0, [], False)
+        assert decision is None
+        reason = engine.last_evaluation.get("reason", "")
+        assert "vetoed by Jesse ML promotion gate" in reason
+        # promotion_reason must survive into the shadow report, not be swallowed.
+        assert "PBO 0.46 >= 0.30; bullish_recall 0.0325" in reason
+
+
+@pytest.mark.asyncio
+async def test_promotion_veto_is_hard_in_paper_too(ml_risk_config, monkeypatch):
+    """Like expiry and schema drift, a rejected artifact is vetoed in every mode."""
+    monkeypatch.setenv("TRADING_MODE", "paper")
+    monkeypatch.setenv("JESSE_ML_MODEL_HEALTH_FAIL_OPEN", "true")
+    bars = _make_bars(50)
+    engine = _health_engine(ml_risk_config, monkeypatch, bars)
+
+    mock_ml = _healthy_ml_res(promotion_ok="rejected", promotion_reason="quarantined artifact")
+    with patch("backend.services.jesse_bridge.jesse_bridge.get_ml_prediction", AsyncMock(return_value=mock_ml)):
+        decision = await engine.evaluate_symbol("BTCUSDC", bars, None, 0, [], False)
+        assert decision is None
+        assert "promotion rejected (quarantined artifact)" in engine.last_evaluation.get("reason", "")
+
+
+@pytest.mark.asyncio
+async def test_promotion_gate_passes_on_approved_artifact(ml_risk_config, monkeypatch):
+    """An approved artifact trades exactly as before."""
+    bars = _make_bars(50)
+    engine = _health_engine(ml_risk_config, monkeypatch, bars)
+
+    mock_ml = _healthy_ml_res(promotion_ok=True, promotion_reason="all gates passed")
+    with patch("backend.services.jesse_bridge.jesse_bridge.get_ml_prediction", AsyncMock(return_value=mock_ml)):
+        decision = await engine.evaluate_symbol("BTCUSDC", bars, None, 0, [], False)
+        assert decision is not None
+        assert decision.action == "BUY"
+
+
+@pytest.mark.asyncio
+async def test_promotion_field_absent_vetoes_in_live_and_passes_in_paper(ml_risk_config, monkeypatch):
+    """Absent promotion_ok follows the same policy as the absent health fields."""
+    bars = _make_bars(50)
+    mock_ml = _healthy_ml_res()
+    mock_ml.pop("promotion_ok")
+
+    monkeypatch.setenv("TRADING_MODE", "live")
+    engine = _health_engine(ml_risk_config, monkeypatch, bars)
+    with patch("backend.services.jesse_bridge.jesse_bridge.get_ml_prediction", AsyncMock(return_value=mock_ml)):
+        decision = await engine.evaluate_symbol("BTCUSDC", bars, None, 0, [], False)
+        assert decision is None
+        reason = engine.last_evaluation.get("reason", "")
+        assert "vetoed by Jesse ML promotion gate" in reason
+        assert "omits promotion_ok" in reason
+
+    monkeypatch.setenv("TRADING_MODE", "paper")
+    engine = _health_engine(ml_risk_config, monkeypatch, bars)
+    with patch("backend.services.jesse_bridge.jesse_bridge.get_ml_prediction", AsyncMock(return_value=mock_ml)):
+        assert await engine.evaluate_symbol("BTCUSDC", bars, None, 0, [], False) is not None
+
+
+@pytest.mark.asyncio
+async def test_promotion_absent_fail_open_override_allows_live(ml_risk_config, monkeypatch):
+    """The existing override covers an absent promotion verdict, never a rejected one."""
+    monkeypatch.setenv("TRADING_MODE", "live")
+    monkeypatch.setenv("JESSE_ML_MODEL_HEALTH_FAIL_OPEN", "true")
+    bars = _make_bars(50)
+    engine = _health_engine(ml_risk_config, monkeypatch, bars)
+
+    mock_ml = _healthy_ml_res()
+    mock_ml.pop("promotion_ok")
+    with patch("backend.services.jesse_bridge.jesse_bridge.get_ml_prediction", AsyncMock(return_value=mock_ml)):
+        assert await engine.evaluate_symbol("BTCUSDC", bars, None, 0, [], False) is not None
+
+    with patch(
+        "backend.services.jesse_bridge.jesse_bridge.get_ml_prediction",
+        AsyncMock(return_value=_healthy_ml_res(promotion_ok=False, promotion_reason="PBO 0.46")),
+    ):
+        assert await engine.evaluate_symbol("BTCUSDC", bars, None, 0, [], False) is None
+
+
+@pytest.mark.asyncio
+async def test_model_health_veto_wins_over_promotion_veto(ml_risk_config, monkeypatch):
+    """Both gates failing reports the health gate — evaluation order is stable."""
+    bars = _make_bars(50)
+    engine = _health_engine(ml_risk_config, monkeypatch, bars)
+
+    mock_ml = _healthy_ml_res(model_expired=True, promotion_ok=False, promotion_reason="PBO 0.46")
+    with patch("backend.services.jesse_bridge.jesse_bridge.get_ml_prediction", AsyncMock(return_value=mock_ml)):
+        decision = await engine.evaluate_symbol("BTCUSDC", bars, None, 0, [], False)
+        assert decision is None
+        assert "model health gate" in engine.last_evaluation.get("reason", "")
+
+
+@pytest.mark.parametrize("payload,expected", [
+    ({"promotion_ok": True}, "ok"),
+    ({"promotion_ok": "approved"}, "ok"),
+    ({"promotion_ok": 1}, "ok"),
+    ({"promotion_ok": {"ok": True}}, "ok"),
+    ({"promotion_ok": False}, "failed"),
+    ({"promotion_ok": "quarantined"}, "failed"),
+    ({"promotion_ok": 0}, "failed"),
+    ({"promotion_ok": {"approved": False}}, "failed"),
+    ({"promotion_ok": {"gates": 3}}, "failed"),
+    ({"promotion_ok": 0.46}, "failed"),
+    ({}, "unknown"),
+])
+def test_jesse_ml_promotion_status_payload_shapes(payload, expected):
+    verdict, detail = jesse_ml_promotion_status(payload)
+    assert verdict == expected, detail
+
+
+def test_promotion_reason_is_read_from_a_nested_verdict():
+    verdict, detail = jesse_ml_promotion_status({"promotion_ok": {"ok": False, "reason": "PBO 0.46 >= 0.30"}})
+    assert verdict == "failed"
+    assert "PBO 0.46 >= 0.30" in detail
+
+
+def test_promotion_metrics_are_not_thresholded():
+    """DSR / PBO are reported but known-broken upstream: only the verdict gates."""
+    verdict, _ = jesse_ml_promotion_status({
+        "promotion_ok": True,
+        "prob_backtest_overfitting": 0.46,
+        "deflated_sharpe_ratio": 1.0,
+    })
+    assert verdict == "ok"
 
 
 # ── Uncertainty veto: honest naming, legacy wire key still accepted ─────────

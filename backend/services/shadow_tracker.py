@@ -63,6 +63,11 @@ def is_crypto_symbol(symbol: str) -> bool:
 # reason mentions "Kronos/LLM cost" so ranging must beat the Kronos needle;
 # and "vetoed by risk reviewer" must not be swallowed by a Kronos match.
 _GATE_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    # Promotion first: promotion_reason is free upstream text and could mention
+    # a schema or an expired artifact, which would otherwise read as a health veto.
+    ("jesse_ml_promotion", (
+        "jesse ml promotion", "promotion rejected", "promotion_ok",
+    )),
     ("jesse_ml_model_health", (
         "jesse ml model health", "model expired", "feature schema",
     )),

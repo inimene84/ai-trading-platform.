@@ -66,6 +66,14 @@ def test_classify_gate_from_deploy_branch_reason_strings():
         "vetoed by Jesse ML model health gate (feature schema mismatch "
         "(live=deadbeefdeadbeef expected=cd15d2380809b247))"
     ) == "jesse_ml_model_health"
+    assert classify_gate(
+        "vetoed by Jesse ML promotion gate (promotion rejected (PBO 0.46 >= 0.30))"
+    ) == "jesse_ml_promotion"
+    # promotion_reason is free upstream text; a health-sounding reason still
+    # attributes to the promotion gate that actually blocked the signal.
+    assert classify_gate(
+        "vetoed by Jesse ML promotion gate (promotion rejected (retrained on a new feature schema))"
+    ) == "jesse_ml_promotion"
     assert classify_gate("entry decision", "executed") == "other"
 
 
