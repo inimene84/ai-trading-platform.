@@ -1,6 +1,6 @@
 {
-  "code_commit": "3ce7975",
-  "command": "python3 scripts/research/jesse_chronological_eval.py --symbol 'BTC-USDT' --exchange 'Binance Perpetual Futures' --source-timeframe '1m' --timeframe '1h' --start '2024-01-01T00:00:00Z' --end '2026-09-09T00:00:00Z' --fee-per-side 0.0004 --slippage-per-side 0.0002 --assumed-funding-rate 0.0001 --code-commit 3ce7975",
+  "code_commit": "366a184",
+  "command": "python3 scripts/research/jesse_chronological_eval.py --symbol 'BTC-USDT' --exchange 'Binance Perpetual Futures' --source-timeframe '1m' --timeframe '1h' --start '2024-01-01T00:00:00Z' --end '2026-09-09T00:00:00Z' --fee-per-side 0.0004 --slippage-per-side 0.0002 --assumed-funding-rate 0.0001 --code-commit 366a184",
   "cost_scenario": {
     "assumed_funding_rate": 0.0001,
     "fee_per_side": 0.0004,
@@ -10,7 +10,7 @@
       8,
       16
     ],
-    "funding_interpretation": "Scenario assumption, not historical funding: positive fixed rate means longs pay and shorts receive at 00:00/08:00/16:00 UTC while open.",
+    "funding_interpretation": "Conservative scenario assumption, not historical funding: the absolute fixed rate is debited from either side at 00:00/08:00/16:00 UTC while open because the source has no funding-rate history. This is not claimed to be realistic.",
     "slippage_per_side": 0.0002
   },
   "data_provenance": {
@@ -44,7 +44,7 @@
   },
   "experiments": [
     {
-      "confidence_threshold_selected_on_validation": 0.45,
+      "confidence_threshold_selected_on_validation": 0.4,
       "exit_policy": {
         "max_holding_bars": 72,
         "name": "symmetric_fixed_barrier_reference",
@@ -58,28 +58,28 @@
       "scope": "Research proxy for RiskConfig exit defaults only; it does not reproduce the CombinedStrategy, regime/Kronos/LLM gates, exchange tick ordering, or live sizing.",
       "temperature_selected_on_validation": 2.2777132503397963,
       "test_metrics": {
-        "annualized_sharpe": -1.7248221283790504,
-        "annualized_sortino": -1.920221913768295,
+        "annualized_sharpe": -1.2641842375770083,
+        "annualized_sortino": -1.6512787477646034,
         "equity_end": "2026-09-08T22:00:00+00:00",
         "equity_start": "2026-02-22T08:00:00+00:00",
-        "funding_events": 12,
-        "max_drawdown_pct": -14.470820587654764,
+        "funding_events": 72,
+        "max_drawdown_pct": -14.814341577226298,
         "partial_exits": 0,
-        "total_return_pct": -10.945655928437926,
-        "trades": 14,
-        "win_rate_pct": 14.285714285714285
+        "total_return_pct": -12.065286383681972,
+        "trades": 72,
+        "win_rate_pct": 30.555555555555557
       },
       "validation_metrics": {
-        "annualized_sharpe": -0.5402244549004435,
-        "annualized_sortino": -0.8922901888651616,
+        "annualized_sharpe": -0.39900053909468625,
+        "annualized_sortino": -0.5429123240318068,
         "equity_end": "2026-02-22T07:00:00+00:00",
         "equity_start": "2025-08-10T18:00:00+00:00",
-        "funding_events": 23,
-        "max_drawdown_pct": -16.60132552386313,
+        "funding_events": 91,
+        "max_drawdown_pct": -17.063282062618168,
         "partial_exits": 0,
-        "total_return_pct": -5.253593552369362,
-        "trades": 22,
-        "win_rate_pct": 18.181818181818183
+        "total_return_pct": -5.845093227965492,
+        "trades": 101,
+        "win_rate_pct": 33.663366336633665
       }
     },
     {
@@ -97,32 +97,32 @@
       "scope": "Research proxy for RiskConfig exit defaults only; it does not reproduce the CombinedStrategy, regime/Kronos/LLM gates, exchange tick ordering, or live sizing.",
       "temperature_selected_on_validation": 2.2777132503397963,
       "test_metrics": {
-        "annualized_sharpe": -3.244155899240852,
-        "annualized_sortino": -3.6902404124861836,
+        "annualized_sharpe": -2.932462506369852,
+        "annualized_sortino": -3.2719723083247376,
         "equity_end": "2026-09-08T22:00:00+00:00",
         "equity_start": "2026-02-22T08:00:00+00:00",
-        "funding_events": 75,
-        "max_drawdown_pct": -22.06255988033763,
-        "partial_exits": 26,
-        "total_return_pct": -20.382207098446624,
-        "trades": 79,
-        "win_rate_pct": 31.645569620253166
+        "funding_events": 62,
+        "max_drawdown_pct": -23.04088861666228,
+        "partial_exits": 23,
+        "total_return_pct": -20.752579911394896,
+        "trades": 70,
+        "win_rate_pct": 30.0
       },
       "validation_metrics": {
-        "annualized_sharpe": -1.9518186229654353,
-        "annualized_sortino": -2.3900849934309427,
+        "annualized_sharpe": -1.5630619516550976,
+        "annualized_sortino": -1.840002012346499,
         "equity_end": "2026-02-22T07:00:00+00:00",
         "equity_start": "2025-08-10T18:00:00+00:00",
-        "funding_events": 65,
-        "max_drawdown_pct": -27.247582188542495,
-        "partial_exits": 25,
-        "total_return_pct": -21.848045517201964,
-        "trades": 75,
-        "win_rate_pct": 30.666666666666664
+        "funding_events": 51,
+        "max_drawdown_pct": -21.28406448807828,
+        "partial_exits": 28,
+        "total_return_pct": -14.864423244274894,
+        "trades": 65,
+        "win_rate_pct": 35.38461538461539
       }
     }
   ],
-  "generated_at": "2026-09-11T02:33:33.035052+00:00",
+  "generated_at": "2026-09-11T02:55:13.891257+00:00",
   "library_versions": {
     "lightgbm": "4.7.0",
     "numpy": "1.26.4",

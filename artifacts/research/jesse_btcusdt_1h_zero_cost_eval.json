@@ -1,6 +1,6 @@
 {
-  "code_commit": "3ce7975",
-  "command": "python3 scripts/research/jesse_chronological_eval.py --symbol 'BTC-USDT' --exchange 'Binance Perpetual Futures' --source-timeframe '1m' --timeframe '1h' --start '2024-01-01T00:00:00Z' --end '2026-09-09T00:00:00Z' --fee-per-side 0.0 --slippage-per-side 0.0 --assumed-funding-rate 0.0 --code-commit 3ce7975",
+  "code_commit": "366a184",
+  "command": "python3 scripts/research/jesse_chronological_eval.py --symbol 'BTC-USDT' --exchange 'Binance Perpetual Futures' --source-timeframe '1m' --timeframe '1h' --start '2024-01-01T00:00:00Z' --end '2026-09-09T00:00:00Z' --fee-per-side 0.0 --slippage-per-side 0.0 --assumed-funding-rate 0.0 --code-commit 366a184",
   "cost_scenario": {
     "assumed_funding_rate": 0.0,
     "fee_per_side": 0.0,
@@ -10,7 +10,7 @@
       8,
       16
     ],
-    "funding_interpretation": "Scenario assumption, not historical funding: positive fixed rate means longs pay and shorts receive at 00:00/08:00/16:00 UTC while open.",
+    "funding_interpretation": "Conservative scenario assumption, not historical funding: the absolute fixed rate is debited from either side at 00:00/08:00/16:00 UTC while open because the source has no funding-rate history. This is not claimed to be realistic.",
     "slippage_per_side": 0.0
   },
   "data_provenance": {
@@ -122,7 +122,7 @@
       }
     }
   ],
-  "generated_at": "2026-09-11T02:43:28.845846+00:00",
+  "generated_at": "2026-09-11T03:04:14.544662+00:00",
   "library_versions": {
     "lightgbm": "4.7.0",
     "numpy": "1.26.4",
