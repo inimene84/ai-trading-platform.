@@ -585,7 +585,14 @@ class DecisionEngine:
                     # Capture Fractional Kelly size multiplier for downstream position sizing
                     if "size_multiplier" in kelly:
                         setattr(signal, "kelly_multiplier", float(kelly["size_multiplier"]))
-                        logger.info(f"[{symbol}] Jesse ML Calibrated Edge: Kelly multiplier={kelly['size_multiplier']}x (fractional_kelly={kelly.get('fractional_kelly', 0):.4f})")
+                        gate_info = ml_res.get("gate") or {}
+                        logger.info(
+                            f"[{symbol}] Jesse ML Calibrated Edge: Kelly multiplier={kelly['size_multiplier']}x "
+                            f"(fractional_kelly={kelly.get('fractional_kelly', 0):.4f}, "
+                            f"b={kelly.get('payoff_ratio', 'n/a')} [{kelly.get('payoff_ratio_source', 'unknown')}], "
+                            f"gate={gate_info.get('status', 'n/a')} dsr={ml_res.get('dsr')} pbo={ml_res.get('pbo')} "
+                            f"n_trials={ml_res.get('n_trials')} model={ml_res.get('model')})"
+                        )
 
                     if signal.confidence < self.config.min_signal_strength:
                         self._record_eval(symbol, signal.signal, signal.confidence, "confidence reduced below threshold by Jesse ML gate")
