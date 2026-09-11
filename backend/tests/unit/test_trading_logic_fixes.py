@@ -88,12 +88,17 @@ async def test_scan_markets_skips_metals_when_disabled():
     previous_cfg = dict(engine.execution_config)
     previous = dict(engine.candidates)
     engine.candidates.clear()
+    # Leftover post-loss cooldowns from earlier tests (ctrader_trade_sync sets
+    # real 45-min cooldowns on this singleton) would skip symbols before fetch.
+    engine._symbol_cooldowns.clear()
     try:
         engine.execution_config["include_metals"] = False
         with patch(
             "backend.services.signal_candidate_engine.ctrader_service.get_trendbars",
             return_value=[],
-        ) as fetch:
+        ) as fetch, patch(
+            "backend.services.sentry_state.is_trading_allowed", return_value=True
+        ):
             await engine.scan_markets(universe=["XAGUSD", "EURUSD"], timeframe="M5")
         fetched = [c.args[0] for c in fetch.call_args_list]
         assert "XAGUSD" not in fetched
@@ -101,6 +106,7 @@ async def test_scan_markets_skips_metals_when_disabled():
     finally:
         engine.execution_config = previous_cfg
         engine.candidates = previous
+        engine._symbol_cooldowns.clear()
 
 
 def test_same_base_cap_blocks_third_eur_pair():

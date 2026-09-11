@@ -76,9 +76,9 @@ def test_calculate_pip_margin():
     assert calc["required_margin"] == 1085.0  # (100,000 * 1.0850) / 100 = $1,085.0
 
 
-def test_trendbars_endpoint(client):
+def test_trendbars_endpoint(client, auth_headers):
     """Test GET /api/trading/ctrader/trendbars endpoint."""
-    response = client.get("/api/trading/ctrader/trendbars?symbol=EURUSD&period=M5&count=20")
+    response = client.get("/api/trading/ctrader/trendbars?symbol=EURUSD&period=M5&count=20", headers=auth_headers)
     assert response.status_code == 200
     data = response.json()
     assert data["symbol"] == "EURUSD"
@@ -86,9 +86,9 @@ def test_trendbars_endpoint(client):
     assert len(data["bars"]) == 20
 
 
-def test_ticks_endpoint(client):
+def test_ticks_endpoint(client, auth_headers):
     """Test GET /api/trading/ctrader/ticks endpoint."""
-    response = client.get("/api/trading/ctrader/ticks?symbol=GBPUSD&type=BID&hours=1")
+    response = client.get("/api/trading/ctrader/ticks?symbol=GBPUSD&type=BID&hours=1", headers=auth_headers)
     assert response.status_code == 200
     data = response.json()
     assert data["symbol"] == "GBPUSD"
@@ -96,9 +96,9 @@ def test_ticks_endpoint(client):
     assert len(data["ticks"]) > 0
 
 
-def test_symbol_spec_endpoint(client):
+def test_symbol_spec_endpoint(client, auth_headers):
     """Test GET /api/trading/ctrader/symbol-spec endpoint."""
-    response = client.get("/api/trading/ctrader/symbol-spec?symbol=EURUSD")
+    response = client.get("/api/trading/ctrader/symbol-spec?symbol=EURUSD", headers=auth_headers)
     assert response.status_code == 200
     data = response.json()
     assert data["symbol"] == "EURUSD"
@@ -123,7 +123,7 @@ def test_pip_margin_calc_endpoint(client, auth_headers):
     assert data["required_margin"] == 275.0  # (50,000 * 1.10) / 200 = 275.0
 
 
-def test_ctrader_positions_endpoint(client):
+def test_ctrader_positions_endpoint(client, auth_headers):
     """Live book endpoint returns the in-memory cTrader positions."""
     ctrader_service._positions = [
         {
@@ -137,7 +137,7 @@ def test_ctrader_positions_endpoint(client):
         }
     ]
     try:
-        response = client.get("/api/trading/ctrader/positions")
+        response = client.get("/api/trading/ctrader/positions", headers=auth_headers)
         assert response.status_code == 200
         data = response.json()
         assert data["count"] == 1

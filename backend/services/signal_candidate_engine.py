@@ -89,6 +89,11 @@ class SignalCandidateEngine:
             "max_same_base": int(os.getenv("CTRADER_MAX_SAME_BASE", "2")),
             "max_currency_exposure": int(os.getenv("CTRADER_MAX_CURRENCY_EXPOSURE", "2")),
             "max_candidates": int(os.getenv("CTRADER_MAX_CANDIDATES", "200")),
+            "max_binance_positions": int(os.getenv("MAX_BINANCE_POSITIONS", "10")),
+            # Portfolio risk budget per broker book: sum of risk_usd across live
+            # (PENDING/READY) candidates plus the incoming trade may not exceed
+            # this % of account equity. 12 READY x 0.5% used to stack to ~6%.
+            "max_portfolio_risk_pct": float(os.getenv("MAX_PORTFOLIO_RISK_PCT", "3.0")),
         }
         self._symbol_cooldowns: Dict[str, float] = {}
         self.cooldown_duration_sec: int = int(os.getenv("SYMBOL_COOLDOWN_MINUTES", "45")) * 60
@@ -226,6 +231,21 @@ class SignalCandidateEngine:
     def _symbol_base(symbol: str) -> str:
         sym = str(symbol or "").upper()
         return sym[:3] if len(sym) >= 6 else sym
+
+    def _open_binance_positions(self) -> List[Dict[str, Any]]:
+        """Open Binance futures positions; empty list (fail-open) on API errors."""
+        try:
+            return list(binance_futures_broker.get_positions() or [])
+        except Exception as err:
+            logger.warning(f"Could not read Binance open positions: {err}")
+            return []
+
+    def _open_binance_symbols(self) -> Set[str]:
+        return {
+            str(p.get("symbol") or "").upper()
+            for p in self._open_binance_positions()
+            if p.get("symbol")
+        }
 
     def _open_ctrader_base_counts(self) -> Dict[str, int]:
         counts: Dict[str, int] = {}
@@ -799,6 +819,11 @@ class SignalCandidateEngine:
     # ── Market Scanning Execution ───────────────────────────────────────────
     async def scan_markets(self, universe: Optional[List[str]] = None, timeframe: str = "M5") -> List[Dict[str, Any]]:
         """Scan specified market universe and produce trade candidate signals."""
+        from backend.services.sentry_state import is_trading_allowed
+        if not is_trading_allowed():
+            logger.warning("Market scan skipped: trading is halted by sentry")
+            return []
+
         if not universe:
             universe = [
                 # Forex Majors
@@ -976,6 +1001,11 @@ class SignalCandidateEngine:
     # ── News & Macro Scanning Execution ─────────────────────────────────────
     async def scan_news_and_events(self, lookahead_minutes: int = 60) -> List[Dict[str, Any]]:
         """Correlate economic events and news sentiment to propose news-triggered trade setups."""
+        from backend.services.sentry_state import is_trading_allowed
+        if not is_trading_allowed():
+            logger.warning("News scan skipped: trading is halted by sentry")
+            return []
+
         from backend.routes.news import get_economic_calendar, get_news_feed, get_market_sentiment
 
         self._equity_cache.clear()
@@ -1297,6 +1327,54 @@ class SignalCandidateEngine:
                         f"({self.execution_config.get('max_same_base', 2)} open)."
                     ),
                 }
+
+        if cand.get("broker") == "binance_futures":
+            open_binance = self._open_binance_positions()
+            if self.execution_config.get("one_position_per_symbol"):
+                open_syms = {
+                    str(p.get("symbol") or "").upper()
+                    for p in open_binance
+                    if p.get("symbol")
+                }
+                if cand_sym in open_syms:
+                    return {
+                        "success": False,
+                        "skipped": True,
+                        "error": f"Already have an open Binance position in {cand_sym}.",
+                    }
+            max_binance = int(self.execution_config.get("max_binance_positions") or 0)
+            if max_binance > 0 and len(open_binance) >= max_binance:
+                return {
+                    "success": False,
+                    "skipped": True,
+                    "error": f"Max open Binance positions reached ({max_binance}).",
+                }
+
+        # Portfolio risk budget: live candidate risk (this broker's book) plus
+        # the incoming trade must stay under max_portfolio_risk_pct of equity.
+        max_risk_pct = float(self.execution_config.get("max_portfolio_risk_pct") or 0)
+        if max_risk_pct > 0:
+            equity = self._resolve_equity(str(cand.get("broker") or ""))
+            if equity > 0:
+                committed = sum(
+                    float((c.get("sizing") or {}).get("risk_usd") or 0.0)
+                    for c in self.candidates.values()
+                    if c.get("id") != candidate_id
+                    and c.get("status") in (CandidateStatus.PENDING, CandidateStatus.READY)
+                    and c.get("broker") == cand.get("broker")
+                )
+                new_risk = float((cand.get("sizing") or {}).get("risk_usd") or 0.0)
+                budget = equity * max_risk_pct / 100.0
+                if committed + new_risk > budget:
+                    return {
+                        "success": False,
+                        "skipped": True,
+                        "error": (
+                            f"Portfolio risk budget exceeded for {cand.get('broker')}: "
+                            f"committed ${committed:.2f} + new ${new_risk:.2f} > "
+                            f"{max_risk_pct}% of ${equity:.2f} equity (${budget:.2f})."
+                        ),
+                    }
 
         # Net currency exposure re-check at execution (the ready queue check
         # ran earlier; positions may have changed since).

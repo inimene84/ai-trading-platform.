@@ -153,7 +153,9 @@ async def run() -> None:
     base_url = os.getenv("BACKEND_URL", "http://backend:8000")
     token = os.getenv("SENTRY_WATCHDOG_TOKEN", "").strip()
     poll_sec = _env_int("SENTRY_POLL_INTERVAL_SEC", 10)
-    fail_threshold = _env_int("SENTRY_FAIL_THRESHOLD", 3)
+    # 6 x 10s = 60s of failed heartbeats before the emergency path runs —
+    # 3x fired on ordinary backend restarts and cancelled Binance orders.
+    fail_threshold = _env_int("SENTRY_FAIL_THRESHOLD", 6)
     cooldown_sec = _env_int("SENTRY_EMERGENCY_COOLDOWN_SEC", 300)
     auto_resume = _env_bool("SENTRY_AUTO_RESUME_ENABLED", True)
     resume_after_sec = _env_int("SENTRY_RESUME_AFTER_SEC", 120)

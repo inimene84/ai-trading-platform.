@@ -145,20 +145,28 @@ def test_scan_news_endpoint(client, auth_headers):
     assert "candidates_count" in data
 
 
-def test_candidates_and_ready_endpoints(client):
+def test_candidates_and_ready_endpoints(client, auth_headers):
     """Test GET /api/signals/candidates and /ready-for-execution."""
-    cands_res = client.get("/api/signals/candidates")
+    cands_res = client.get("/api/signals/candidates", headers=auth_headers)
     assert cands_res.status_code == 200
     assert "candidates" in cands_res.json()
 
-    ready_res = client.get("/api/signals/ready-for-execution")
+    ready_res = client.get("/api/signals/ready-for-execution", headers=auth_headers)
     assert ready_res.status_code == 200
     assert "signals" in ready_res.json()
 
 
+def test_signal_get_endpoints_require_auth(client, monkeypatch):
+    """Signal candidates expose live trade intent — GETs must reject anonymous callers."""
+    monkeypatch.setenv("ADMIN_API_KEY", "test-admin-key")
+    assert client.get("/api/signals/candidates").status_code == 401
+    assert client.get("/api/signals/ready-for-execution").status_code == 401
+    assert client.get("/api/signals/timing-config").status_code == 401
+
+
 def test_timing_config_endpoints(client, auth_headers):
     """Test GET and POST /api/signals/timing-config."""
-    get_res = client.get("/api/signals/timing-config")
+    get_res = client.get("/api/signals/timing-config", headers=auth_headers)
     assert get_res.status_code == 200
     assert "config" in get_res.json()
     assert "timing_modes" in get_res.json()
@@ -208,13 +216,13 @@ def test_execute_candidate_endpoint_dry_run(client, auth_headers):
     assert data["candidate_id"] == sig_id
 
 
-def test_signals_routes_dual_mounted_for_nginx_rewrite(client):
+def test_signals_routes_dual_mounted_for_nginx_rewrite(client, auth_headers):
     """Dashboard hits /api/backend/signals/* which nginx rewrites to /signals/*."""
-    get_res = client.get("/signals/timing-config")
+    get_res = client.get("/signals/timing-config", headers=auth_headers)
     assert get_res.status_code == 200
     assert "config" in get_res.json()
 
-    api_res = client.get("/api/signals/timing-config")
+    api_res = client.get("/api/signals/timing-config", headers=auth_headers)
     assert api_res.status_code == 200
     assert api_res.json()["config"]["pre_event_window_min"] == get_res.json()["config"]["pre_event_window_min"]
 
@@ -272,7 +280,9 @@ async def test_execute_candidate_accepts_ctrader_sent_status():
         "sizing": {"lots": 0.01, "quantity": 0.01, "risk_usd": 50.0},
     }
 
-    with patch.object(signal_candidate_engine, "_open_ctrader_position_count", return_value=0), patch(
+    with patch.object(signal_candidate_engine, "_open_ctrader_position_count", return_value=0), patch.dict(
+        signal_candidate_engine.execution_config, {"max_portfolio_risk_pct": 0}
+    ), patch(
         "backend.services.signal_candidate_engine.ctrader_service.ensure_connected",
         return_value=True,
     ), patch(
@@ -312,7 +322,9 @@ async def test_execute_candidate_rejects_simulated_when_credentials_exist():
         "sizing": {"lots": 0.01, "quantity": 0.01, "risk_usd": 50.0},
     }
 
-    with patch.object(signal_candidate_engine, "_open_ctrader_position_count", return_value=0), patch(
+    with patch.object(signal_candidate_engine, "_open_ctrader_position_count", return_value=0), patch.dict(
+        signal_candidate_engine.execution_config, {"max_portfolio_risk_pct": 0}
+    ), patch(
         "backend.services.signal_candidate_engine.ctrader_service.ensure_connected",
         return_value=False,
     ), patch(
@@ -350,7 +362,7 @@ async def test_execute_candidate_skips_market_closed_without_blocking_queue():
     }
 
     with patch.object(signal_candidate_engine, "_open_ctrader_position_count", return_value=0), patch.dict(
-        signal_candidate_engine.execution_config, {"forex_only": False, "include_metals": True}
+        signal_candidate_engine.execution_config, {"forex_only": False, "include_metals": True, "max_portfolio_risk_pct": 0}
     ), patch(
         "backend.services.signal_candidate_engine.ctrader_service.ensure_connected",
         return_value=True,
@@ -559,8 +571,10 @@ async def test_execute_candidate_keeps_ready_on_paper_failure():
     }
 
     mock_resp = MagicMock(success=False, order_id="paper_000001", message="Paper market entry requires an explicit price or prior market fill")
-    with patch.dict(signal_candidate_engine.execution_config, {"forex_only": False}), patch.object(
+    with patch.dict(signal_candidate_engine.execution_config, {"forex_only": False, "max_portfolio_risk_pct": 0}), patch.object(
         signal_candidate_engine, "_resolve_mark_price", new_callable=AsyncMock, return_value=0.0
+    ), patch.object(
+        signal_candidate_engine, "_open_binance_positions", return_value=[]
     ), patch(
         "backend.services.signal_candidate_engine.UnifiedTrading"
     ) as mock_ut_cls:
@@ -847,8 +861,10 @@ async def test_execute_candidate_cancels_duplicate_siblings():
     engine.candidates["dup-b"] = _cand("dup-b")
 
     mock_resp = MagicMock(success=True, order_id="ord-1", message="filled")
-    with patch.dict(engine.execution_config, {"forex_only": False}), patch(
+    with patch.dict(engine.execution_config, {"forex_only": False, "max_portfolio_risk_pct": 0}), patch(
         "backend.services.sentry_state.is_trading_allowed", return_value=True
+    ), patch.object(
+        engine, "_open_binance_positions", return_value=[]
     ), patch.object(
         engine, "_resolve_mark_price", new_callable=AsyncMock, return_value=100000.0
     ), patch(
@@ -865,3 +881,104 @@ async def test_execute_candidate_cancels_duplicate_siblings():
     assert engine.candidates["dup-b"]["status"] == CandidateStatus.CANCELLED
     _, kwargs = mock_ut_cls.return_value.place_order.call_args
     assert kwargs.get("session_id") == "binance_futures_paper"
+
+
+def _binance_candidate(cid: str, now_ts: int) -> dict:
+    return {
+        "id": cid,
+        "symbol": "BTCUSDT",
+        "broker": "binance_futures",
+        "strategy": "MOMENTUM_TREND_PULSE",
+        "direction": "BUY",
+        "entry_price": 100000,
+        "stop_loss": 99000,
+        "take_profit": 102000,
+        "timing_mode": TimingMode.BAR_CLOSE,
+        "status": CandidateStatus.READY,
+        "earliest_exec_at": now_ts - 5,
+        "latest_exec_at": now_ts + 600,
+        "sizing": {"lots": 0.01, "quantity": 0.01, "risk_usd": 50.0},
+    }
+
+
+@pytest.mark.asyncio
+async def test_execute_candidate_binance_one_position_per_symbol():
+    """A binance_futures candidate must be skipped when the symbol already has an open position."""
+    engine = SignalCandidateEngine()
+    engine.candidates.clear()
+    engine.candidates["b-1"] = _binance_candidate("b-1", int(time.time()))
+
+    with patch.dict(engine.execution_config, {"forex_only": False, "max_portfolio_risk_pct": 0}), patch(
+        "backend.services.sentry_state.is_trading_allowed", return_value=True
+    ), patch.object(
+        engine, "_open_binance_positions", return_value=[{"symbol": "BTCUSDT"}]
+    ):
+        res = await engine.execute_candidate("b-1", force=True)
+
+    assert res["success"] is False
+    assert res["skipped"] is True
+    assert "open Binance position" in res["error"]
+    assert engine.candidates["b-1"]["status"] == CandidateStatus.READY
+
+
+@pytest.mark.asyncio
+async def test_execute_candidate_binance_max_positions_cap():
+    engine = SignalCandidateEngine()
+    engine.candidates.clear()
+    engine.candidates["b-1"] = _binance_candidate("b-1", int(time.time()))
+
+    open_positions = [{"symbol": f"SYM{i}USDT"} for i in range(10)]
+    with patch.dict(
+        engine.execution_config,
+        {"forex_only": False, "max_portfolio_risk_pct": 0, "max_binance_positions": 10},
+    ), patch(
+        "backend.services.sentry_state.is_trading_allowed", return_value=True
+    ), patch.object(
+        engine, "_open_binance_positions", return_value=open_positions
+    ):
+        res = await engine.execute_candidate("b-1", force=True)
+
+    assert res["success"] is False
+    assert res["skipped"] is True
+    assert "Max open Binance positions" in res["error"]
+
+
+@pytest.mark.asyncio
+async def test_execute_candidate_portfolio_risk_budget():
+    """Committed risk across live candidates plus the new trade may not exceed the budget."""
+    engine = SignalCandidateEngine()
+    engine.candidates.clear()
+    now_ts = int(time.time())
+    engine.candidates["b-1"] = _binance_candidate("b-1", now_ts)
+    # Another live candidate already commits $50 of the same book.
+    committed = _binance_candidate("b-2", now_ts)
+    committed["symbol"] = "ETHUSDT"
+    engine.candidates["b-2"] = committed
+
+    # equity $10_000, budget 0.5% = $50 -> $50 committed + $50 new = $100 > $50
+    with patch.dict(
+        engine.execution_config, {"forex_only": False, "max_portfolio_risk_pct": 0.5}
+    ), patch(
+        "backend.services.sentry_state.is_trading_allowed", return_value=True
+    ), patch.object(
+        engine, "_open_binance_positions", return_value=[]
+    ), patch.object(
+        engine, "_resolve_equity", return_value=10_000.0
+    ):
+        res = await engine.execute_candidate("b-1", force=True)
+
+    assert res["success"] is False
+    assert res["skipped"] is True
+    assert "risk budget" in res["error"].lower()
+    assert engine.candidates["b-1"]["status"] == CandidateStatus.READY
+
+
+@pytest.mark.asyncio
+async def test_scans_return_empty_while_halted():
+    """Signal generation pauses while the sentry halt flag is set."""
+    engine = SignalCandidateEngine()
+    with patch(
+        "backend.services.sentry_state.is_trading_allowed", return_value=False
+    ):
+        assert await engine.scan_markets(universe=["EURUSD"]) == []
+        assert await engine.scan_news_and_events() == []
