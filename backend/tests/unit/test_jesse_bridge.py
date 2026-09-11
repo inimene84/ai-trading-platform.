@@ -150,6 +150,30 @@ async def test_jesse_bridge_get_ml_prediction():
         assert res["confidence"] == 0.58
 
 
+@pytest.mark.asyncio
+async def test_get_meta_prediction_fail_open_in_paper(monkeypatch):
+    """Meta-model errors must not block research in paper mode (EXECUTE)."""
+    monkeypatch.setenv("TRADING_MODE", "paper")
+    service = JesseBridgeService()
+    with patch.object(JesseBridgeService, "_resolve_ml_url", AsyncMock(return_value="http://127.0.0.1:9003")), \
+        patch("backend.services.jesse_bridge.httpx.AsyncClient", side_effect=RuntimeError("down")):
+        res = await service.get_meta_prediction("BTC-USDT", "BUY")
+    assert res["action"] == "EXECUTE"
+    assert "fail-open" in res["reason"]
+
+
+@pytest.mark.asyncio
+async def test_get_meta_prediction_fail_closed_in_live(monkeypatch):
+    """Meta-model errors must veto sizing in live mode (VETO, fail-closed)."""
+    monkeypatch.setenv("TRADING_MODE", "live")
+    service = JesseBridgeService()
+    with patch.object(JesseBridgeService, "_resolve_ml_url", AsyncMock(return_value="http://127.0.0.1:9003")), \
+        patch("backend.services.jesse_bridge.httpx.AsyncClient", side_effect=RuntimeError("down")):
+        res = await service.get_meta_prediction("BTC-USDT", "BUY")
+    assert res["action"] == "VETO"
+    assert "fail-closed" in res["reason"]
+
+
 def test_jesse_ml_predict_routes(client, monkeypatch):
     """Test /api/jesse/ml-predict (GET and POST) and /api/jesse/ml-models."""
     api_key = os.getenv("ADMIN_API_KEY", "test_key")

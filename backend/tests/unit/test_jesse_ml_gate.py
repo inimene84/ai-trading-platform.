@@ -207,3 +207,63 @@ async def test_jesse_ml_kelly_clipping_below_30_partition_trades(ml_risk_config,
         # If clipped to 1.0x, notional doesn't scale above 1.0x trade_usdt or risk
         assert decision.action == "BUY"
 
+
+@pytest.mark.asyncio
+async def test_jesse_ml_gate_veto_expired_model_in_live(ml_risk_config, monkeypatch):
+    """A stale (expired) ML model artifact must veto entries in LIVE mode."""
+    monkeypatch.setenv("TRADING_MODE", "live")
+    monkeypatch.setenv("JESSE_ML_GATE_ENABLED", "true")
+    engine = DecisionEngine(ml_risk_config)
+    engine.enable_kronos = False
+    engine.account_equity = 1000.0
+    engine.account_available = 1000.0
+    bars = _make_bars(50)
+
+    mock_signal = StrategySignal(symbol="BTCUSDC", signal="BUY", confidence=0.60, entry_price=bars[-1]["close"])
+    engine.strategy.generate_signal = MagicMock(return_value=mock_signal)
+    engine.regime_detector.detect = MagicMock(return_value=MagicMock(regime="TRENDING", weights=MagicMock(return_value={})))
+
+    mock_ml_res = {
+        "status": "success",
+        "symbol": "BTC-USDT",
+        "signal": "BUY",
+        "confidence": 0.80,
+        "probabilities": {"bullish": 0.80, "bearish": 0.05, "neutral": 0.15},
+        "model_expired": True,
+    }
+
+    with patch("backend.services.jesse_bridge.jesse_bridge.get_ml_prediction", AsyncMock(return_value=mock_ml_res)):
+        decision = await engine.evaluate_symbol("BTCUSDC", bars, None, 0, [], False)
+        assert decision is None
+        assert "expired" in engine.last_evaluation.get("reason", "")
+
+
+@pytest.mark.asyncio
+async def test_jesse_ml_gate_skips_expired_model_in_paper(ml_risk_config, monkeypatch):
+    """In paper mode an expired model skips the ML gate instead of blocking research."""
+    monkeypatch.setenv("TRADING_MODE", "paper")
+    monkeypatch.setenv("JESSE_ML_GATE_ENABLED", "true")
+    engine = DecisionEngine(ml_risk_config)
+    engine.enable_kronos = False
+    engine.account_equity = 1000.0
+    engine.account_available = 1000.0
+    bars = _make_bars(50)
+
+    mock_signal = StrategySignal(symbol="BTCUSDC", signal="BUY", confidence=0.60, entry_price=bars[-1]["close"])
+    engine.strategy.generate_signal = MagicMock(return_value=mock_signal)
+    engine.regime_detector.detect = MagicMock(return_value=MagicMock(regime="TRENDING", weights=MagicMock(return_value={})))
+
+    mock_ml_res = {
+        "status": "success",
+        "symbol": "BTC-USDT",
+        "signal": "BUY",
+        "confidence": 0.80,
+        "probabilities": {"bullish": 0.80, "bearish": 0.05, "neutral": 0.15},
+        "model_expired": True,
+    }
+
+    with patch("backend.services.jesse_bridge.jesse_bridge.get_ml_prediction", AsyncMock(return_value=mock_ml_res)):
+        decision = await engine.evaluate_symbol("BTCUSDC", bars, None, 0, [], False)
+        assert decision is not None
+        assert decision.action == "BUY"
+

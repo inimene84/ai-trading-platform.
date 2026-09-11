@@ -545,7 +545,7 @@ class DecisionEngine:
             try:
                 from backend.services.jesse_bridge import jesse_bridge
                 ml_res = await jesse_bridge.get_ml_prediction(symbol=symbol, timeframe="1h")
-                if ml_res.get("status") == "success":
+                if ml_res.get("status") == "success" and not ml_res.get("model_expired"):
                     ml_sig = ml_res.get("signal")
                     ml_conf = ml_res.get("confidence", 0.0)
                     probs = ml_res.get("probabilities", {})
@@ -590,6 +590,15 @@ class DecisionEngine:
                     if signal.confidence < self.config.min_signal_strength:
                         self._record_eval(symbol, signal.signal, signal.confidence, "confidence reduced below threshold by Jesse ML gate")
                         return None
+                elif ml_res.get("model_expired"):
+                    # Stale model artifact (beyond expiration_hours): never trade on it live,
+                    # skip the gate in paper so research backtests keep running.
+                    if live_exchange_orders_allowed():
+                        err = "Jesse ML model expired"
+                        logger.error(f"[{symbol}] Jesse ML model expired in LIVE mode — fail closed: vetoing {signal.signal}")
+                        self._record_eval(symbol, signal.signal, signal.confidence, f"vetoed by expired Jesse ML model in LIVE mode ({err})")
+                        return None
+                    logger.debug(f"[{symbol}] Jesse ML model expired in paper mode — skipping gate")
                 else:
                     if live_exchange_orders_allowed():
                         err = ml_res.get("error") or "Jesse ML status not success"

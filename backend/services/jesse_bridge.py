@@ -13,6 +13,8 @@ import logging
 import httpx
 from typing import Any, Dict, Optional
 
+from backend.services.trading_mode import live_exchange_orders_allowed
+
 logger = logging.getLogger(__name__)
 
 JESSE_API_URL = os.getenv("JESSE_API_URL", "http://jesse-app:9000")
@@ -311,7 +313,12 @@ class JesseBridgeService:
         model_type: str = "lightgbm",
         min_prob: float = 0.45,
     ) -> Dict[str, Any]:
-        """Fetch secondary meta-model trade filter and Fractional Kelly sizing recommendation."""
+        """Fetch secondary meta-model trade filter and Fractional Kelly sizing recommendation.
+
+        Fail-open in paper mode (returns EXECUTE so research is never blocked),
+        fail-closed in live mode (returns VETO so real capital is never sized
+        by an unreachable or erroring model).
+        """
         base_ml = await self._resolve_ml_url()
         try:
             async with httpx.AsyncClient(timeout=4.0) as client:
@@ -327,8 +334,16 @@ class JesseBridgeService:
                 )
                 if res.status_code == 200:
                     return res.json()
+                if live_exchange_orders_allowed():
+                    logger.error(
+                        f"Jesse meta-predict returned HTTP {res.status_code} in LIVE mode — fail closed: vetoing {primary_signal}"
+                    )
+                    return {"action": "VETO", "reason": f"ML server returned HTTP {res.status_code} (fail-closed in live)"}
                 return {"action": "EXECUTE", "reason": f"ML server returned HTTP {res.status_code} (fail-open)"}
         except Exception as e:
+            if live_exchange_orders_allowed():
+                logger.error(f"Jesse meta-predict failed in LIVE mode ({e}) — fail closed: vetoing {primary_signal}")
+                return {"action": "VETO", "reason": f"ML query error (fail-closed in live): {e}"}
             logger.debug(f"Jesse meta-predict notice (fail-open): {e}")
             return {"action": "EXECUTE", "reason": f"ML query error (fail-open): {e}"}
 
