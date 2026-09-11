@@ -7,11 +7,21 @@ QuantumTrade trading platform:
 - Synchronizes optimized strategy parameters (SL/TP ATR, Trailing thresholds) into live RiskConfig
 """
 
+import asyncio
 import os
-import json
+import re
+import uuid
 import logging
 import httpx
 from typing import Any, Dict, Optional
+
+from backend.services.jesse_ml_gates import (
+    STRATEGY_PT_ATR,
+    STRATEGY_SL_ATR,
+    annotate_ml_prediction,
+)
+from backend.services.risk_config import refresh_risk_config
+from backend.services.trading_mode import live_exchange_orders_allowed
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +29,7 @@ JESSE_API_URL = os.getenv("JESSE_API_URL", "http://jesse-app:9000")
 JESSE_LOCAL_URL = os.getenv("JESSE_LOCAL_URL", "http://127.0.0.1:9000")
 JESSE_ML_URL = os.getenv("JESSE_ML_URL", "http://jesse-app:9003")
 JESSE_ML_LOCAL_URL = os.getenv("JESSE_ML_LOCAL_URL", "http://127.0.0.1:9003")
-JESSE_PASSWORD = os.getenv("JESSE_PASSWORD", "QuantumTrading2026!")
+JESSE_PASSWORD = os.getenv("JESSE_PASSWORD", "")
 
 
 class JesseBridgeService:
@@ -57,6 +67,9 @@ class JesseBridgeService:
     async def get_token(self) -> Optional[str]:
         if self._token:
             return self._token
+        if not JESSE_PASSWORD:
+            logger.warning("JESSE_PASSWORD is not set — cannot authenticate to Jesse API")
+            return None
         base = await self._resolve_url()
         try:
             async with httpx.AsyncClient(timeout=5.0) as client:
@@ -116,7 +129,6 @@ class JesseBridgeService:
         starting_balance: float = 10000.0,
     ) -> Dict[str, Any]:
         """Dispatch a fast backtest simulation via Jesse API and return performance metrics."""
-        import uuid
         base = await self._resolve_url()
         token = await self.get_token()
         if not token:
@@ -181,7 +193,6 @@ class JesseBridgeService:
 
                 # Poll for completion
                 for _ in range(30):
-                    import asyncio
                     await asyncio.sleep(0.5)
                     sess_res = await client.post(
                         f"{base}/backtest/sessions",
@@ -207,8 +218,8 @@ class JesseBridgeService:
 
     def sync_strategy_to_risk_config(
         self,
-        sl_atr_mult: float = 2.0,
-        tp_atr_mult: float = 4.0,
+        sl_atr_mult: float = STRATEGY_SL_ATR,
+        tp_atr_mult: float = STRATEGY_PT_ATR,
         trail_activation_atr: float = 1.8,
         trail_atr_mult: float = 1.6,
     ) -> Dict[str, Any]:
@@ -220,9 +231,6 @@ class JesseBridgeService:
                 "message": "JESSE_SYNC_TO_LIVE is disabled; sync is a no-op",
                 "synced": False,
             }
-
-        import re
-        from backend.services.risk_config import refresh_risk_config
 
         env_path = os.getenv("ENV_FILE_PATH", ".env")
         updates = {
@@ -297,7 +305,7 @@ class JesseBridgeService:
                     },
                 )
                 if res.status_code == 200:
-                    return res.json()
+                    return annotate_ml_prediction(res.json())
                 return {"status": "error", "error": f"ML server returned HTTP {res.status_code}: {res.text}"}
         except Exception as e:
             logger.error(f"Failed to query ML prediction endpoint: {e}")
@@ -326,11 +334,33 @@ class JesseBridgeService:
                     },
                 )
                 if res.status_code == 200:
-                    return res.json()
-                return {"action": "EXECUTE", "reason": f"ML server returned HTTP {res.status_code} (fail-open)"}
+                    body = res.json()
+                    if body.get("action") == "EXECUTE":
+                        annotated = annotate_ml_prediction({
+                            "status": "success",
+                            "metrics": body.get("metrics") or {},
+                            "pt_mult": body.get("pt_mult"),
+                            "sl_mult": body.get("sl_mult"),
+                            "deflated_sharpe_ratio": body.get("deflated_sharpe_ratio"),
+                            "prob_backtest_overfitting": body.get("prob_backtest_overfitting"),
+                        })
+                        if annotated.get("status") == "error":
+                            body["action"] = "VETO"
+                            body["reason"] = annotated.get("error") or annotated.get("promotion_reason")
+                            body["promotion_ok"] = False
+                    return body
+                if live_exchange_orders_allowed():
+                    return {
+                        "action": "VETO",
+                        "reason": f"ML server returned HTTP {res.status_code} (fail-closed live)",
+                    }
+                return {"action": "EXECUTE", "reason": f"ML server returned HTTP {res.status_code} (fail-open paper)"}
         except Exception as e:
-            logger.debug(f"Jesse meta-predict notice (fail-open): {e}")
-            return {"action": "EXECUTE", "reason": f"ML query error (fail-open): {e}"}
+            if live_exchange_orders_allowed():
+                logger.error(f"Jesse meta-predict failed in LIVE mode ({e}) — fail closed")
+                return {"action": "VETO", "reason": f"ML query error (fail-closed live): {e}"}
+            logger.debug(f"Jesse meta-predict notice (fail-open paper): {e}")
+            return {"action": "EXECUTE", "reason": f"ML query error (fail-open paper): {e}"}
 
 
     async def get_ml_models(self) -> Dict[str, Any]:
