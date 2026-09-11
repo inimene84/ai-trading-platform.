@@ -149,7 +149,7 @@ def test_strategy_mtm_records_open_trade_drawdown() -> None:
         frame.index[-1],
     )
 
-    assert metrics["max_drawdown_pct"] <= -20.0
+    assert metrics["max_drawdown_pct"] == pytest.approx(-20.0)
 
 
 def test_benchmark_and_strategy_share_exact_horizon() -> None:
