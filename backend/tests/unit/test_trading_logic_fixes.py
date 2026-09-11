@@ -73,6 +73,10 @@ async def test_news_nzd_event_maps_to_nzdusd_not_gold():
             "backend.routes.news.get_news_feed", new=AsyncMock(return_value={})
         ), patch(
             "backend.routes.news.get_market_sentiment", new=AsyncMock(return_value={})
+        ), patch.object(
+            engine, "_has_open_position", return_value=False
+        ), patch.object(
+            engine, "_portfolio_risk_breach", return_value=None
         ):
             created = await engine.scan_news_and_events()
         assert created

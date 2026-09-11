@@ -113,6 +113,9 @@ services:
       - app-data:/app/data
       - app-logs:/app/logs
       - ./.env:/app/.env
+      # Live tree is the source of truth. Without this mount a recreate
+      # ships the baked image and drops host hotfixes (admission control).
+      - ./backend:/app/backend
     networks:
       - trading-net
     ports:

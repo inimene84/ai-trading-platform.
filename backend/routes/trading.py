@@ -1964,7 +1964,11 @@ async def close_position(position_id: str):
 
         else:
             close_side = OrderSide.SELL if trade.direction == "BUY" else OrderSide.BUY
-            ref_price = binance_futures_broker.get_exit_price(trade.symbol)
+            try:
+                ref_price = binance_futures_broker.get_exit_price(trade.symbol)
+            except Exception as e:
+                logger.warning(f"Reference price lookup failed for {trade.symbol}: {e}")
+                ref_price = None
             order_price = float(ref_price) if ref_price else 0.0
             response = UnifiedTrading().place_order(UnifiedOrder(
                 symbol=trade.symbol,
@@ -1982,7 +1986,11 @@ async def close_position(position_id: str):
 
             exit_price = response.filled_price
             if not exit_price:
-                exit_price = binance_futures_broker.get_exit_price(trade.symbol)
+                try:
+                    exit_price = binance_futures_broker.get_exit_price(trade.symbol)
+                except Exception as e:
+                    logger.warning(f"Exit price fallback lookup failed for {trade.symbol}: {e}")
+                    exit_price = None
 
             from backend.services.trading_loop_helpers import is_plausible_exit_price
             if is_plausible_exit_price(trade.entry_price, exit_price):

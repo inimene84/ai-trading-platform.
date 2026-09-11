@@ -286,6 +286,23 @@ def test_paper_parallel_live_binance_broker_still_not_live(monkeypatch):
     assert live_binance_orders_allowed() is False
 
 
+def test_resolve_broker_session_uses_live_binance_when_parallel_off(monkeypatch):
+    """Crypto candidates must not ride the default cTrader session."""
+    monkeypatch.setenv("TRADING_MODE", "live")
+    monkeypatch.setenv("PAPER_TRADING", "false")
+    monkeypatch.setenv("DRY_RUN_ALL", "false")
+    monkeypatch.setenv("BINANCE_PAPER_PARALLEL", "false")
+    from backend.services.signal_candidate_engine import SignalCandidateEngine
+
+    ut = MagicMock()
+    ut.list_sessions.return_value = [
+        {"id": "ctrader_live", "broker": "ctrader", "mode": "live"},
+        {"id": "binance_futures_live", "broker": "binance_futures", "mode": "live"},
+    ]
+    sid = SignalCandidateEngine._resolve_broker_session(ut, "binance_futures")
+    assert sid == "binance_futures_live"
+
+
 def test_dual_live_ctrader_still_treats_binance_as_live(monkeypatch):
     monkeypatch.setenv("TRADING_MODE", "live")
     monkeypatch.setenv("PAPER_TRADING", "false")

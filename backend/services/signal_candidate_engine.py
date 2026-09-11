@@ -19,6 +19,7 @@ from backend.services.ctrader_trade_sync import (
     count_open_ctrader_db_trades,
     open_ctrader_db_symbols,
     open_ctrader_db_positions,
+    try_open_ctrader_db_positions,
 )
 from backend.services.unified_trading import UnifiedTrading, UnifiedOrder, OrderSide, OrderType
 from backend.services.binance_futures_service import binance_futures_broker
@@ -50,7 +51,14 @@ TERMINAL_CANDIDATE_STATUSES = frozenset({
     CandidateStatus.CANCELLED,
 })
 CANDIDATE_TTL_SECONDS = 24 * 3600
+# News must not re-arm a setup that already filled while the EXECUTED row
+# is still in memory (same 24h TTL). Missing timestamps fail closed.
+RECENT_EXECUTED_REARM_SECONDS = CANDIDATE_TTL_SECONDS
 EQUITY_FALLBACK_USD = 10000.0
+LIVE_CANDIDATE_STATUSES = frozenset({
+    CandidateStatus.PENDING,
+    CandidateStatus.READY,
+})
 
 
 class SignalCandidateEngine:
@@ -232,13 +240,18 @@ class SignalCandidateEngine:
         sym = str(symbol or "").upper()
         return sym[:3] if len(sym) >= 6 else sym
 
-    def _open_binance_positions(self) -> List[Dict[str, Any]]:
-        """Open Binance futures positions; empty list (fail-open) on API errors."""
+    def _try_open_binance_positions(self) -> Optional[List[Dict[str, Any]]]:
+        """Open Binance futures positions. None means the book could not be read."""
         try:
-            return list(binance_futures_broker.get_positions() or [])
+            return list(binance_futures_broker.get_positions(raise_on_error=True) or [])
         except Exception as err:
             logger.warning(f"Could not read Binance open positions: {err}")
-            return []
+            return None
+
+    def _open_binance_positions(self) -> List[Dict[str, Any]]:
+        """Open Binance futures positions; empty list on API errors (legacy)."""
+        found = self._try_open_binance_positions()
+        return found if found is not None else []
 
     def _open_binance_symbols(self) -> Set[str]:
         return {
@@ -246,6 +259,274 @@ class SignalCandidateEngine:
             for p in self._open_binance_positions()
             if p.get("symbol")
         }
+
+    @staticmethod
+    def _normalize_direction(direction: Optional[str]) -> str:
+        side = str(direction or "").upper()
+        if side in ("BUY", "LONG"):
+            return "BUY"
+        if side in ("SELL", "SHORT"):
+            return "SELL"
+        return side
+
+    def _open_position_keys(self, broker: str) -> Optional[Set[tuple]]:
+        """(symbol, BUY/SELL) pairs currently open, or None if the book is unreadable."""
+        keys: Set[tuple] = set()
+        if broker == "binance_futures":
+            positions = self._try_open_binance_positions()
+            if positions is None:
+                return None
+            for pos in positions:
+                sym = str(pos.get("symbol") or "").upper()
+                side = self._normalize_direction(pos.get("direction") or pos.get("side"))
+                if sym and side:
+                    keys.add((sym, side))
+            return keys
+
+        try:
+            status: Dict[str, Any] = {}
+            try:
+                status = ctrader_service.status() or {}
+            except Exception:
+                status = {}
+            positions = list(ctrader_service.get_positions() or [])
+            connected = bool(status.get("connected"))
+            reported_n = int(status.get("open_positions") or 0)
+            if connected and reported_n > 0 and not positions:
+                logger.warning(
+                    "cTrader reports %s open positions but the cache is empty — "
+                    "treating the book as unknown",
+                    reported_n,
+                )
+                return None
+            for pos in positions:
+                sym = str(pos.get("symbol") or "").upper()
+                side = self._normalize_direction(pos.get("direction") or pos.get("side"))
+                if sym and side:
+                    keys.add((sym, side))
+        except Exception as err:
+            logger.warning(f"Could not read cTrader open position sides: {err}")
+            return None
+        try:
+            db_rows = try_open_ctrader_db_positions()
+        except Exception as err:
+            logger.warning(f"Could not read cTrader DB open position sides: {err}")
+            db_rows = None
+        if db_rows is None:
+            # Empty broker cache plus an unread DB is not a flat book.
+            if not keys:
+                return None
+            return keys
+        for row in db_rows:
+            sym = str(row.get("symbol") or "").upper()
+            side = self._normalize_direction(row.get("direction") or row.get("side"))
+            if sym and side:
+                keys.add((sym, side))
+        return keys
+
+    def _has_open_position(self, broker: str, symbol: str, direction: str) -> bool:
+        """True when the side is open, or when the book cannot be verified."""
+        key = (str(symbol or "").upper(), self._normalize_direction(direction))
+        if not key[0] or not key[1]:
+            return False
+        keys = self._open_position_keys(broker)
+        if keys is None:
+            return True
+        return key in keys
+
+    def _has_live_strategy_twin(self, symbol: str, strategy: str, direction: str) -> bool:
+        sym = str(symbol or "").upper()
+        side = self._normalize_direction(direction)
+        return any(
+            str(c.get("symbol") or "").upper() == sym
+            and c.get("strategy") == strategy
+            and self._normalize_direction(c.get("direction")) == side
+            and c.get("status") in LIVE_CANDIDATE_STATUSES
+            for c in self.candidates.values()
+        )
+
+    def _has_live_same_direction_candidate(self, symbol: str, direction: str) -> bool:
+        """PENDING/READY on the same symbol+direction, any strategy."""
+        sym = str(symbol or "").upper()
+        side = self._normalize_direction(direction)
+        return any(
+            str(c.get("symbol") or "").upper() == sym
+            and self._normalize_direction(c.get("direction")) == side
+            and c.get("status") in LIVE_CANDIDATE_STATUSES
+            for c in self.candidates.values()
+        )
+
+    def _has_recent_executed_twin(
+        self,
+        symbol: str,
+        strategy: str,
+        direction: str,
+        now_ts: Optional[int] = None,
+        *,
+        match_strategy: bool = True,
+    ) -> bool:
+        """True when a recent EXECUTED twin still sits in memory.
+
+        Missing timestamps fail closed — a filled twin with no clock must not
+        be treated as stale enough to re-arm. When match_strategy is False,
+        any strategy on the same symbol+direction counts (stops cross-strategy
+        re-arm after a fill).
+        """
+        now = int(now_ts if now_ts is not None else time.time())
+        sym = str(symbol or "").upper()
+        side = self._normalize_direction(direction)
+        for cand in self.candidates.values():
+            if cand.get("status") != CandidateStatus.EXECUTED:
+                continue
+            if str(cand.get("symbol") or "").upper() != sym:
+                continue
+            if match_strategy and cand.get("strategy") != strategy:
+                continue
+            if self._normalize_direction(cand.get("direction")) != side:
+                continue
+            epoch = self._candidate_epoch(cand)
+            if epoch is None:
+                return True
+            if now - epoch < RECENT_EXECUTED_REARM_SECONDS:
+                return True
+        return False
+
+    def _live_committed_risk_usd(
+        self,
+        broker: str,
+        *,
+        exclude_id: Optional[str] = None,
+    ) -> float:
+        return sum(
+            float((c.get("sizing") or {}).get("risk_usd") or 0.0)
+            for c in self.candidates.values()
+            if c.get("id") != exclude_id
+            and c.get("status") in LIVE_CANDIDATE_STATUSES
+            and c.get("broker") == broker
+        )
+
+    def _portfolio_risk_breach(
+        self,
+        broker: str,
+        new_risk_usd: float,
+        *,
+        exclude_id: Optional[str] = None,
+    ) -> Optional[str]:
+        """Reason string when live book + incoming risk exceeds the budget."""
+        max_risk_pct = float(self.execution_config.get("max_portfolio_risk_pct") or 0)
+        if max_risk_pct <= 0:
+            return None
+        equity = self._resolve_equity(str(broker or ""))
+        if equity <= 0:
+            return None
+        committed = self._live_committed_risk_usd(broker, exclude_id=exclude_id)
+        budget = equity * max_risk_pct / 100.0
+        incoming = float(new_risk_usd or 0.0)
+        if committed + incoming > budget:
+            return (
+                f"Portfolio risk budget exceeded for {broker}: "
+                f"committed ${committed:.2f} + new ${incoming:.2f} > "
+                f"{max_risk_pct}% of ${equity:.2f} equity (${budget:.2f})."
+            )
+        return None
+
+    def _binance_position_cap_breach(self, symbol: str) -> Optional[str]:
+        """One-per-symbol and max-positions caps for the Binance book."""
+        open_binance = self._try_open_binance_positions()
+        if open_binance is None:
+            return "Could not read Binance positions — refusing."
+        cand_sym = str(symbol or "").upper()
+        if self.execution_config.get("one_position_per_symbol"):
+            open_syms = {
+                str(p.get("symbol") or "").upper()
+                for p in open_binance
+                if p.get("symbol")
+            }
+            if cand_sym and cand_sym in open_syms:
+                return f"Already have an open Binance position in {cand_sym}."
+        max_binance = int(self.execution_config.get("max_binance_positions") or 0)
+        if max_binance > 0 and len(open_binance) >= max_binance:
+            return f"Max open Binance positions reached ({max_binance})."
+        return None
+
+    def _refuse_new_candidate_reason(
+        self,
+        *,
+        symbol: str,
+        broker: str,
+        strategy: str,
+        direction: str,
+        risk_usd: float = 0.0,
+        check_recent_executed: bool = False,
+    ) -> Optional[str]:
+        """Scan-time admission control. Returns a skip reason or None.
+
+        Does not loosen any execute-time cap — those still re-check.
+        """
+        if self._has_live_strategy_twin(symbol, strategy, direction):
+            return (
+                f"live {strategy} {self._normalize_direction(direction)} "
+                f"candidate already armed"
+            )
+        if self._has_live_same_direction_candidate(symbol, direction):
+            return (
+                f"live {self._normalize_direction(direction)} candidate already "
+                f"armed for {str(symbol or '').upper()} (any strategy)"
+            )
+        if check_recent_executed and self._has_recent_executed_twin(
+            symbol, strategy, direction, match_strategy=False
+        ):
+            return (
+                f"recently executed {self._normalize_direction(direction)} "
+                f"twin — refusing re-arm"
+            )
+        if self._has_open_position(broker, symbol, direction):
+            return (
+                f"open {broker} position already exists for "
+                f"{str(symbol or '').upper()} {self._normalize_direction(direction)}"
+            )
+        risk_block = self._portfolio_risk_breach(broker, risk_usd)
+        if risk_block:
+            return risk_block
+        if broker == "binance_futures":
+            return self._binance_position_cap_breach(symbol)
+        return None
+
+    def cancel_candidate(self, candidate_id: str, reason: str = "admin cancel") -> bool:
+        """Mark a live candidate CANCELLED. Does not touch broker positions."""
+        cand = self.candidates.get(candidate_id)
+        if not cand:
+            return False
+        if cand.get("status") not in LIVE_CANDIDATE_STATUSES:
+            return False
+        cand["status"] = CandidateStatus.CANCELLED
+        cand["cancel_reason"] = reason
+        cand["cancelled_at"] = datetime.now(timezone.utc).isoformat()
+        return True
+
+    def cancel_live_same_direction(
+        self,
+        symbol: str,
+        direction: str,
+        *,
+        reason: str = "duplicate of open position",
+    ) -> List[str]:
+        """Cancel PENDING/READY rows that stack on an open symbol+direction."""
+        cancelled: List[str] = []
+        sym = str(symbol or "").upper()
+        side = self._normalize_direction(direction)
+        for cid, cand in list(self.candidates.items()):
+            if cand.get("status") not in LIVE_CANDIDATE_STATUSES:
+                continue
+            if str(cand.get("symbol") or "").upper() != sym:
+                continue
+            if self._normalize_direction(cand.get("direction")) != side:
+                continue
+            cand["status"] = CandidateStatus.CANCELLED
+            cand["cancel_reason"] = reason
+            cand["cancelled_at"] = datetime.now(timezone.utc).isoformat()
+            cancelled.append(cid)
+        return cancelled
 
     def _open_ctrader_base_counts(self) -> Dict[str, int]:
         counts: Dict[str, int] = {}
@@ -352,13 +633,20 @@ class SignalCandidateEngine:
             kept[cid] = cand
         max_keep = int(self.execution_config.get("max_candidates") or 200)
         if len(kept) > max_keep:
-            ordered = sorted(
-                kept.values(),
-                key=lambda c: str(c.get("created_at") or ""),
-                reverse=True,
-            )
-            kept = {c["id"]: c for c in ordered[:max_keep]}
-            removed += len(self.candidates) - len(kept) - removed
+            executed = [
+                c for c in kept.values()
+                if c.get("status") == CandidateStatus.EXECUTED
+            ]
+            others = [
+                c for c in kept.values()
+                if c.get("status") != CandidateStatus.EXECUTED
+            ]
+            others.sort(key=lambda c: str(c.get("created_at") or ""), reverse=True)
+            # Never evict in-TTL EXECUTED rows — they are the re-arm brake.
+            room = max(0, max_keep - len(executed))
+            kept_rows = list(executed) + others[:room]
+            kept = {c["id"]: c for c in kept_rows if c.get("id")}
+            removed += len(self.candidates) - len(kept)
         self.candidates = kept
         return removed
     def _ctrader_execution_slots_remaining(self) -> int:
@@ -971,22 +1259,22 @@ class SignalCandidateEngine:
                             "created_at": datetime.now(timezone.utc).isoformat(),
                         }
 
-                        # Cross-scan dedup: a live twin (same symbol, strategy,
-                        # direction) means this setup is already armed — without
-                        # this the 5-min scanners re-added it every cycle. No
-                        # await between check and insert, so concurrent scan
-                        # calls cannot interleave here.
-                        if any(
-                            c.get("symbol") == sym
-                            and c.get("strategy") == raw_signal["strategy"]
-                            and c.get("direction") == raw_signal["direction"]
-                            and c.get("status") in (CandidateStatus.PENDING, CandidateStatus.READY)
-                            for c in self.candidates.values()
-                        ):
-                            logger.info(
-                                f"[{sym}] dedup: live {raw_signal['strategy']} "
-                                f"{raw_signal['direction']} candidate already armed — skipping"
-                            )
+                        # Cross-scan admission: refuse live twins (same
+                        # strategy or any strategy on this symbol+direction),
+                        # an open book position, portfolio-risk overflow, and
+                        # Binance one-per-symbol / max-positions. No await
+                        # between check and insert so concurrent scans cannot
+                        # interleave here.
+                        refuse = self._refuse_new_candidate_reason(
+                            symbol=sym,
+                            broker=broker,
+                            strategy=raw_signal["strategy"],
+                            direction=raw_signal["direction"],
+                            risk_usd=float((size_data or {}).get("risk_usd") or 0.0),
+                            check_recent_executed=True,
+                        )
+                        if refuse:
+                            logger.info(f"[{sym}] scan skip: {refuse}")
                             continue
 
                         self.candidates[candidate["id"]] = candidate
@@ -1038,7 +1326,7 @@ class SignalCandidateEngine:
                 already = any(
                     c.get("strategy") == "MACRO_EVENT_POST_REACTION"
                     and c.get("symbol") == matched_sym
-                    and c.get("status") in (CandidateStatus.PENDING, CandidateStatus.READY)
+                    and c.get("status") in LIVE_CANDIDATE_STATUSES
                     for c in self.candidates.values()
                 )
                 if already:
@@ -1097,6 +1385,17 @@ class SignalCandidateEngine:
                     "latest_exec_at": now_ts + (self.timing_config["post_reaction_window_min"] * 60) + 300,
                     "created_at": datetime.now(timezone.utc).isoformat(),
                 }
+                refuse = self._refuse_new_candidate_reason(
+                    symbol=matched_sym,
+                    broker="ctrader",
+                    strategy="MACRO_EVENT_POST_REACTION",
+                    direction=direction,
+                    risk_usd=float((size_data or {}).get("risk_usd") or 0.0),
+                    check_recent_executed=True,
+                )
+                if refuse:
+                    logger.info(f"[{matched_sym}] news scan skip: {refuse}")
+                    continue
                 self.candidates[candidate["id"]] = candidate
                 news_candidates.append(candidate)
 
@@ -1198,6 +1497,33 @@ class SignalCandidateEngine:
                 seen.add(sym)
                 unique.append(cand)
             ready = unique
+
+        # Direction-aware book filter: a READY that duplicates an open
+        # symbol+direction on its broker must not reach the executor even
+        # when one_position_per_symbol is off. An unreadable book drops
+        # that broker's READY rows rather than failing open.
+        keys_by_broker: Dict[str, Optional[Set[tuple]]] = {}
+        filtered_ready: List[Dict[str, Any]] = []
+        for cand in ready:
+            broker_name = str(cand.get("broker") or "")
+            if broker_name not in keys_by_broker:
+                keys_by_broker[broker_name] = (
+                    self._open_position_keys(broker_name) if broker_name else set()
+                )
+            keys = keys_by_broker[broker_name]
+            if keys is None:
+                logger.info(
+                    f"[{cand.get('symbol')}] ready skip: {broker_name} book unreadable"
+                )
+                continue
+            side_key = (
+                str(cand.get("symbol") or "").upper(),
+                self._normalize_direction(cand.get("direction")),
+            )
+            if side_key in keys:
+                continue
+            filtered_ready.append(cand)
+        ready = filtered_ready
 
         if enforce_ctrader_position_cap:
             slots = self._ctrader_execution_slots_remaining()
@@ -1329,52 +1655,40 @@ class SignalCandidateEngine:
                 }
 
         if cand.get("broker") == "binance_futures":
-            open_binance = self._open_binance_positions()
-            if self.execution_config.get("one_position_per_symbol"):
-                open_syms = {
-                    str(p.get("symbol") or "").upper()
-                    for p in open_binance
-                    if p.get("symbol")
-                }
-                if cand_sym in open_syms:
-                    return {
-                        "success": False,
-                        "skipped": True,
-                        "error": f"Already have an open Binance position in {cand_sym}.",
-                    }
-            max_binance = int(self.execution_config.get("max_binance_positions") or 0)
-            if max_binance > 0 and len(open_binance) >= max_binance:
+            binance_block = self._binance_position_cap_breach(cand_sym)
+            if binance_block:
                 return {
                     "success": False,
                     "skipped": True,
-                    "error": f"Max open Binance positions reached ({max_binance}).",
+                    "error": binance_block,
                 }
+
+        # Same-direction open book: refuse even when one_position_per_symbol
+        # is disabled so scans cannot stack a second EURUSD SELL after fill.
+        cand_side = self._normalize_direction(cand.get("direction"))
+        if cand_side and self._has_open_position(str(cand.get("broker") or ""), cand_sym, cand_side):
+            return {
+                "success": False,
+                "skipped": True,
+                "error": (
+                    f"Already have an open {cand.get('broker')} "
+                    f"{cand_side} position in {cand_sym}."
+                ),
+            }
 
         # Portfolio risk budget: live candidate risk (this broker's book) plus
         # the incoming trade must stay under max_portfolio_risk_pct of equity.
-        max_risk_pct = float(self.execution_config.get("max_portfolio_risk_pct") or 0)
-        if max_risk_pct > 0:
-            equity = self._resolve_equity(str(cand.get("broker") or ""))
-            if equity > 0:
-                committed = sum(
-                    float((c.get("sizing") or {}).get("risk_usd") or 0.0)
-                    for c in self.candidates.values()
-                    if c.get("id") != candidate_id
-                    and c.get("status") in (CandidateStatus.PENDING, CandidateStatus.READY)
-                    and c.get("broker") == cand.get("broker")
-                )
-                new_risk = float((cand.get("sizing") or {}).get("risk_usd") or 0.0)
-                budget = equity * max_risk_pct / 100.0
-                if committed + new_risk > budget:
-                    return {
-                        "success": False,
-                        "skipped": True,
-                        "error": (
-                            f"Portfolio risk budget exceeded for {cand.get('broker')}: "
-                            f"committed ${committed:.2f} + new ${new_risk:.2f} > "
-                            f"{max_risk_pct}% of ${equity:.2f} equity (${budget:.2f})."
-                        ),
-                    }
+        risk_block = self._portfolio_risk_breach(
+            str(cand.get("broker") or ""),
+            float((cand.get("sizing") or {}).get("risk_usd") or 0.0),
+            exclude_id=candidate_id,
+        )
+        if risk_block:
+            return {
+                "success": False,
+                "skipped": True,
+                "error": risk_block,
+            }
 
         # Net currency exposure re-check at execution (the ready queue check
         # ran earlier; positions may have changed since).

@@ -112,6 +112,7 @@ async def lifespan(app: FastAPI):
         TradingMode,
         binance_paper_parallel_enabled,
         get_trading_mode,
+        live_binance_orders_allowed,
         paper_leverage_for_broker,
         paper_starting_balance,
     )
@@ -181,6 +182,20 @@ async def lifespan(app: FastAPI):
                 BINANCE_PAPER_SESSION_ID,
                 paper_sess.paper_portfolio_id,
                 mode,
+            )
+        elif live_binance_orders_allowed():
+            # Dual-broker live: ACTIVE_BROKER may be ctrader, but crypto
+            # candidates must route to an explicit binance_futures live session
+            # — never the default cTrader session.
+            bn_sess = ut.init_session(
+                "binance_futures",
+                mode="live",
+                leverage=paper_leverage_for_broker("binance_futures"),
+            )
+            logger.info(
+                "✓ Binance live session %s registered beside %s (paper-parallel off)",
+                f"{bn_sess.broker}_{bn_sess.mode}",
+                get_active_broker_name(),
             )
     except Exception as e:
         logger.warning(f"⚠ Unified Trading init warning: {e}")

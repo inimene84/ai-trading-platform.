@@ -86,6 +86,8 @@ async def test_macro_sell_candidate_has_stop_above_entry():
         for i in range(30)
     ]
     calendar = {"events": [{"event": "NFP", "currency": "USD", "impact": "high"}]}
+    previous = dict(signal_candidate_engine.candidates)
+    signal_candidate_engine.candidates.clear()
 
     with patch(
         "backend.services.signal_candidate_engine.ctrader_service.get_trendbars",
@@ -97,8 +99,15 @@ async def test_macro_sell_candidate_has_stop_above_entry():
         "backend.routes.news.get_news_feed", new=AsyncMock(return_value={})
     ), patch(
         "backend.routes.news.get_market_sentiment", new=AsyncMock(return_value={})
+    ), patch.object(
+        signal_candidate_engine, "_has_open_position", return_value=False
+    ), patch.object(
+        signal_candidate_engine, "_portfolio_risk_breach", return_value=None
     ):
-        created = await signal_candidate_engine.scan_news_and_events()
+        try:
+            created = await signal_candidate_engine.scan_news_and_events()
+        finally:
+            signal_candidate_engine.candidates = previous
 
     sells = [c for c in created if c["direction"] == "SELL"]
     assert sells, "a falling market should produce a SELL macro candidate"

@@ -89,7 +89,11 @@ def count_open_ctrader_db_trades() -> int:
         from backend.database.models import Trade
         return int(
             db.query(Trade)
-            .filter(Trade.broker == "ctrader", Trade.status == "open", Trade.closed_at.is_(None))
+            .filter(
+                Trade.broker == "ctrader",
+                Trade.status.in_(_OPEN_STATUSES),
+                Trade.closed_at.is_(None),
+            )
             .count()
         )
     except Exception as exc:
@@ -106,7 +110,11 @@ def open_ctrader_db_symbols() -> set:
         from backend.database.models import Trade
         rows = (
             db.query(Trade.symbol)
-            .filter(Trade.broker == "ctrader", Trade.status == "open", Trade.closed_at.is_(None))
+            .filter(
+                Trade.broker == "ctrader",
+                Trade.status.in_(_OPEN_STATUSES),
+                Trade.closed_at.is_(None),
+            )
             .all()
         )
         return {str(r[0]).upper() for r in rows if r and r[0]}
@@ -117,17 +125,18 @@ def open_ctrader_db_symbols() -> set:
         db.close()
 
 
-def open_ctrader_db_positions() -> list:
-    """Open cTrader Trade rows as {symbol, direction} dicts (live + simulated).
-
-    Used for net currency exposure caps, which need direction, not just symbols.
-    """
+def try_open_ctrader_db_positions() -> Optional[list]:
+    """Open cTrader Trade rows, or None if the DB cannot be read."""
     db = SessionLocal()
     try:
         from backend.database.models import Trade
         rows = (
             db.query(Trade.symbol, Trade.direction)
-            .filter(Trade.broker == "ctrader", Trade.status == "open", Trade.closed_at.is_(None))
+            .filter(
+                Trade.broker == "ctrader",
+                Trade.status.in_(_OPEN_STATUSES),
+                Trade.closed_at.is_(None),
+            )
             .all()
         )
         return [
@@ -136,9 +145,18 @@ def open_ctrader_db_positions() -> list:
         ]
     except Exception as exc:
         logger.warning("Could not list open cTrader DB positions: %s", exc)
-        return []
+        return None
     finally:
         db.close()
+
+
+def open_ctrader_db_positions() -> list:
+    """Open cTrader Trade rows as {symbol, direction} dicts (live + simulated).
+
+    Used for net currency exposure caps, which need direction, not just symbols.
+    """
+    found = try_open_ctrader_db_positions()
+    return found if found is not None else []
 
 
 def close_simulated_open_ctrader_trades(*, reason: str = "simulated ghost cleanup") -> int:

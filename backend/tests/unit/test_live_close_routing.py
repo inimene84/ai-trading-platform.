@@ -205,7 +205,11 @@ def test_paper_market_entry_without_price_is_rejected_not_filled_at_1000():
 
 
 def test_paper_price_less_reduce_close_is_rejected_not_filled_at_basis():
-    """A price-less paper close used to fill at cost basis and record $0 PnL."""
+    """A price-less paper close used to fill at cost basis and record $0 PnL.
+
+    With the live-mark fallback, rejection only holds when no live price is
+    available — patch the lookup away to test the rejection path itself.
+    """
     engine = PaperTradingEngine()
     portfolio_id = engine.create_portfolio("test", balance=10_000)
     opened = engine.place_order(portfolio_id, UnifiedOrder(
@@ -217,14 +221,18 @@ def test_paper_price_less_reduce_close_is_rejected_not_filled_at_basis():
     ))
     assert opened.success is True
 
-    closed = engine.place_order(portfolio_id, UnifiedOrder(
-        symbol="ETHUSDT",
-        side=OrderSide.SELL,
-        order_type=OrderType.MARKET,
-        quantity=1.0,
-        price=0.0,
-        reduce_only=True,
-    ))
+    with patch(
+        "backend.services.binance_futures_service.binance_futures_broker"
+    ) as mock_broker:
+        mock_broker.get_exit_price.return_value = None
+        closed = engine.place_order(portfolio_id, UnifiedOrder(
+            symbol="ETHUSDT",
+            side=OrderSide.SELL,
+            order_type=OrderType.MARKET,
+            quantity=1.0,
+            price=0.0,
+            reduce_only=True,
+        ))
     assert closed.success is False
     assert "explicit fill price" in closed.message
 
