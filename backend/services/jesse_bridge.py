@@ -20,6 +20,11 @@ JESSE_LOCAL_URL = os.getenv("JESSE_LOCAL_URL", "http://127.0.0.1:9000")
 JESSE_ML_URL = os.getenv("JESSE_ML_URL", "http://jesse-app:9003")
 JESSE_ML_LOCAL_URL = os.getenv("JESSE_ML_LOCAL_URL", "http://127.0.0.1:9003")
 JESSE_PASSWORD = os.getenv("JESSE_PASSWORD", "QuantumTrading2026!")
+# Strategy-aligned triple-barrier defaults (match live RiskConfig SL=1.75 / TP=5.5 ATR)
+DEFAULT_SL_ATR_MULT = float(os.getenv("JESSE_DEFAULT_SL_ATR_MULT", "1.75"))
+DEFAULT_TP_ATR_MULT = float(os.getenv("JESSE_DEFAULT_TP_ATR_MULT", "5.5"))
+DEFAULT_TRAIL_ACTIVATION_ATR = float(os.getenv("JESSE_DEFAULT_TRAIL_ACTIVATION_ATR", "1.8"))
+DEFAULT_TRAIL_ATR_MULT = float(os.getenv("JESSE_DEFAULT_TRAIL_ATR_MULT", "1.6"))
 
 
 class JesseBridgeService:
@@ -207,10 +212,10 @@ class JesseBridgeService:
 
     def sync_strategy_to_risk_config(
         self,
-        sl_atr_mult: float = 2.0,
-        tp_atr_mult: float = 4.0,
-        trail_activation_atr: float = 1.8,
-        trail_atr_mult: float = 1.6,
+        sl_atr_mult: float = DEFAULT_SL_ATR_MULT,
+        tp_atr_mult: float = DEFAULT_TP_ATR_MULT,
+        trail_activation_atr: float = DEFAULT_TRAIL_ACTIVATION_ATR,
+        trail_atr_mult: float = DEFAULT_TRAIL_ATR_MULT,
     ) -> Dict[str, Any]:
         """Apply validated quant strategy parameters directly to active RiskConfig."""
         if os.getenv("JESSE_SYNC_TO_LIVE", "false").lower() != "true":
@@ -344,6 +349,77 @@ class JesseBridgeService:
                 return {"status": "error", "error": f"ML server returned HTTP {res.status_code}"}
         except Exception as e:
             return {"status": "error", "error": str(e)}
+
+    @staticmethod
+    def normalize_jesse_symbol(symbol: str) -> str:
+        """Convert broker symbols (BTCUSDT) to Jesse format (BTC-USDT)."""
+        clean = symbol.replace("/", "").replace("-", "").upper()
+        if clean.endswith("USDT") and len(clean) > 4:
+            return f"{clean[:-4]}-USDT"
+        if clean.endswith("USDC") and len(clean) > 4:
+            return f"{clean[:-4]}-USDC"
+        return symbol
+
+    async def get_model_metadata(
+        self,
+        symbol: str = "BTC-USDT",
+        timeframe: str = "1h",
+        model_type: str = "lightgbm",
+    ) -> Dict[str, Any]:
+        """Fetch trained model MLOps metadata (DSR, PBO, holdout Sharpe) from Jesse ML engine."""
+        base_ml = await self._resolve_ml_url()
+        jesse_symbol = self.normalize_jesse_symbol(symbol)
+        try:
+            async with httpx.AsyncClient(timeout=4.0) as client:
+                res = await client.get(
+                    f"{base_ml}/model-metadata",
+                    params={
+                        "symbol": jesse_symbol,
+                        "timeframe": timeframe,
+                        "model_type": model_type,
+                    },
+                )
+                if res.status_code == 200:
+                    payload = res.json()
+                    payload["status"] = payload.get("status", "success")
+                    return payload
+                return {
+                    "status": "error",
+                    "error": f"ML metadata returned HTTP {res.status_code}: {res.text}",
+                }
+        except Exception as e:
+            logger.debug(f"Jesse model metadata unavailable: {e}")
+            return {"status": "error", "error": str(e)}
+
+    async def get_validation_status(
+        self,
+        symbol: str = "BTC-USDT",
+        timeframe: str = "1h",
+        model_type: str = "lightgbm",
+    ) -> Dict[str, Any]:
+        """Return institutional validation gate status for a Jesse ML model."""
+        from backend.services.jesse_validation import evaluate_validation_gates
+
+        metadata = await self.get_model_metadata(symbol, timeframe, model_type)
+        if metadata.get("status") == "error":
+            return {
+                "status": "error",
+                "symbol": self.normalize_jesse_symbol(symbol),
+                "timeframe": timeframe,
+                "model_type": model_type,
+                "error": metadata.get("error"),
+            }
+
+        gates = evaluate_validation_gates(metadata)
+        return {
+            "status": "success",
+            "symbol": metadata.get("symbol", self.normalize_jesse_symbol(symbol)),
+            "timeframe": timeframe,
+            "model_type": model_type,
+            "feature_hash": metadata.get("feature_hash"),
+            "labeling_mode": metadata.get("labeling_mode"),
+            **gates,
+        }
 
 
 jesse_bridge = JesseBridgeService()

@@ -150,6 +150,90 @@ async def test_jesse_bridge_get_ml_prediction():
         assert res["confidence"] == 0.58
 
 
+@pytest.mark.asyncio
+async def test_jesse_bridge_get_model_metadata():
+    """Test get_model_metadata reads DSR/PBO from Jesse ML metadata endpoint."""
+    mock_meta = {
+        "status": "success",
+        "symbol": "BTC-USDT",
+        "timeframe": "1h",
+        "model_type": "lightgbm",
+        "feature_hash": "cd15d2380809b247",
+        "metrics": {
+            "deflated_sharpe_ratio": 1.0,
+            "prob_backtest_overfitting": 0.636,
+            "holdout_sharpe": 4.84,
+        },
+    }
+
+    service = JesseBridgeService()
+
+    async def fake_get(url, params=None):
+        class Resp:
+            status_code = 200
+
+            @staticmethod
+            def json():
+                return mock_meta
+
+        return Resp()
+
+    mock_client = AsyncMock()
+    mock_client.get = fake_get
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+
+    with patch.object(service, "_resolve_ml_url", AsyncMock(return_value="http://127.0.0.1:9003")), \
+         patch("backend.services.jesse_bridge.httpx.AsyncClient", return_value=mock_client):
+        meta = await service.get_model_metadata("BTCUSDT", "1h")
+        assert meta["metrics"]["prob_backtest_overfitting"] == pytest.approx(0.636)
+
+
+@pytest.mark.asyncio
+async def test_jesse_bridge_get_validation_status():
+    """Test validation status combines metadata with gate evaluation."""
+    service = JesseBridgeService()
+    mock_meta = {
+        "symbol": "BTC-USDT",
+        "feature_hash": "abc123",
+        "labeling_mode": "triple_barrier",
+        "metrics": {"deflated_sharpe_ratio": 1.0, "prob_backtest_overfitting": 0.15},
+    }
+    with patch.object(service, "get_model_metadata", AsyncMock(return_value=mock_meta)):
+        status = await service.get_validation_status("BTC-USDT", "1h")
+        assert status["status"] == "success"
+        assert status["deployment_ok"] is True
+        assert status["pbo_pass"] is True
+
+
+def test_jesse_ml_validation_route(client, monkeypatch):
+    """Test /api/jesse/ml-validation returns gate status."""
+    api_key = os.getenv("ADMIN_API_KEY", "test_key")
+    monkeypatch.setenv("ADMIN_API_KEY", api_key)
+
+    mock_status = {
+        "status": "success",
+        "symbol": "BTC-USDT",
+        "timeframe": "1h",
+        "deployment_ok": False,
+        "pbo": 0.636,
+        "dsr": 1.0,
+        "pbo_pass": False,
+        "dsr_pass": True,
+        "reasons": ["PBO 63.6% exceeds gate 30%"],
+    }
+
+    with patch.object(jesse_bridge, "get_validation_status", AsyncMock(return_value=mock_status)):
+        res = client.get(
+            "/api/jesse/ml-validation?symbol=BTC-USDT",
+            headers={"x-api-key": api_key},
+        )
+        assert res.status_code == 200
+        data = res.json()
+        assert data["deployment_ok"] is False
+        assert data["pbo"] == pytest.approx(0.636)
+
+
 def test_jesse_ml_predict_routes(client, monkeypatch):
     """Test /api/jesse/ml-predict (GET and POST) and /api/jesse/ml-models."""
     api_key = os.getenv("ADMIN_API_KEY", "test_key")

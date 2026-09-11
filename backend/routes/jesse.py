@@ -12,8 +12,8 @@ router = APIRouter(tags=["Jesse Quant Engine"])
 
 
 class StrategySyncRequest(BaseModel):
-    sl_atr_mult: float = 2.0
-    tp_atr_mult: float = 4.0
+    sl_atr_mult: float = 1.75
+    tp_atr_mult: float = 5.5
     trail_activation_atr: float = 1.8
     trail_atr_mult: float = 1.6
 
@@ -71,6 +71,23 @@ class MLPredictionRequest(BaseModel):
 async def get_ml_models() -> Dict[str, Any]:
     """List available trained Machine Learning model artifacts and cache status."""
     return await jesse_bridge.get_ml_models()
+
+
+@router.get("/ml-validation")
+async def get_ml_validation(
+    symbol: str = Query("BTC-USDT"),
+    timeframe: str = Query("1h"),
+    model_type: str = Query("lightgbm"),
+) -> Dict[str, Any]:
+    """Return DSR/PBO institutional validation gate status for a Jesse ML model."""
+    res = await jesse_bridge.get_validation_status(
+        symbol=symbol,
+        timeframe=timeframe,
+        model_type=model_type,
+    )
+    if res.get("status") == "error":
+        raise HTTPException(status_code=503, detail=res.get("error"))
+    return res
 
 
 @router.get("/ml-predict")

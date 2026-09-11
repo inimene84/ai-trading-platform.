@@ -207,3 +207,30 @@ async def test_jesse_ml_kelly_clipping_below_30_partition_trades(ml_risk_config,
         # If clipped to 1.0x, notional doesn't scale above 1.0x trade_usdt or risk
         assert decision.action == "BUY"
 
+
+@pytest.mark.asyncio
+async def test_jesse_ml_gate_fail_closed_on_validation_in_live(ml_risk_config, monkeypatch):
+    """In LIVE mode, failing PBO/DSR validation gates veto entry before prediction."""
+    monkeypatch.setenv("TRADING_MODE", "live")
+    monkeypatch.setenv("JESSE_ML_GATE_ENABLED", "true")
+    engine = DecisionEngine(ml_risk_config)
+    engine.enable_kronos = False
+    engine.account_equity = 1000.0
+    engine.account_available = 1000.0
+    bars = _make_bars(50)
+
+    mock_signal = StrategySignal(symbol="BTCUSDC", signal="BUY", confidence=0.60, entry_price=bars[-1]["close"])
+    engine.strategy.generate_signal = MagicMock(return_value=mock_signal)
+    engine.regime_detector.detect = MagicMock(return_value=MagicMock(regime="TRENDING", weights=MagicMock(return_value={})))
+
+    mock_meta = {
+        "metrics": {"deflated_sharpe_ratio": 1.0, "prob_backtest_overfitting": 0.636},
+    }
+
+    with patch("backend.services.jesse_bridge.jesse_bridge.get_model_metadata", AsyncMock(return_value=mock_meta)), \
+         patch("backend.services.jesse_bridge.jesse_bridge.get_ml_prediction", AsyncMock()) as mock_predict:
+        decision = await engine.evaluate_symbol("BTCUSDC", bars, None, 0, [], False)
+        assert decision is None
+        assert "validation gate" in engine.last_evaluation.get("reason", "")
+        mock_predict.assert_not_called()
+

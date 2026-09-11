@@ -544,6 +544,26 @@ class DecisionEngine:
         if self.enable_jesse_ml:
             try:
                 from backend.services.jesse_bridge import jesse_bridge
+                from backend.services.jesse_validation import evaluate_validation_gates
+
+                # Institutional validation gate: fail-closed in LIVE when PBO/DSR gates fail
+                if live_exchange_orders_allowed():
+                    val_meta = await jesse_bridge.get_model_metadata(symbol=symbol, timeframe="1h")
+                    if val_meta.get("status") != "error":
+                        gates = evaluate_validation_gates(val_meta)
+                        if not gates["deployment_ok"]:
+                            reason = "; ".join(gates["reasons"]) or "validation gates failed"
+                            logger.error(
+                                f"[{symbol}] Jesse ML validation gate VETO in LIVE mode: {reason}"
+                            )
+                            self._record_eval(
+                                symbol,
+                                signal.signal,
+                                signal.confidence,
+                                f"vetoed by Jesse ML validation gate ({reason})",
+                            )
+                            return None
+
                 ml_res = await jesse_bridge.get_ml_prediction(symbol=symbol, timeframe="1h")
                 if ml_res.get("status") == "success":
                     ml_sig = ml_res.get("signal")
