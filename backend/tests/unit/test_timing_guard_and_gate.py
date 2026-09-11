@@ -124,3 +124,60 @@ def test_gate_boost():
     assert res.action == "boost"
     assert res.final_signal == "BUY"
     assert res.confidence > 0.60
+
+
+def test_gate_reversal_does_not_veto_sell_when_path_is_drop():
+    """reversal_risk on a down path is not an 'opposing pump' — do not veto the short."""
+    res = apply_pre_execution_gate(
+        strategy_signal="SELL",
+        strategy_confidence=0.75,
+        kronos_result={
+            "signal": "SELL",
+            "confidence": 0.40,
+            "cum_change_5_pct": -0.80,
+            "max_adverse_excursion_pct": -1.16,
+            "reversal_risk": True,
+        },
+        shadow_mode=False,
+        symbol="DOTUSDT",
+    )
+    assert res.action != "veto"
+    assert res.final_signal == "SELL"
+
+
+def test_gate_reversal_still_vetoes_sell_on_pump_path():
+    res = apply_pre_execution_gate(
+        strategy_signal="SELL",
+        strategy_confidence=0.75,
+        kronos_result={
+            "signal": "BUY",
+            "confidence": 0.40,
+            "cum_change_5_pct": 0.90,
+            "max_adverse_excursion_pct": 0.20,
+            "reversal_risk": True,
+        },
+        shadow_mode=False,
+        symbol="AVAXUSDT",
+    )
+    assert res.action == "veto"
+    assert res.final_signal == "NEUTRAL"
+    assert "opposing pump" in res.reasoning
+
+
+def test_gate_reversal_does_not_veto_buy_when_path_is_pump():
+    """reversal_risk on an up path is not an 'opposing drop' — do not veto the long."""
+    res = apply_pre_execution_gate(
+        strategy_signal="BUY",
+        strategy_confidence=0.75,
+        kronos_result={
+            "signal": "BUY",
+            "confidence": 0.40,
+            "cum_change_5_pct": 0.90,
+            "max_adverse_excursion_pct": -0.20,
+            "reversal_risk": True,
+        },
+        shadow_mode=False,
+        symbol="ETHUSDT",
+    )
+    assert res.action != "veto"
+    assert res.final_signal == "BUY"

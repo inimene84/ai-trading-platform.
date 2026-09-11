@@ -5,7 +5,23 @@ from unittest.mock import patch, AsyncMock, MagicMock
 
 from backend.services.decision_engine import DecisionEngine
 from backend.services.risk_config import RiskConfig
+from backend.services.jesse_bridge import JesseBridgeService, is_jesse_ml_model_gap
 from backend.strategies.base import StrategySignal
+
+
+def test_is_jesse_ml_model_gap_classifies_sidecar_errors():
+    assert is_jesse_ml_model_gap("No model artifact found for AVAX-USDT (1h, lightgbm)") is True
+    assert is_jesse_ml_model_gap(
+        "Model artifact ETH-USDT_1h_lightgbm.joblib refused: promotion gate failed "
+        "(DSR 0.4751 <= 0.95; PBO 0.484 >= 0.30)"
+    ) is True
+    assert is_jesse_ml_model_gap("ML server returned HTTP 500: boom") is False
+    assert is_jesse_ml_model_gap("Connection refused") is False
+    assert is_jesse_ml_model_gap(
+        "Failed to load model artifact BTC-USDT_1h_lightgbm.joblib: Connection refused"
+    ) is False
+    assert is_jesse_ml_model_gap("") is False
+    assert is_jesse_ml_model_gap(None) is False
 
 
 def _make_bars(n: int = 100, base: float = 100.0) -> list:
@@ -172,6 +188,108 @@ async def test_jesse_ml_gate_fail_closed_in_live_mode(ml_risk_config, monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_jesse_ml_gate_skips_when_no_model_in_live(ml_risk_config, monkeypatch):
+    """Missing artifacts are a model gap, not an outage — do not veto the universe."""
+    monkeypatch.setenv("TRADING_MODE", "live")
+    monkeypatch.setenv("JESSE_ML_GATE_ENABLED", "true")
+    engine = DecisionEngine(ml_risk_config)
+    engine.enable_kronos = False
+    engine.account_equity = 1000.0
+    engine.account_available = 1000.0
+    bars = _make_bars(50)
+
+    mock_signal = StrategySignal(symbol="AVAXUSDT", signal="BUY", confidence=0.60, entry_price=bars[-1]["close"])
+    engine.strategy.generate_signal = MagicMock(return_value=mock_signal)
+    engine.regime_detector.detect = MagicMock(return_value=MagicMock(regime="TRENDING", weights=MagicMock(return_value={})))
+
+    mock_ml_res = {
+        "status": "error",
+        "error": "No model artifact found for AVAX-USDT (1h, lightgbm)",
+    }
+    with patch("backend.services.jesse_bridge.jesse_bridge.get_ml_prediction", AsyncMock(return_value=mock_ml_res)):
+        decision = await engine.evaluate_symbol("AVAXUSDT", bars, None, 0, [], False)
+        assert decision is not None
+        assert decision.action == "BUY"
+        assert "no deployable model" in (decision.reasoning or "")
+
+
+@pytest.mark.asyncio
+async def test_jesse_ml_gate_skips_when_promotion_refused_in_live(ml_risk_config, monkeypatch):
+    """Unpromoted LightGBM artifacts skip the gate instead of fail-closed veto."""
+    monkeypatch.setenv("TRADING_MODE", "live")
+    monkeypatch.setenv("JESSE_ML_GATE_ENABLED", "true")
+    engine = DecisionEngine(ml_risk_config)
+    engine.enable_kronos = False
+    engine.account_equity = 1000.0
+    engine.account_available = 1000.0
+    bars = _make_bars(50)
+
+    mock_signal = StrategySignal(symbol="ETHUSDT", signal="BUY", confidence=0.60, entry_price=bars[-1]["close"])
+    engine.strategy.generate_signal = MagicMock(return_value=mock_signal)
+    engine.regime_detector.detect = MagicMock(return_value=MagicMock(regime="TRENDING", weights=MagicMock(return_value={})))
+
+    mock_ml_res = {
+        "status": "error",
+        "error": (
+            "Model artifact ETH-USDT_1h_lightgbm.joblib refused: "
+            "promotion gate failed (DSR 0.4751 <= 0.95; PBO 0.484 >= 0.30)"
+        ),
+    }
+    with patch("backend.services.jesse_bridge.jesse_bridge.get_ml_prediction", AsyncMock(return_value=mock_ml_res)):
+        decision = await engine.evaluate_symbol("ETHUSDT", bars, None, 0, [], False)
+        assert decision is not None
+        assert decision.action == "BUY"
+        assert "no deployable model" in (decision.reasoning or "")
+
+
+@pytest.mark.asyncio
+async def test_jesse_ml_gate_fail_closed_on_http_error_in_live(ml_risk_config, monkeypatch):
+    """A real ML sidecar failure in LIVE mode still fail-closes."""
+    monkeypatch.setenv("TRADING_MODE", "live")
+    monkeypatch.setenv("JESSE_ML_GATE_ENABLED", "true")
+    engine = DecisionEngine(ml_risk_config)
+    engine.enable_kronos = False
+    engine.account_equity = 1000.0
+    engine.account_available = 1000.0
+    bars = _make_bars(50)
+
+    mock_signal = StrategySignal(symbol="BTCUSDC", signal="BUY", confidence=0.60, entry_price=bars[-1]["close"])
+    engine.strategy.generate_signal = MagicMock(return_value=mock_signal)
+    engine.regime_detector.detect = MagicMock(return_value=MagicMock(regime="TRENDING", weights=MagicMock(return_value={})))
+
+    mock_ml_res = {"status": "error", "error": "ML server returned HTTP 500: boom"}
+    with patch("backend.services.jesse_bridge.jesse_bridge.get_ml_prediction", AsyncMock(return_value=mock_ml_res)):
+        decision = await engine.evaluate_symbol("BTCUSDC", bars, None, 0, [], False)
+        assert decision is None
+        assert "vetoed by Jesse ML error in LIVE mode" in engine.last_evaluation.get("reason", "")
+
+
+@pytest.mark.asyncio
+async def test_jesse_ml_gate_fail_closed_on_artifact_load_outage(ml_risk_config, monkeypatch):
+    """An outage whose message mentions artifacts must still fail-closed in LIVE."""
+    monkeypatch.setenv("TRADING_MODE", "live")
+    monkeypatch.setenv("JESSE_ML_GATE_ENABLED", "true")
+    engine = DecisionEngine(ml_risk_config)
+    engine.enable_kronos = False
+    engine.account_equity = 1000.0
+    engine.account_available = 1000.0
+    bars = _make_bars(50)
+
+    mock_signal = StrategySignal(symbol="BTCUSDT", signal="BUY", confidence=0.60, entry_price=bars[-1]["close"])
+    engine.strategy.generate_signal = MagicMock(return_value=mock_signal)
+    engine.regime_detector.detect = MagicMock(return_value=MagicMock(regime="TRENDING", weights=MagicMock(return_value={})))
+
+    mock_ml_res = {
+        "status": "error",
+        "error": "Failed to load model artifact BTC-USDT_1h_lightgbm.joblib: Connection refused",
+    }
+    with patch("backend.services.jesse_bridge.jesse_bridge.get_ml_prediction", AsyncMock(return_value=mock_ml_res)):
+        decision = await engine.evaluate_symbol("BTCUSDT", bars, None, 0, [], False)
+        assert decision is None
+        assert "vetoed by Jesse ML error in LIVE mode" in engine.last_evaluation.get("reason", "")
+
+
+@pytest.mark.asyncio
 async def test_jesse_ml_kelly_clipping_below_30_partition_trades(ml_risk_config, monkeypatch):
     """When partition closed trades < 30, Kelly multiplier must be clipped to [0.25, 1.0]."""
     monkeypatch.setenv("TRADING_MODE", "live")
@@ -206,4 +324,26 @@ async def test_jesse_ml_kelly_clipping_below_30_partition_trades(ml_risk_config,
         # Base trade_usdt_amount is 10.0 (from ml_risk_config), clipped kelly is 1.0x (not 1.8x)
         # If clipped to 1.0x, notional doesn't scale above 1.0x trade_usdt or risk
         assert decision.action == "BUY"
+
+
+@pytest.mark.asyncio
+async def test_get_ml_prediction_rewrites_missing_model_status():
+    """HTTP 200 with a sidecar 'no artifact' error becomes status=no_model."""
+    service = JesseBridgeService()
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        "status": "error",
+        "error": "No model artifact found for AVAX-USDT (1h, lightgbm)",
+    }
+    mock_client = AsyncMock()
+    mock_client.post = AsyncMock(return_value=mock_resp)
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+
+    with patch.object(service, "_resolve_ml_url", AsyncMock(return_value="http://jesse-app:9003")), \
+         patch("backend.services.jesse_bridge.httpx.AsyncClient", return_value=mock_client):
+        res = await service.get_ml_prediction("AVAX-USDT")
+        assert res["status"] == "no_model"
+        assert "No model artifact" in res["error"]
 

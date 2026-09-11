@@ -21,6 +21,25 @@ JESSE_ML_URL = os.getenv("JESSE_ML_URL", "http://jesse-app:9003")
 JESSE_ML_LOCAL_URL = os.getenv("JESSE_ML_LOCAL_URL", "http://127.0.0.1:9003")
 JESSE_PASSWORD = os.getenv("JESSE_PASSWORD", "QuantumTrading2026!")
 
+# Predict errors that mean "this symbol has no live model" — not an ML outage.
+# Live fail-closed must not treat these as a veto or the whole universe stalls
+# when only a subset of pairs have a promoted LightGBM artifact.
+_JESSE_ML_NO_ARTIFACT = "no model artifact found"
+_JESSE_ML_PROMOTION_FAILED = "promotion gate failed"
+
+
+def is_jesse_ml_model_gap(error: Optional[str]) -> bool:
+    """True when Jesse ML refused a predict because no deployable model exists.
+
+    Examples from the sidecar:
+      - "No model artifact found for AVAX-USDT (1h, lightgbm)"
+      - "Model artifact ETH-USDT_1h_lightgbm.joblib refused: promotion gate failed ..."
+    """
+    text = str(error or "").lower()
+    if not text:
+        return False
+    return _JESSE_ML_NO_ARTIFACT in text or _JESSE_ML_PROMOTION_FAILED in text
+
 
 class JesseBridgeService:
     def __init__(self):
@@ -297,8 +316,18 @@ class JesseBridgeService:
                     },
                 )
                 if res.status_code == 200:
-                    return res.json()
-                return {"status": "error", "error": f"ML server returned HTTP {res.status_code}: {res.text}"}
+                    payload = res.json()
+                    if isinstance(payload, dict) and payload.get("status") != "success":
+                        err = str(payload.get("error") or "")
+                        if is_jesse_ml_model_gap(err):
+                            payload["status"] = "no_model"
+                    return payload
+                # Never rewrite 5xx bodies to no_model — a traceback that
+                # happens to mention artifacts is still an outage.
+                err = f"ML server returned HTTP {res.status_code}: {res.text}"
+                if 400 <= res.status_code < 500 and is_jesse_ml_model_gap(res.text):
+                    return {"status": "no_model", "error": err}
+                return {"status": "error", "error": err}
         except Exception as e:
             logger.error(f"Failed to query ML prediction endpoint: {e}")
             return {"status": "error", "error": str(e)}
