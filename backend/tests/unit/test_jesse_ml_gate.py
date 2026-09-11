@@ -408,6 +408,22 @@ async def test_uncertainty_veto_reads_legacy_conformal_margin_key(ml_risk_config
 
 
 @pytest.mark.asyncio
+async def test_uncertainty_veto_skips_null_probability_margin_key(ml_risk_config, monkeypatch):
+    """A transitional upstream rename emitting the new key as null must fall back.
+
+    dict.get(new, old) would return that None and stop the margin being read at all.
+    """
+    bars = _make_bars(50)
+    engine = _health_engine(ml_risk_config, monkeypatch, bars)
+
+    mock_ml = _healthy_ml_res(uncertainty="HIGH", probability_margin=None, conformal_margin=0.02)
+    with patch("backend.services.jesse_bridge.jesse_bridge.get_ml_prediction", AsyncMock(return_value=mock_ml)):
+        decision = await engine.evaluate_symbol("BTCUSDC", bars, None, 0, [], False)
+        assert decision is None
+        assert "margin=0.020" in engine.last_evaluation.get("reason", "")
+
+
+@pytest.mark.asyncio
 async def test_uncertainty_veto_prefers_probability_margin_key(ml_risk_config, monkeypatch):
     """If the server is ever renamed upstream, the honest key wins over the legacy one."""
     bars = _make_bars(50)

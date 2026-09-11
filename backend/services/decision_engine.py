@@ -102,6 +102,20 @@ def _as_float(value: Any, default: float = 0.0) -> float:
         return default
 
 
+def _first_value(payload: Dict[str, Any], *keys: str) -> Any:
+    """First of `keys` that is present AND non-null in an upstream payload.
+
+    payload.get(new, payload.get(old)) is not enough during an upstream rename:
+    a transitional build that emits the new key as null returns that None
+    instead of falling back, which would silently disable the read.
+    """
+    for key in keys:
+        value = payload.get(key)
+        if value is not None:
+            return value
+    return None
+
+
 _ABSENT = object()
 _EXPIRED_TRUE = {"true", "1", "yes", "y", "expired", "stale"}
 _EXPIRED_FALSE = {"false", "0", "no", "n", "fresh", "valid", "ok", "current"}
@@ -704,7 +718,7 @@ class DecisionEngine:
                     # bound and this threshold is NOT a calibrated error rate. Accept
                     # the legacy wire key; name it honestly everywhere in here.
                     probability_margin = _as_float(
-                        ml_res.get("probability_margin", ml_res.get("conformal_margin")), 0.0
+                        _first_value(ml_res, "probability_margin", "conformal_margin"), 0.0
                     )
 
                     # Probability-Margin Uncertainty Veto: reject trades in high ambiguity
