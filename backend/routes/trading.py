@@ -1874,7 +1874,6 @@ async def close_position(position_id: str):
         TradingMode,
         live_binance_orders_allowed,
         binance_paper_parallel_enabled,
-        BINANCE_PAPER_SESSION_ID,
     )
 
     db = SessionLocal()

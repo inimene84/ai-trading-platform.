@@ -64,3 +64,4 @@ scratch/
 *.key
 secrets.*
 .secrets
+MEMORY.md

@@ -8,12 +8,15 @@ QuantumTrade trading platform:
 """
 
 import os
-import json
 import logging
 import httpx
+from dotenv import load_dotenv
 from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
+
+# Ensure .env is loaded even if this module is imported before backend.main
+load_dotenv()
 
 JESSE_API_URL = os.getenv("JESSE_API_URL", "http://jesse-app:9000")
 JESSE_LOCAL_URL = os.getenv("JESSE_LOCAL_URL", "http://127.0.0.1:9000")

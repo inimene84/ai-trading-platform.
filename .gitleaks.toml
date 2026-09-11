@@ -21,14 +21,19 @@ description = "Jesse PostgreSQL password pasted in walkthrough docs"
 regex = '''jesse_secure_pass_[0-9]+'''
 tags = ["password", "quantumtrade", "jesse"]
 
+# Allowlists are independent rules (OR semantics). Keep deny-list files
+# path-allowlisted so the needles they must contain do not self-flag.
 [[allowlists]]
-description = "Documented placeholders and the scanner's own deny-list"
+description = "Deny-list and config files that legitimately contain the needles"
 paths = [
   '''(^|/)\.env\.example$''',
   '''(^|/)n8n/\.env\.example$''',
   '''(^|/)scripts/ci/forbidden_substrings\.txt$''',
   '''(^|/)\.gitleaks\.toml$''',
 ]
+
+[[allowlists]]
+description = "Documented placeholders"
 regexTarget = "match"
 regexes = [
   '''your_[A-Za-z0-9_]+_here''',

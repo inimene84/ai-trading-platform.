@@ -201,3 +201,12 @@ def test_jesse_ml_predict_routes(client, monkeypatch):
         assert res_models.status_code == 200
         assert "BTC-USDT_1h_lightgbm.joblib" in res_models.json()["available_models"]
 
+
+@pytest.mark.asyncio
+async def test_jesse_bridge_fail_closed_without_password(monkeypatch):
+    """With JESSE_PASSWORD unset, get_token returns None (no hardcoded fallback)."""
+    monkeypatch.delenv("JESSE_PASSWORD", raising=False)
+    monkeypatch.setattr("backend.services.jesse_bridge.JESSE_PASSWORD", "")
+    service = JesseBridgeService()
+    token = await service.get_token()
+    assert token is None
