@@ -48,6 +48,8 @@ def persist_ctrader_execution(
     notes: Optional[str] = None,
 ) -> Optional[int]:
     """Insert an open Trade row for a successful cTrader dispatch."""
+    from backend.services.trading_mode import live_ctrader_orders_allowed
+
     db = SessionLocal()
     try:
         trade = Trade(
@@ -64,6 +66,7 @@ def persist_ctrader_execution(
             broker_order_id=str(order_id) if order_id else None,
             broker_position_id=str(position_id) if position_id else None,
             notes=notes or "cTrader live execution",
+            mode="live" if live_ctrader_orders_allowed() else "paper",
         )
         db.add(trade)
         db.commit()

@@ -31,11 +31,15 @@ def test_plausible_exit_price_rejects_corrupt_values():
     assert not is_plausible_exit_price(None, 0.08)
 
 
-def _trade(symbol="ARBUSDT", direction="SELL", entry=0.076, qty=300.0):
+def _trade(symbol="ARBUSDT", direction="SELL", entry=0.076, qty=300.0, **extra):
     t = types.SimpleNamespace(
         symbol=symbol, direction=direction, entry_price=entry, quantity=qty,
         exit_price=None, pnl=None, status="open", closed_at=None, notes="",
+        binance_order_id="555", broker_position_id=None, mode="live",
+        broker="binance_futures", broker_order_id=None,
     )
+    for k, v in extra.items():
+        setattr(t, k, v)
     return t
 
 
@@ -102,7 +106,7 @@ async def test_sync_handles_missing_exit_price():
 
 @pytest.mark.asyncio
 async def test_sync_refuses_bulk_close_on_empty_exchange_snapshot():
-    """One degraded [] response must not flatten DB and cancel all protection."""
+    """One empty snapshot must not flatten live venue rows or cancel protection."""
     trade = _trade()
     db = _db_with([trade])
     broker = _broker(exit_price=0.074)
@@ -116,6 +120,26 @@ async def test_sync_refuses_bulk_close_on_empty_exchange_snapshot():
     broker.get_exit_price.assert_not_called()
     broker.cancel_all_orders.assert_not_called()
     db.commit.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_empty_snapshot_quarantines_paper_ghost_rows():
+    trade = _trade(
+        binance_order_id="paper_000007",
+        mode="paper",
+        broker_position_id=None,
+    )
+    db = _db_with([trade])
+    broker = _broker(exit_price=0.074)
+    broker.get_positions.return_value = []
+
+    updated = await BrokerPositionSyncService.sync_positions(db, broker, {}, {})
+
+    assert updated == 1
+    assert trade.status == "orphaned"
+    assert "Quarantined" in trade.notes
+    broker.cancel_all_orders.assert_not_called()
+    db.commit.assert_called_once()
 
 
 @pytest.mark.asyncio

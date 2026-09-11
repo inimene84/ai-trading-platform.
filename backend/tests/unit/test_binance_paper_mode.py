@@ -286,6 +286,17 @@ def test_paper_parallel_live_binance_broker_still_not_live(monkeypatch):
     assert live_binance_orders_allowed() is False
 
 
+def test_dual_live_ctrader_still_treats_binance_as_live(monkeypatch):
+    monkeypatch.setenv("TRADING_MODE", "live")
+    monkeypatch.setenv("PAPER_TRADING", "false")
+    monkeypatch.setenv("DRY_RUN_ALL", "false")
+    monkeypatch.setenv("ACTIVE_BROKER", "ctrader")
+    monkeypatch.delenv("BINANCE_PAPER_PARALLEL", raising=False)
+    assert live_binance_orders_allowed() is True
+    assert TradingLoopService._is_live_binance() is True
+    assert TradingLoopService._crypto_broker_name() == "binance_futures"
+
+
 def test_effective_balance_uses_paper_book_when_parallel_in_live(monkeypatch):
     monkeypatch.setenv("TRADING_MODE", "live")
     monkeypatch.setenv("PAPER_TRADING", "false")

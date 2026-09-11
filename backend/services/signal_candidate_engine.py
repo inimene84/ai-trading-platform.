@@ -946,6 +946,24 @@ class SignalCandidateEngine:
                             "created_at": datetime.now(timezone.utc).isoformat(),
                         }
 
+                        # Cross-scan dedup: a live twin (same symbol, strategy,
+                        # direction) means this setup is already armed — without
+                        # this the 5-min scanners re-added it every cycle. No
+                        # await between check and insert, so concurrent scan
+                        # calls cannot interleave here.
+                        if any(
+                            c.get("symbol") == sym
+                            and c.get("strategy") == raw_signal["strategy"]
+                            and c.get("direction") == raw_signal["direction"]
+                            and c.get("status") in (CandidateStatus.PENDING, CandidateStatus.READY)
+                            for c in self.candidates.values()
+                        ):
+                            logger.info(
+                                f"[{sym}] dedup: live {raw_signal['strategy']} "
+                                f"{raw_signal['direction']} candidate already armed — skipping"
+                            )
+                            continue
+
                         self.candidates[candidate["id"]] = candidate
                         candidates_generated.append(candidate)
                         break  # 1 candidate per symbol per scan run

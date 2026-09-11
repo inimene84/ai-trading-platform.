@@ -11,6 +11,7 @@ from backend.services.opinion_layer import analyze_symbol as opinion_analyze
 from backend.services.kronos_gate import apply_kronos_gate
 from backend.services import kronos_service
 from backend.services.skill_miner import skill_miner
+from backend.services.jesse_bridge import is_jesse_ml_model_gap, jesse_bridge
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +33,45 @@ def affordable_notional(
     if avail > 0:
         caps.append(avail * lev * frac)
     return min(caps) if caps else 0.0
+
+
+def apply_hard_notional_caps(
+    notional: float,
+    *,
+    trade_usdt: float,
+    max_directional_usdt: float,
+    leverage: float,
+    live: bool,
+    exchange_min_notional: float = 0.0,
+) -> tuple[float, str | None]:
+    """Clip a single order so it cannot breach configured USDT caps.
+
+    Live per-order cap is trade_usdt * leverage when that is at least the
+    venue minimum; otherwise only max_directional_exposure_usdt binds (so a
+    $10 paper-style trade_usdt cannot veto Binance's $20 min notional).
+    """
+    if notional <= 0:
+        return 0.0, "non-positive notional"
+    caps: list[float] = []
+    if max_directional_usdt and max_directional_usdt > 0:
+        caps.append(float(max_directional_usdt))
+    if live:
+        lev = max(float(leverage or 1.0), 1.0)
+        per_order = max(float(trade_usdt or 0.0), 0.0) * lev
+        if per_order >= max(float(exchange_min_notional or 0.0), 0.0):
+            caps.append(per_order)
+    if not caps:
+        return float(notional), None
+    cap = min(caps)
+    if exchange_min_notional > 0 and cap < exchange_min_notional:
+        cap = float(exchange_min_notional)
+    if notional > cap:
+        logger.warning(
+            "Hard notional cap: clipping $%.2f -> $%.2f (live=%s trade_usdt=%.2f dir_max=%.2f lev=%.1f)",
+            notional, cap, live, trade_usdt, max_directional_usdt, leverage,
+        )
+        return cap, None
+    return float(notional), None
 
 
 def pyramid_price_improved(
@@ -543,7 +583,6 @@ class DecisionEngine:
         # 4e. Jesse Machine Learning Directional Consensus & Meta-Label Gate
         if self.enable_jesse_ml:
             try:
-                from backend.services.jesse_bridge import jesse_bridge
                 ml_res = await jesse_bridge.get_ml_prediction(symbol=symbol, timeframe="1h")
                 if ml_res.get("status") == "success":
                     ml_sig = ml_res.get("signal")
@@ -591,12 +630,21 @@ class DecisionEngine:
                         self._record_eval(symbol, signal.signal, signal.confidence, "confidence reduced below threshold by Jesse ML gate")
                         return None
                 else:
-                    if live_exchange_orders_allowed():
-                        err = ml_res.get("error") or "Jesse ML status not success"
+                    err = ml_res.get("error") or "Jesse ML status not success"
+                    # Missing / unpromoted artifacts are expected for most of the
+                    # universe. Fail-closed on those vetoed every live entry after
+                    # the ML gate landed (0 deployable models on the VPS).
+                    if ml_res.get("status") == "no_model" or is_jesse_ml_model_gap(err):
+                        logger.warning(
+                            f"[{symbol}] Jesse ML gate skipped — no deployable model ({err})"
+                        )
+                        setattr(signal, "jesse_ml_gap", err)
+                    elif live_exchange_orders_allowed():
                         logger.error(f"[{symbol}] Jesse ML gate returned non-success in LIVE mode ({err}) — fail closed: vetoing {signal.signal}")
                         self._record_eval(symbol, signal.signal, signal.confidence, f"vetoed by Jesse ML error in LIVE mode ({err})")
                         return None
-                    logger.debug(f"[{symbol}] Jesse ML returned non-success in paper mode ({ml_res.get('error')}) — skipping gate")
+                    else:
+                        logger.debug(f"[{symbol}] Jesse ML returned non-success in paper mode ({err}) — skipping gate")
             except Exception as e:
                 if live_exchange_orders_allowed():
                     logger.error(f"[{symbol}] Jesse ML gate failed in LIVE mode ({e}) — fail closed: vetoing {signal.signal}")
@@ -800,7 +848,27 @@ class DecisionEngine:
         # Floor at Binance MIN_NOTIONAL ($20 for most symbols, $100 for BTC)
         # BTC uses $100 flat to match Binance min notional requirement.
         _bn_min = 100.0 if 'BTC' in symbol else 20.0
-        notional = max(notional, _bn_min)
+        live = get_trading_mode() == TradingMode.LIVE
+        notional, reject = apply_hard_notional_caps(
+            notional,
+            trade_usdt=float(self.config.trade_usdt_amount),
+            max_directional_usdt=float(self.config.max_directional_exposure_usdt or 0),
+            leverage=float(self.account_leverage or 1.0),
+            live=live,
+            exchange_min_notional=_bn_min if live else 0.0,
+        )
+        if reject:
+            logger.warning(f"[{symbol}] REJECT notional cap: {reject}")
+            self._record_eval(
+                symbol, direction, getattr(signal, "confidence", 0.0),
+                f"SKIP (notional cap): {reject}",
+                entry=entry_price, sl=sl, tp=tp,
+            )
+            return None
+        if not live:
+            notional = max(notional, _bn_min)
+        elif notional < _bn_min:
+            notional = _bn_min
         quantity = notional / entry_price if entry_price > 0 else 0
 
         # Min-edge / fee-churn gate: reject trades whose *captured* move can't clear cost.
@@ -820,7 +888,11 @@ class DecisionEngine:
             stop_loss=sl,
             take_profit=tp,
             confidence=signal.confidence,
-            reasoning=f"Regime: {regime}",
+            reasoning=(
+                f"Regime: {regime}"
+                + (" | Jesse ML gate skipped (no deployable model)"
+                   if getattr(signal, "jesse_ml_gap", None) else "")
+            ),
             is_pyramid=is_pyramid
         )
 

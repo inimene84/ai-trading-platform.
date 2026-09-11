@@ -10,6 +10,9 @@ base_agents:
   market_alerts: 0.05
   macro_sentiment: 0.10   # global Fear & Greed (InfluxDB / n8n)
   news_archive: 0.12      # crypto-news vector archive (Qdrant / n8n)
+  semantic_trade_memory: 0.08
+  learned_skill: 0.08
+  trade_memory: 0.04
 
 # Active personas (can be toggled without code changes)
 # Override with ACTIVE_PERSONAS env var (comma-separated)

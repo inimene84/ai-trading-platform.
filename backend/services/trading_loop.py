@@ -31,6 +31,7 @@ from backend.services.trading_mode import (
     TradingMode,
     binance_paper_parallel_enabled,
     get_trading_mode,
+    live_binance_orders_allowed,
     paper_leverage_for_broker,
     paper_reported_equity,
     paper_starting_balance,
@@ -228,11 +229,12 @@ class TradingLoopService:
 
     @staticmethod
     def _is_live_binance() -> bool:
-        return (
-            os.getenv("ACTIVE_BROKER", "ctrader") == "binance_futures"
-            and get_trading_mode() == TradingMode.LIVE
-            and not binance_paper_parallel_enabled()
-        )
+        """True when crypto fills/sync must talk to the live Binance book.
+
+        Dual-broker live (ACTIVE_BROKER=ctrader + TRADING_MODE=live) still
+        owns USDT-M rows on Binance unless BINANCE_PAPER_PARALLEL is on.
+        """
+        return live_binance_orders_allowed()
 
     @staticmethod
     def _crypto_session_id() -> str | None:
@@ -243,7 +245,7 @@ class TradingLoopService:
 
     @staticmethod
     def _crypto_broker_name() -> str:
-        if TradingLoopService._crypto_session_id():
+        if TradingLoopService._crypto_session_id() or TradingLoopService._is_live_binance():
             return "binance_futures"
         return get_active_broker_name()
 
@@ -1410,6 +1412,13 @@ class TradingLoopService:
                     if decision.is_pyramid:
                         self._pyramid_layers.setdefault(symbol, []).append(filled_px)
 
+                    from backend.services.ledger import binance_position_key, fill_mode_from_order
+
+                    fill_mode = fill_mode_from_order(
+                        getattr(order_result, "mode", None),
+                        get_trading_mode().value,
+                    )
+                    crypto_broker = self._crypto_broker_name()
                     trade = Trade(
                         symbol=symbol, direction=decision.action, quantity=filled_qty,
                         entry_price=filled_px, status="open",
@@ -1417,8 +1426,14 @@ class TradingLoopService:
                         binance_order_id=order_result.order_id,
                         stop_loss=decision.stop_loss, take_profit=decision.take_profit,
                         notes=f"pyramid_layer_{len(self._pyramid_layers.get(symbol, []))}" if decision.is_pyramid else None,
-                        broker=self._crypto_broker_name(),
-                        exchange=self._crypto_broker_name(),
+                        broker=crypto_broker,
+                        exchange=crypto_broker,
+                        mode=fill_mode,
+                        broker_position_id=(
+                            binance_position_key(symbol, decision.action)
+                            if fill_mode == "live" and crypto_broker == "binance_futures"
+                            else None
+                        ),
                     )
                     db.add(trade)
                     db.commit()
@@ -1537,6 +1552,8 @@ class TradingLoopService:
                 Trade.status == "closed"
             ).scalar() or 0.0
 
+            distinct_open_symbols = len({t.symbol for t in open_trades if getattr(t, "symbol", None)})
+
             # Compute positions value from open trades
             positions_val = sum(
                 (t.quantity or 0) * (t.entry_price or 0)
@@ -1544,7 +1561,7 @@ class TradingLoopService:
             )
 
             # Save snapshot
-            from backend.services.trading_mode import get_trading_mode, get_active_broker_name
+            from backend.services.trading_mode import get_trading_mode
             active_broker = get_active_broker_name()
             current_mode = get_trading_mode().value if hasattr(get_trading_mode(), "value") else str(get_trading_mode())
 

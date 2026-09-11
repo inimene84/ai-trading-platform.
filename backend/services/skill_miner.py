@@ -167,13 +167,18 @@ def _stdev(xs: List[float]) -> float:
 
 
 def score_cluster(cluster: List[TradeSample]) -> Tuple[str, float, float, float, Optional[float], float]:
-    """Return (direction, win_rate, avg_pnl, total_pnl, sharpe, edge_score)."""
+    """Return (direction, win_rate, avg_pnl, total_pnl, sharpe, edge_score).
+
+    Edge is expectancy-based and fail-closed for losers / tiny samples:
+    0% win-rate or non-positive avg PnL scores 0 so they cannot rank above
+    high-sample winning clusters.
+    """
     n = len(cluster)
     pnls = [c.pnl for c in cluster]
     wins = sum(1 for p in pnls if p > 0)
-    win_rate = wins / n
+    win_rate = wins / n if n else 0.0
     total_pnl = sum(pnls)
-    avg_pnl = total_pnl / n
+    avg_pnl = total_pnl / n if n else 0.0
     sd = _stdev(pnls)
     sharpe = (avg_pnl / sd) if sd > 0 else None
 
@@ -184,12 +189,25 @@ def score_cluster(cluster: List[TradeSample]) -> Tuple[str, float, float, float,
     else:
         direction = "neutral"
 
-    # Composite edge: decisiveness × sample support × consistency. 0..1.
-    edge = min(abs(win_rate - 0.5) * 2.0, 1.0)
-    support = min(n / 10.0, 1.0)
+    min_samples = int(os.getenv("SKILL_MIN_SAMPLES", "8") or 8)
+    if n < min_samples or win_rate <= 0.0 or avg_pnl <= 0.0:
+        return (
+            direction, round(win_rate, 4), round(avg_pnl, 6), round(total_pnl, 6),
+            (round(sharpe, 4) if sharpe is not None else None), 0.0,
+        )
+
+    losses = [p for p in pnls if p < 0]
+    avg_loss = abs(sum(losses) / len(losses)) if losses else 0.0
+    # Expectancy in R if we have a typical loss; else scale by avg win.
+    if avg_loss > 0:
+        expectancy_r = avg_pnl / avg_loss
+    else:
+        expectancy_r = 1.0
+    edge = min(max(expectancy_r, 0.0) * win_rate, 1.0)
+    support = min(n / 20.0, 1.0)
     consistency = 1.0
     if sharpe is not None:
-        consistency = max(0.0, min(abs(sharpe) / 2.0, 1.0))
+        consistency = max(0.0, min(max(sharpe, 0.0) / 2.0, 1.0))
     edge_score = round(edge * (0.5 + 0.5 * support) * (0.5 + 0.5 * consistency), 4)
     return direction, round(win_rate, 4), round(avg_pnl, 6), round(total_pnl, 6), \
         (round(sharpe, 4) if sharpe is not None else None), edge_score

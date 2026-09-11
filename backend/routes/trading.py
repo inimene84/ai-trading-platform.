@@ -26,6 +26,12 @@ from backend.services.trading_loop_helpers import (
     is_ctrader_symbol as _is_ctrader_symbol,
     is_ctrader_trade as _is_ctrader_trade,
 )
+from backend.services.ledger import is_binance_paper_fill
+from backend.services.trading_mode import (
+    TradingMode,
+    get_trading_mode,
+    live_binance_orders_allowed,
+)
 from backend.services.unified_feed import unified_feed
 from backend.services.unified_trading import (
     UnifiedTrading, UnifiedOrder, OrderSide, OrderType,
@@ -181,7 +187,12 @@ async def run_backtest(request: dict):
 
 
 async def _get_current_balance() -> dict:
-    """Resolve current balance depending on trading mode (paper vs live)."""
+    """Resolve current balance depending on trading mode (paper vs live).
+
+    Live never treats a failed Binance wallet read as $0 equity. Prefer any
+    healthy broker book (cTrader and/or Binance) and fall back to last live
+    snapshot rather than reporting zeros.
+    """
     from backend.services.trading_mode import TradingMode, get_trading_mode
     if get_trading_mode() == TradingMode.PAPER:
         try:
@@ -206,8 +217,64 @@ async def _get_current_balance() -> dict:
             "margin_used": 0.0,
             "broker": "paper_trading",
         }
-    from backend.services.binance_futures_service import binance_futures_broker
-    return await asyncio.to_thread(binance_futures_broker.get_balance)
+
+    books: List[Dict[str, Any]] = []
+    try:
+        if ctrader_broker.has_credentials():
+            ct = await asyncio.to_thread(ctrader_broker.get_balance)
+            if ct and (float(ct.get("equity") or 0) > 0 or float(ct.get("balance") or 0) > 0):
+                books.append(ct)
+    except Exception as exc:
+        logger.warning("cTrader get_balance failed: %s", exc)
+
+    if live_binance_orders_allowed():
+        try:
+            from backend.services.binance_futures_service import binance_futures_broker
+            bn = await asyncio.to_thread(
+                lambda: binance_futures_broker.get_balance(raise_on_error=True)
+            )
+            if bn and not bn.get("error"):
+                books.append(bn)
+        except Exception as exc:
+            logger.warning("Binance get_balance failed (not treating as $0): %s", exc)
+
+    if books:
+        equity = sum(float(b.get("equity") or b.get("balance") or 0) for b in books)
+        balance = sum(float(b.get("balance") or 0) for b in books)
+        available = sum(float(b.get("available") or 0) for b in books)
+        margin_used = sum(float(b.get("margin_used") or 0) for b in books)
+        brokers = ",".join(str(b.get("broker") or "?") for b in books)
+        return {
+            "balance": balance,
+            "available": available,
+            "equity": equity,
+            "margin_used": margin_used,
+            "broker": brokers,
+            "books": books,
+        }
+    return {
+        "balance": 0.0,
+        "available": 0.0,
+        "equity": 0.0,
+        "margin_used": 0.0,
+        "broker": "unverified",
+        "error": "no_live_broker_balance",
+    }
+
+
+async def _live_binance_book() -> tuple[list, bool]:
+    """(positions, snapshot_ok). snapshot_ok False => do not hide DB crypto rows."""
+    if not live_binance_orders_allowed():
+        return [], False
+    try:
+        from backend.services.binance_futures_service import binance_futures_broker
+        pos = await asyncio.to_thread(
+            lambda: binance_futures_broker.get_positions(raise_on_error=True)
+        )
+        return list(pos or []), True
+    except Exception as exc:
+        logger.warning("Binance live-book fetch failed: %s", exc)
+        return [], False
 
 
 @router.get("/portfolio")
@@ -240,6 +307,13 @@ async def get_portfolio():
         except Exception as exc:
             logger.warning("cTrader live-book sync for portfolio failed: %s", exc)
 
+        live_binance, binance_snapshot_ok = await _live_binance_book()
+        live_binance_syms = {
+            str(p.get("symbol") or "").upper()
+            for p in live_binance
+            if abs(float(p.get("quantity") or 0)) > 0
+        }
+
         open_trades = db.query(Trade).filter(Trade.status.in_(["open", "filled"])).all()
         live_by_pid = {
             str(p.get("position_id")): p for p in live_ctrader if p.get("position_id")
@@ -255,10 +329,30 @@ async def get_portfolio():
         total_notional = 0.0
         total_unrealized_pnl = 0.0
         positions = []
+        paper_positions = []
+        live_mode = get_trading_mode() == TradingMode.LIVE
         for t in open_trades:
             is_ctrader = _is_ctrader_trade(t)
             direction = str(t.direction or "BUY").upper()
             sym = str(t.symbol or "").upper()
+
+            if live_mode and not is_ctrader and is_binance_paper_fill(t):
+                paper_positions.append({
+                    "id": t.id,
+                    "symbol": t.symbol,
+                    "direction": t.direction,
+                    "quantity": t.quantity,
+                    "entry_price": t.entry_price,
+                    "ledger": "paper",
+                })
+                continue
+            if (
+                live_mode
+                and not is_ctrader
+                and binance_snapshot_ok
+                and sym not in live_binance_syms
+            ):
+                continue
 
             if is_ctrader:
                 pid = str(getattr(t, "broker_position_id", "") or "").strip()
@@ -336,6 +430,19 @@ async def get_portfolio():
                 positions_value = margin_used if margin_used > 0 else total_notional
                 available = float(bal.get("available", balance - positions_value))
                 equity = float(bal.get("equity", balance + total_unrealized_pnl))
+                if equity <= 0 and (bal.get("error") or bal.get("broker") == "unverified"):
+                    snap = (
+                        db.query(PortfolioSnapshot)
+                        .filter(PortfolioSnapshot.mode == "live")
+                        .filter(PortfolioSnapshot.total_value > 0)
+                        .order_by(PortfolioSnapshot.id.desc())
+                        .first()
+                    )
+                    if snap:
+                        balance = snap.cash or snap.total_value or 0.0
+                        equity = snap.total_value or balance
+                        available = max(0.0, balance - (snap.positions_value or 0.0))
+                        positions_value = snap.positions_value or total_notional
         except Exception:
             snap = (
                 db.query(PortfolioSnapshot)
@@ -361,6 +468,7 @@ async def get_portfolio():
             "equity": round(equity, 2),
             "unrealized_pnl": round(total_unrealized_pnl, 2),
             "positions": positions,
+            "paper_positions": paper_positions,
             "total_pnl": total_pnl,
             "total_pnl_pct": pnl_pct,
             "positions_value": round(positions_value, 2),
@@ -855,6 +963,13 @@ async def get_positions():
         except Exception as exc:
             logger.warning("cTrader live-book sync for dashboard failed: %s", exc)
 
+        live_binance, binance_snapshot_ok = await _live_binance_book()
+        live_binance_syms = {
+            str(p.get("symbol") or "").upper()
+            for p in live_binance
+            if abs(float(p.get("quantity") or 0)) > 0
+        }
+
         open_trades = db.query(Trade).filter(Trade.status.in_(["open", "filled"])).all()
         non_ctrader_symbols = {
             t.symbol for t in open_trades if not _is_ctrader_trade(t)
@@ -874,10 +989,20 @@ async def get_positions():
             str(p.get("symbol") or "").upper(): p for p in live_ctrader if p.get("symbol")
         }
         positions = []
+        live_mode = get_trading_mode() == TradingMode.LIVE
         for t in open_trades:
             is_ctrader = _is_ctrader_trade(t)
             direction = str(t.direction or "BUY").upper()
             sym = str(t.symbol or "").upper()
+            if live_mode and not is_ctrader and is_binance_paper_fill(t):
+                continue
+            if (
+                live_mode
+                and not is_ctrader
+                and binance_snapshot_ok
+                and sym not in live_binance_syms
+            ):
+                continue
 
             if is_ctrader:
                 pid = str(getattr(t, "broker_position_id", "") or "").strip()

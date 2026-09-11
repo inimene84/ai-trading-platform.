@@ -167,11 +167,21 @@ def test_recency_weighted_decay_calculation(db_session):
         created_at=now - timedelta(minutes=5)
     )
     db_session.add(score_new)
+
+    score_mid = SentimentScore(
+        article_id=art.id,
+        pair="EURUSD",
+        sentiment="bullish",
+        score=0.40,
+        confidence=0.80,
+        created_at=now - timedelta(hours=1),
+    )
+    db_session.add(score_mid)
     db_session.commit()
 
     result = svc.get_pair_sentiment("EURUSD", window_hours=24, db=db_session)
     assert result["pair"] == "EURUSD"
-    assert result["article_count"] == 2
+    assert result["article_count"] == 3
     
     # Simple average would be (-0.80 + 0.60) / 2 = -0.10 (slightly bearish)
     # Recency weighted should heavily favor the 5-minute-old +0.60 score
@@ -180,7 +190,24 @@ def test_recency_weighted_decay_calculation(db_session):
     assert result["confidence"] > 0.0
 
 
-def test_sentiment_api_endpoints(auth_headers):
+def test_pair_sentiment_neutral_below_min_headlines(db_session, monkeypatch):
+    monkeypatch.setenv("SENTIMENT_MIN_HEADLINES", "3")
+    svc = NewsSentimentService()
+    art, _ = svc.upsert_article(source="test", external_id="one_hl", title="AVAX pump", db=db_session)
+    db_session.add(SentimentScore(
+        article_id=art.id, pair="AVAXUSDT", sentiment="bullish",
+        score=0.6, confidence=0.8, created_at=datetime.now(timezone.utc),
+    ))
+    db_session.commit()
+    result = svc.get_pair_sentiment("AVAXUSDT", window_hours=24, db=db_session)
+    assert result["article_count"] == 1
+    assert result["signal"] == "neutral"
+    assert result["recency_weighted_score"] == 0.0
+    assert "insufficient_headlines" in result.get("reason", "")
+
+
+def test_sentiment_api_endpoints(auth_headers, monkeypatch):
+    monkeypatch.setenv("SENTIMENT_MIN_HEADLINES", "1")
     import time
     client = TestClient(app)
 
@@ -233,6 +260,9 @@ async def test_decision_engine_sentiment_gate():
     from backend.strategies.market_regime import RegimeResult
 
     config = RiskConfig()
+    config.enable_jesse_ml = False
+    config.min_signal_strength = 0.45
+    config.min_edge_fee_mult = 0.0
     engine = DecisionEngine(risk_config=config)
     engine.enable_kronos = False
 
@@ -249,7 +279,7 @@ async def test_decision_engine_sentiment_gate():
     )
 
     # 1. When flag is disabled (default), BUY goes through
-    with patch.dict("os.environ", {"SENTIMENT_FILTER_ENABLED": "false"}):
+    with patch.dict("os.environ", {"SENTIMENT_FILTER_ENABLED": "false", "TRADING_MODE": "paper"}):
         with patch("backend.services.decision_engine.opinion_analyze", new=AsyncMock(return_value=None)):
             dec = await engine.evaluate_symbol(
                 symbol="EURUSD",

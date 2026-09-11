@@ -15,6 +15,12 @@ from sqlalchemy import or_
 
 from backend.database.models import Trade, PortfolioSnapshot
 from backend.services.influxdb_writer import influx
+from backend.services.ledger import (
+    ORPHAN_STATUS,
+    binance_position_key,
+    has_live_venue_id,
+    is_binance_paper_fill,
+)
 from backend.services.decision_engine import atr_from_bars
 from backend.services.multi_asset_bars import classify_symbol
 from backend.services.unified_trading import UnifiedTrading, UnifiedOrder, OrderSide, OrderType
@@ -255,19 +261,41 @@ class BrokerPositionSyncService:
                 .filter(Trade.status.in_(["open", "filled"]), owner)
                 .all()
             )
-            # An entirely empty exchange snapshot while SQL still has open
-            # trades is ambiguous: it may mean every position closed, but it
-            # also occurs on permissions/testnet/API degradation. Never flatten
-            # the whole DB and cancel every protective order from one empty
-            # response. A non-empty snapshot can safely reconcile symbols that
-            # are individually absent; an all-empty snapshot requires operator
-            # confirmation or a later explicit reconciliation path.
+            # An empty exchange snapshot after raise_on_error succeeded means
+            # the book is flat. Live rows with venue IDs stay open so a
+            # permissions/testnet glitch cannot cancel protective orders.
+            # Paper fills and rows with no venue ID are ghosts — quarantine
+            # them so risk/portfolio never manage phantom size.
             if db_trades and not broker_raw:
                 logger.error(
                     "Broker returned an empty positions snapshot while DB has "
-                    f"{len(db_trades)} open trade row(s); refusing bulk close/order cancellation"
+                    f"{len(db_trades)} open trade row(s); refusing live bulk close/"
+                    "order cancellation, quarantining unverified/paper rows"
                 )
-                return 0
+                quarantined = 0
+                now = datetime.now(timezone.utc)
+                for t in db_trades:
+                    if has_live_venue_id(t) and not is_binance_paper_fill(t):
+                        continue
+                    t.status = ORPHAN_STATUS
+                    t.closed_at = now
+                    t.exit_price = None
+                    t.pnl = None
+                    t.notes = (t.notes or "") + (
+                        " | Quarantined: absent from live Binance book "
+                        "(paper/unverified ledger row)"
+                    )
+                    remove_closed_pyramid_layer(pyramid_layers, t)
+                    sl_cooldown[t.symbol] = now
+                    quarantined += 1
+                    updated += 1
+                if quarantined:
+                    db.commit()
+                    logger.warning(
+                        f"Broker sync: quarantined {quarantined} ghost Binance row(s) "
+                        "on empty exchange snapshot"
+                    )
+                return updated
 
             # Adopt exchange legs that have no SQL row (manual entry, lost
             # response/DB commit, or restored DB). One aggregate row per symbol
@@ -357,6 +385,9 @@ class BrokerPositionSyncService:
                     strategy="exchange_reconciliation",
                     notes="Adopted orphan exchange position into DB",
                     exchange="binance_futures",
+                    broker="binance_futures",
+                    broker_position_id=binance_position_key(symbol, direction),
+                    mode="live",
                 )
                 db.add(orphan)
                 db_trades.append(orphan)
@@ -371,53 +402,67 @@ class BrokerPositionSyncService:
             cancelled_orphans: set = set()
 
             for t in db_trades:
-                if t.symbol not in broker_symbols:
-                    logger.info(f"  [ {t.symbol} ] Position not found in broker, marking as closed in DB.")
-
-                    if t.symbol not in exit_price_cache:
-                        exit_price_cache[t.symbol] = await asyncio.get_event_loop().run_in_executor(
-                            None, broker.get_exit_price, t.symbol
-                        )
-                    exit_px = exit_price_cache[t.symbol]
-
-                    t.status = "closed"
+                if t.symbol in broker_symbols:
+                    continue
+                if is_binance_paper_fill(t):
+                    t.status = ORPHAN_STATUS
                     t.closed_at = datetime.now(timezone.utc)
-                    if exit_px and t.entry_price and t.quantity and is_plausible_exit_price(t.entry_price, exit_px):
-                        t.exit_price = exit_px
-                        if str(t.direction).upper() == "BUY":
-                            t.pnl = round((exit_px - t.entry_price) * t.quantity, 4)
-                        else:
-                            t.pnl = round((t.entry_price - exit_px) * t.quantity, 4)
-                        t.notes = (t.notes or "") + " | Closed externally (sync)"
-                    else:
-                        # Bad or missing exit price: record the close honestly as
-                        # unknown P&L rather than fabricating a number from a
-                        # corrupt price (which previously produced phantom gains).
-                        if exit_px:
-                            logger.error(
-                                f"  [ {t.symbol} ] implausible exit price {exit_px} "
-                                f"vs entry {t.entry_price} — recording close with unknown P&L"
-                            )
-                        t.exit_price = None
-                        t.pnl = None
-                        t.notes = (t.notes or "") + (
-                            f" | Closed externally (sync; exit price unavailable/implausible raw={exit_px})"
-                        )
-
-                    if t.symbol not in cancelled_orphans:
-                        try:
-                            # Only strip orders when the exchange leg is verified flat.
-                            # Never cancel protective SL/TP for symbols that still have
-                            # a live position (pyramid layers may close one row at a time).
-                            if t.symbol not in broker_symbols:
-                                broker.cancel_all_orders(t.symbol)
-                            cancelled_orphans.add(t.symbol)
-                        except Exception as _ce:
-                            logger.warning(f"  [ {t.symbol} ] orphan order cleanup failed: {_ce}")
-
+                    t.exit_price = None
+                    t.pnl = None
+                    t.notes = (t.notes or "") + (
+                        " | Quarantined: paper ledger row missing from live Binance book"
+                    )
                     remove_closed_pyramid_layer(pyramid_layers, t)
                     sl_cooldown[t.symbol] = datetime.now(timezone.utc)
                     updated += 1
+                    continue
+
+                logger.info(f"  [ {t.symbol} ] Position not found in broker, marking as closed in DB.")
+
+                if t.symbol not in exit_price_cache:
+                    exit_price_cache[t.symbol] = await asyncio.get_event_loop().run_in_executor(
+                        None, broker.get_exit_price, t.symbol
+                    )
+                exit_px = exit_price_cache[t.symbol]
+
+                t.status = "closed"
+                t.closed_at = datetime.now(timezone.utc)
+                if exit_px and t.entry_price and t.quantity and is_plausible_exit_price(t.entry_price, exit_px):
+                    t.exit_price = exit_px
+                    if str(t.direction).upper() == "BUY":
+                        t.pnl = round((exit_px - t.entry_price) * t.quantity, 4)
+                    else:
+                        t.pnl = round((t.entry_price - exit_px) * t.quantity, 4)
+                    t.notes = (t.notes or "") + " | Closed externally (sync)"
+                else:
+                    # Bad or missing exit price: record the close honestly as
+                    # unknown P&L rather than fabricating a number from a
+                    # corrupt price (which previously produced phantom gains).
+                    if exit_px:
+                        logger.error(
+                            f"  [ {t.symbol} ] implausible exit price {exit_px} "
+                            f"vs entry {t.entry_price} — recording close with unknown P&L"
+                        )
+                    t.exit_price = None
+                    t.pnl = None
+                    t.notes = (t.notes or "") + (
+                        f" | Closed externally (sync; exit price unavailable/implausible raw={exit_px})"
+                    )
+
+                if t.symbol not in cancelled_orphans:
+                    try:
+                        # Only strip orders when the exchange leg is verified flat.
+                        # Never cancel protective SL/TP for symbols that still have
+                        # a live position (pyramid layers may close one row at a time).
+                        if t.symbol not in broker_symbols:
+                            broker.cancel_all_orders(t.symbol)
+                        cancelled_orphans.add(t.symbol)
+                    except Exception as _ce:
+                        logger.warning(f"  [ {t.symbol} ] orphan order cleanup failed: {_ce}")
+
+                remove_closed_pyramid_layer(pyramid_layers, t)
+                sl_cooldown[t.symbol] = datetime.now(timezone.utc)
+                updated += 1
 
             if updated > 0 or adopted > 0:
                 db.commit()
