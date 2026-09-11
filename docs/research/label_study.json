@@ -1,0 +1,2566 @@
+{
+  "deployed_geometry": {
+    "pt_mult": 5.5,
+    "sl_mult": 1.75,
+    "payoff_ratio": 3.142857142857143,
+    "breakeven_winrate": 0.2413793103448276
+  },
+  "bars_requested": 8000,
+  "symbols": [
+    {
+      "symbol": "BTC-USDT",
+      "csv": "BTC-USDT_1h.csv",
+      "n_bars_used": 8000,
+      "window_start": "2025-10-10 16:00:00+00:00",
+      "window_end": "2026-09-08 23:00:00+00:00",
+      "parity_check": {
+        "repo_dir": "/workspace/scratch/labelstudy/repo",
+        "geometry": "5.5/1.75",
+        "horizon": 24,
+        "n_events": 1976,
+        "label_mismatches": 0,
+        "touch_type_mismatches": 0,
+        "max_abs_ret_diff": 0.0,
+        "max_abs_trgt_diff": 0.0
+      },
+      "atr_scale_deployed_pt": {
+        "atr_over_price_pct": {
+          "p5": 0.25466259024008336,
+          "p25": 0.4501143876874791,
+          "p50": 0.621504228656577,
+          "p75": 0.8212432784316305,
+          "p95": 1.2104154257298418
+        },
+        "atr_over_price_mean_pct": 0.6646255098683449,
+        "pt_move_pct": {
+          "p5": 1.4006442463204585,
+          "p25": 2.4756291322811346,
+          "p50": 3.418273257611173,
+          "p75": 4.516838031373968,
+          "p95": 6.65728484151413
+        },
+        "pt_move_mean_pct": 3.655440304275897
+      },
+      "geometry_grid_h24": [
+        {
+          "pt_mult": 5.5,
+          "sl_mult": 1.75,
+          "horizon_bars": 24,
+          "payoff_ratio": 3.142857142857143,
+          "breakeven_winrate": 0.2413793103448276,
+          "martingale_up_first": 0.2413793103448276,
+          "n_events": 7976,
+          "frac_up_first": 0.09528585757271815,
+          "frac_down_first": 0.5748495486459378,
+          "frac_timeout": 0.32986459378134403,
+          "frac_up_first_given_touched": 0.1421889616463985,
+          "trainer_label_counts": {
+            "class1_bullish": 2672,
+            "class2_bearish": 4875,
+            "class0_neutral": 429
+          },
+          "trainer_label_fracs": {
+            "class1_bullish": 0.3350050150451354,
+            "class2_bearish": 0.6112086258776329,
+            "class0_neutral": 0.05378635907723169
+          },
+          "majority_class_share": 0.6112086258776329,
+          "up_bars_to_touch_median": 13.0,
+          "up_bars_to_touch_p90": 22.0,
+          "down_bars_to_touch_median": 7.0
+        },
+        {
+          "pt_mult": 4.0,
+          "sl_mult": 2.0,
+          "horizon_bars": 24,
+          "payoff_ratio": 2.0,
+          "breakeven_winrate": 0.3333333333333333,
+          "martingale_up_first": 0.3333333333333333,
+          "n_events": 7976,
+          "frac_up_first": 0.18543129388164495,
+          "frac_down_first": 0.5149197592778335,
+          "frac_timeout": 0.29964894684052157,
+          "frac_up_first_given_touched": 0.2647690655209452,
+          "trainer_label_counts": {
+            "class1_bullish": 2935,
+            "class2_bearish": 4479,
+            "class0_neutral": 562
+          },
+          "trainer_label_fracs": {
+            "class1_bullish": 0.3679789368104313,
+            "class2_bearish": 0.5615596790371113,
+            "class0_neutral": 0.07046138415245737
+          },
+          "majority_class_share": 0.5615596790371113,
+          "up_bars_to_touch_median": 11.0,
+          "up_bars_to_touch_p90": 21.0,
+          "down_bars_to_touch_median": 8.0
+        },
+        {
+          "pt_mult": 1.5,
+          "sl_mult": 1.5,
+          "horizon_bars": 24,
+          "payoff_ratio": 1.0,
+          "breakeven_winrate": 0.5,
+          "martingale_up_first": 0.5,
+          "n_events": 7976,
+          "frac_up_first": 0.46013039117352056,
+          "frac_down_first": 0.48332497492477433,
+          "frac_timeout": 0.05654463390170512,
+          "frac_up_first_given_touched": 0.4877076411960133,
+          "trainer_label_counts": {
+            "class1_bullish": 3852,
+            "class2_bearish": 3943,
+            "class0_neutral": 181
+          },
+          "trainer_label_fracs": {
+            "class1_bullish": 0.48294884653961884,
+            "class2_bearish": 0.49435807422266803,
+            "class0_neutral": 0.02269307923771314
+          },
+          "majority_class_share": 0.49435807422266803,
+          "up_bars_to_touch_median": 5.0,
+          "up_bars_to_touch_p90": 15.0,
+          "down_bars_to_touch_median": 5.0
+        },
+        {
+          "pt_mult": 2.0,
+          "sl_mult": 2.0,
+          "horizon_bars": 24,
+          "payoff_ratio": 1.0,
+          "breakeven_winrate": 0.5,
+          "martingale_up_first": 0.5,
+          "n_events": 7976,
+          "frac_up_first": 0.4270310932798395,
+          "frac_down_first": 0.44132397191574724,
+          "frac_timeout": 0.13164493480441325,
+          "frac_up_first_given_touched": 0.4917701414958129,
+          "trainer_label_counts": {
+            "class1_bullish": 3814,
+            "class2_bearish": 3756,
+            "class0_neutral": 406
+          },
+          "trainer_label_fracs": {
+            "class1_bullish": 0.47818455366098295,
+            "class2_bearish": 0.4709127382146439,
+            "class0_neutral": 0.05090270812437312
+          },
+          "majority_class_share": 0.47818455366098295,
+          "up_bars_to_touch_median": 7.0,
+          "up_bars_to_touch_p90": 18.0,
+          "down_bars_to_touch_median": 7.0
+        },
+        {
+          "pt_mult": 3.0,
+          "sl_mult": 2.0,
+          "horizon_bars": 24,
+          "payoff_ratio": 1.5,
+          "breakeven_winrate": 0.4,
+          "martingale_up_first": 0.4,
+          "n_events": 7976,
+          "frac_up_first": 0.28284854563691075,
+          "frac_down_first": 0.488716148445336,
+          "frac_timeout": 0.22843530591775327,
+          "frac_up_first_given_touched": 0.3665908352291193,
+          "trainer_label_counts": {
+            "class1_bullish": 3241,
+            "class2_bearish": 4221,
+            "class0_neutral": 514
+          },
+          "trainer_label_fracs": {
+            "class1_bullish": 0.4063440320962889,
+            "class2_bearish": 0.5292126379137412,
+            "class0_neutral": 0.0644433299899699
+          },
+          "majority_class_share": 0.5292126379137412,
+          "up_bars_to_touch_median": 10.0,
+          "up_bars_to_touch_p90": 20.0,
+          "down_bars_to_touch_median": 7.0
+        },
+        {
+          "pt_mult": 2.0,
+          "sl_mult": 3.0,
+          "horizon_bars": 24,
+          "payoff_ratio": 0.6666666666666666,
+          "breakeven_winrate": 0.6,
+          "martingale_up_first": 0.6,
+          "n_events": 7976,
+          "frac_up_first": 0.46727683049147445,
+          "frac_down_first": 0.313691073219659,
+          "frac_timeout": 0.2190320962888666,
+          "frac_up_first_given_touched": 0.5983303901107722,
+          "trainer_label_counts": {
+            "class1_bullish": 4088,
+            "class2_bearish": 3118,
+            "class0_neutral": 770
+          },
+          "trainer_label_fracs": {
+            "class1_bullish": 0.5125376128385155,
+            "class2_bearish": 0.39092276830491474,
+            "class0_neutral": 0.09653961885656971
+          },
+          "majority_class_share": 0.5125376128385155,
+          "up_bars_to_touch_median": 8.0,
+          "up_bars_to_touch_p90": 19.0,
+          "down_bars_to_touch_median": 10.0
+        },
+        {
+          "pt_mult": 3.0,
+          "sl_mult": 3.0,
+          "horizon_bars": 24,
+          "payoff_ratio": 1.0,
+          "breakeven_winrate": 0.5,
+          "martingale_up_first": 0.5,
+          "n_events": 7976,
+          "frac_up_first": 0.3088014042126379,
+          "frac_down_first": 0.34904714142427284,
+          "frac_timeout": 0.34215145436308925,
+          "frac_up_first_given_touched": 0.4694110920526015,
+          "trainer_label_counts": {
+            "class1_bullish": 3421,
+            "class2_bearish": 3556,
+            "class0_neutral": 999
+          },
+          "trainer_label_fracs": {
+            "class1_bullish": 0.4289117352056169,
+            "class2_bearish": 0.44583751253761283,
+            "class0_neutral": 0.12525075225677032
+          },
+          "majority_class_share": 0.44583751253761283,
+          "up_bars_to_touch_median": 10.0,
+          "up_bars_to_touch_p90": 20.0,
+          "down_bars_to_touch_median": 10.0
+        },
+        {
+          "pt_mult": 4.0,
+          "sl_mult": 4.0,
+          "horizon_bars": 24,
+          "payoff_ratio": 1.0,
+          "breakeven_winrate": 0.5,
+          "martingale_up_first": 0.5,
+          "n_events": 7976,
+          "frac_up_first": 0.2142678034102307,
+          "frac_down_first": 0.25175526579739216,
+          "frac_timeout": 0.5339769307923772,
+          "frac_up_first_given_touched": 0.45977939198278184,
+          "trainer_label_counts": {
+            "class1_bullish": 3102,
+            "class2_bearish": 3273,
+            "class0_neutral": 1601
+          },
+          "trainer_label_fracs": {
+            "class1_bullish": 0.38891675025075223,
+            "class2_bearish": 0.41035606820461384,
+            "class0_neutral": 0.2007271815446339
+          },
+          "majority_class_share": 0.41035606820461384,
+          "up_bars_to_touch_median": 12.0,
+          "up_bars_to_touch_p90": 22.0,
+          "down_bars_to_touch_median": 13.0
+        },
+        {
+          "pt_mult": 5.5,
+          "sl_mult": 5.5,
+          "horizon_bars": 24,
+          "payoff_ratio": 1.0,
+          "breakeven_winrate": 0.5,
+          "martingale_up_first": 0.5,
+          "n_events": 7976,
+          "frac_up_first": 0.12800902708124373,
+          "frac_down_first": 0.13365095285857573,
+          "frac_timeout": 0.7383400200601805,
+          "frac_up_first_given_touched": 0.4892189746046957,
+          "trainer_label_counts": {
+            "class1_bullish": 2763,
+            "class2_bearish": 2904,
+            "class0_neutral": 2309
+          },
+          "trainer_label_fracs": {
+            "class1_bullish": 0.34641424272818455,
+            "class2_bearish": 0.3640922768304915,
+            "class0_neutral": 0.28949348044132395
+          },
+          "majority_class_share": 0.3640922768304915,
+          "up_bars_to_touch_median": 14.0,
+          "up_bars_to_touch_p90": 23.0,
+          "down_bars_to_touch_median": 14.0
+        }
+      ],
+      "horizon_sweep_deployed": [
+        {
+          "pt_mult": 5.5,
+          "sl_mult": 1.75,
+          "horizon_bars": 12,
+          "payoff_ratio": 3.142857142857143,
+          "breakeven_winrate": 0.2413793103448276,
+          "martingale_up_first": 0.2413793103448276,
+          "n_events": 7988,
+          "frac_up_first": 0.04469203805708563,
+          "frac_down_first": 0.4287681522283425,
+          "frac_timeout": 0.5265398097145718,
+          "frac_up_first_given_touched": 0.09439450026441036,
+          "trainer_label_counts": {
+            "class1_bullish": 2902,
+            "class2_bearish": 4146,
+            "class0_neutral": 940
+          },
+          "trainer_label_fracs": {
+            "class1_bullish": 0.3632949424136204,
+            "class2_bearish": 0.5190285428142213,
+            "class0_neutral": 0.11767651477215824
+          },
+          "majority_class_share": 0.5190285428142213,
+          "up_bars_to_touch_median": 8.0,
+          "up_bars_to_touch_p90": 12.0,
+          "down_bars_to_touch_median": 5.0
+        },
+        {
+          "pt_mult": 5.5,
+          "sl_mult": 1.75,
+          "horizon_bars": 24,
+          "payoff_ratio": 3.142857142857143,
+          "breakeven_winrate": 0.2413793103448276,
+          "martingale_up_first": 0.2413793103448276,
+          "n_events": 7976,
+          "frac_up_first": 0.09528585757271815,
+          "frac_down_first": 0.5748495486459378,
+          "frac_timeout": 0.32986459378134403,
+          "frac_up_first_given_touched": 0.1421889616463985,
+          "trainer_label_counts": {
+            "class1_bullish": 2672,
+            "class2_bearish": 4875,
+            "class0_neutral": 429
+          },
+          "trainer_label_fracs": {
+            "class1_bullish": 0.3350050150451354,
+            "class2_bearish": 0.6112086258776329,
+            "class0_neutral": 0.05378635907723169
+          },
+          "majority_class_share": 0.6112086258776329,
+          "up_bars_to_touch_median": 13.0,
+          "up_bars_to_touch_p90": 22.0,
+          "down_bars_to_touch_median": 7.0
+        },
+        {
+          "pt_mult": 5.5,
+          "sl_mult": 1.75,
+          "horizon_bars": 48,
+          "payoff_ratio": 3.142857142857143,
+          "breakeven_winrate": 0.2413793103448276,
+          "martingale_up_first": 0.2413793103448276,
+          "n_events": 7952,
+          "frac_up_first": 0.16260060362173037,
+          "frac_down_first": 0.6642354124748491,
+          "frac_timeout": 0.17316398390342053,
+          "frac_up_first_given_touched": 0.19665399239543727,
+          "trainer_label_counts": {
+            "class1_bullish": 2395,
+            "class2_bearish": 5377,
+            "class0_neutral": 180
+          },
+          "trainer_label_fracs": {
+            "class1_bullish": 0.301182092555332,
+            "class2_bearish": 0.676182092555332,
+            "class0_neutral": 0.022635814889336015
+          },
+          "majority_class_share": 0.676182092555332,
+          "up_bars_to_touch_median": 21.0,
+          "up_bars_to_touch_p90": 42.0,
+          "down_bars_to_touch_median": 9.0
+        },
+        {
+          "pt_mult": 5.5,
+          "sl_mult": 1.75,
+          "horizon_bars": 96,
+          "payoff_ratio": 3.142857142857143,
+          "breakeven_winrate": 0.2413793103448276,
+          "martingale_up_first": 0.2413793103448276,
+          "n_events": 7904,
+          "frac_up_first": 0.22178643724696356,
+          "frac_down_first": 0.7273532388663968,
+          "frac_timeout": 0.05086032388663968,
+          "frac_up_first_given_touched": 0.2336710210610504,
+          "trainer_label_counts": {
+            "class1_bullish": 2062,
+            "class2_bearish": 5778,
+            "class0_neutral": 64
+          },
+          "trainer_label_fracs": {
+            "class1_bullish": 0.2608805668016194,
+            "class2_bearish": 0.7310222672064778,
+            "class0_neutral": 0.008097165991902834
+          },
+          "majority_class_share": 0.7310222672064778,
+          "up_bars_to_touch_median": 28.0,
+          "up_bars_to_touch_p90": 75.0,
+          "down_bars_to_touch_median": 10.0
+        },
+        {
+          "pt_mult": 5.5,
+          "sl_mult": 1.75,
+          "horizon_bars": 168,
+          "payoff_ratio": 3.142857142857143,
+          "breakeven_winrate": 0.2413793103448276,
+          "martingale_up_first": 0.2413793103448276,
+          "n_events": 7832,
+          "frac_up_first": 0.23621041879468846,
+          "frac_down_first": 0.7480847803881512,
+          "frac_timeout": 0.01570480081716037,
+          "frac_up_first_given_touched": 0.23997924503826695,
+          "trainer_label_counts": {
+            "class1_bullish": 1959,
+            "class2_bearish": 5863,
+            "class0_neutral": 10
+          },
+          "trainer_label_fracs": {
+            "class1_bullish": 0.2501276813074566,
+            "class2_bearish": 0.7485955056179775,
+            "class0_neutral": 0.0012768130745658835
+          },
+          "majority_class_share": 0.7485955056179775,
+          "up_bars_to_touch_median": 31.0,
+          "up_bars_to_touch_p90": 89.0,
+          "down_bars_to_touch_median": 10.0
+        },
+        {
+          "pt_mult": 5.5,
+          "sl_mult": 1.75,
+          "horizon_bars": 336,
+          "payoff_ratio": 3.142857142857143,
+          "breakeven_winrate": 0.2413793103448276,
+          "martingale_up_first": 0.2413793103448276,
+          "n_events": 7664,
+          "frac_up_first": 0.24125782881002086,
+          "frac_down_first": 0.7528705636743215,
+          "frac_timeout": 0.00587160751565762,
+          "frac_up_first_given_touched": 0.2426827667672923,
+          "trainer_label_counts": {
+            "class1_bullish": 1893,
+            "class2_bearish": 5771,
+            "class0_neutral": 0
+          },
+          "trainer_label_fracs": {
+            "class1_bullish": 0.24699895615866388,
+            "class2_bearish": 0.7530010438413361,
+            "class0_neutral": 0.0
+          },
+          "majority_class_share": 0.7530010438413361,
+          "up_bars_to_touch_median": 33.0,
+          "up_bars_to_touch_p90": 94.0,
+          "down_bars_to_touch_median": 10.0
+        }
+      ],
+      "excursion_by_horizon": [
+        {
+          "horizon_bars": 12,
+          "n": 7988,
+          "mfe_atr_quantiles": {
+            "p10": 0.2473048768054123,
+            "p25": 0.6189746718882388,
+            "p50": 1.3402909288060227,
+            "p75": 2.5817891421279677,
+            "p90": 4.2506690909567135,
+            "p95": 5.600679902367198,
+            "p99": 8.771371380657252
+          },
+          "mae_atr_quantiles": {
+            "p10": 0.27547787664819673,
+            "p25": 0.681587645717755,
+            "p50": 1.4544665450464616,
+            "p75": 2.776534350628605,
+            "p90": 4.434218577780771,
+            "p95": 5.86789030751226,
+            "p99": 9.503108158770544
+          },
+          "frac_mfe_reaches_pt": 0.052954431647471205,
+          "frac_mae_reaches_sl": 0.4310215322984477,
+          "frac_both_reachable": 0.010515773660490736,
+          "frac_neither_reachable": 0.5265398097145718
+        },
+        {
+          "horizon_bars": 24,
+          "n": 7976,
+          "mfe_atr_quantiles": {
+            "p10": 0.35947256957890295,
+            "p25": 0.921998249480591,
+            "p50": 2.031246055817944,
+            "p75": 3.7523305609776045,
+            "p90": 6.198186355067174,
+            "p95": 8.238199759698245,
+            "p99": 13.5612691607106
+          },
+          "mae_atr_quantiles": {
+            "p10": 0.3959584188525828,
+            "p25": 0.9811123757745549,
+            "p50": 2.206790611287662,
+            "p75": 4.1475718847472685,
+            "p90": 6.235146151242741,
+            "p95": 8.417969762247235,
+            "p99": 14.684394208334577
+          },
+          "frac_mfe_reaches_pt": 0.12988966900702106,
+          "frac_mae_reaches_sl": 0.583876629889669,
+          "frac_both_reachable": 0.043630892678034106,
+          "frac_neither_reachable": 0.32986459378134403
+        },
+        {
+          "horizon_bars": 48,
+          "n": 7952,
+          "mfe_atr_quantiles": {
+            "p10": 0.5088711509643689,
+            "p25": 1.3313846717693114,
+            "p50": 2.903162310079166,
+            "p75": 5.659139300594774,
+            "p90": 9.344319411023442,
+            "p95": 12.092960518217188,
+            "p99": 19.38073887796766
+          },
+          "mae_atr_quantiles": {
+            "p10": 0.5925050723281918,
+            "p25": 1.370901754018683,
+            "p50": 3.242529825660844,
+            "p75": 5.915471037439344,
+            "p90": 10.037065356988613,
+            "p95": 13.579913707886984,
+            "p99": 21.230456921777357
+          },
+          "frac_mfe_reaches_pt": 0.26094064386317906,
+          "frac_mae_reaches_sl": 0.6903923541247485,
+          "frac_both_reachable": 0.12449698189134809,
+          "frac_neither_reachable": 0.17316398390342053
+        },
+        {
+          "horizon_bars": 96,
+          "n": 7904,
+          "mfe_atr_quantiles": {
+            "p10": 0.6847783431345154,
+            "p25": 1.8522112141220064,
+            "p50": 4.2199533765901265,
+            "p75": 7.9622806566384146,
+            "p90": 11.615550143241702,
+            "p95": 15.206840087911607,
+            "p99": 61.2310041160251
+          },
+          "mae_atr_quantiles": {
+            "p10": 0.8923657786119377,
+            "p25": 2.119239846749384,
+            "p50": 4.7702192140400035,
+            "p75": 8.619424257517391,
+            "p90": 14.020925042179236,
+            "p95": 18.98250751710434,
+            "p99": 34.497454682424284
+          },
+          "frac_mfe_reaches_pt": 0.40865384615384615,
+          "frac_mae_reaches_sl": 0.7903593117408907,
+          "frac_both_reachable": 0.24987348178137653,
+          "frac_neither_reachable": 0.05086032388663968
+        },
+        {
+          "horizon_bars": 168,
+          "n": 7832,
+          "mfe_atr_quantiles": {
+            "p10": 0.9552322636184089,
+            "p25": 2.44811887697038,
+            "p50": 5.654727362984936,
+            "p75": 9.62033839356876,
+            "p90": 14.748674681848964,
+            "p95": 20.29224459664395,
+            "p99": 79.4170756997791
+          },
+          "mae_atr_quantiles": {
+            "p10": 1.1937879301872063,
+            "p25": 2.9536973974930687,
+            "p50": 6.123981246443719,
+            "p75": 11.467961454047975,
+            "p90": 19.49514640623952,
+            "p95": 26.209985954725152,
+            "p99": 45.41206869243366
+          },
+          "frac_mfe_reaches_pt": 0.5097037793667007,
+          "frac_mae_reaches_sl": 0.8512512768130746,
+          "frac_both_reachable": 0.37665985699693566,
+          "frac_neither_reachable": 0.01570480081716037
+        },
+        {
+          "horizon_bars": 336,
+          "n": 7664,
+          "mfe_atr_quantiles": {
+            "p10": 1.1972615794436996,
+            "p25": 3.0939439891292433,
+            "p50": 7.280821510508254,
+            "p75": 12.851061740678288,
+            "p90": 21.948271803443067,
+            "p95": 42.982744953694116,
+            "p99": 127.04171985562029
+          },
+          "mae_atr_quantiles": {
+            "p10": 1.562794882737375,
+            "p25": 3.934944870861561,
+            "p50": 8.357324382188297,
+            "p75": 16.17355244482817,
+            "p90": 31.279068127357238,
+            "p95": 45.217671071021364,
+            "p99": 79.68365183384992
+          },
+          "frac_mfe_reaches_pt": 0.597990605427975,
+          "frac_mae_reaches_sl": 0.8887004175365344,
+          "frac_both_reachable": 0.492562630480167,
+          "frac_neither_reachable": 0.00587160751565762
+        }
+      ],
+      "up_bars_to_touch_deployed": {
+        "horizon_bars": 336,
+        "n_up_first": 1849,
+        "quantiles": {
+          "p10": 8.0,
+          "p25": 16.0,
+          "p50": 33.0,
+          "p75": 64.0,
+          "p90": 94.0
+        },
+        "frac_of_all_events": 0.24125782881002086
+      },
+      "conditional_rates": {
+        "h24": {
+          "horizon_bars": 24,
+          "base_up_first_rate": 0.09528585757271815,
+          "features": {
+            "rsi_14": {
+              "up_first_rate_by_quintile": [
+                0.07648902821316614,
+                0.08463949843260188,
+                0.09216300940438872,
+                0.11410658307210031,
+                0.10909090909090909
+              ],
+              "counts": [
+                1595,
+                1595,
+                1595,
+                1595,
+                1595
+              ],
+              "spread_pp": 3.761755485893417
+            },
+            "close_over_ema50": {
+              "up_first_rate_by_quintile": [
+                0.05576441102756892,
+                0.10031347962382445,
+                0.13981191222570533,
+                0.12288401253918495,
+                0.05768025078369906
+              ],
+              "counts": [
+                1596,
+                1595,
+                1595,
+                1595,
+                1595
+              ],
+              "spread_pp": 8.40475011981364
+            },
+            "atr_over_price": {
+              "up_first_rate_by_quintile": [
+                0.16791979949874686,
+                0.09341692789968652,
+                0.06896551724137931,
+                0.08150470219435736,
+                0.064576802507837
+              ],
+              "counts": [
+                1596,
+                1595,
+                1595,
+                1595,
+                1595
+              ],
+              "spread_pp": 10.334299699090986
+            },
+            "ret_24": {
+              "up_first_rate_by_quintile": [
+                0.054682589566310495,
+                0.10817610062893082,
+                0.1270440251572327,
+                0.1220125786163522,
+                0.06599622878692646
+              ],
+              "counts": [
+                1591,
+                1590,
+                1590,
+                1590,
+                1591
+              ],
+              "spread_pp": 7.23614355909222
+            }
+          }
+        },
+        "h96": {
+          "horizon_bars": 96,
+          "base_up_first_rate": 0.22178643724696356,
+          "features": {
+            "rsi_14": {
+              "up_first_rate_by_quintile": [
+                0.1941808981657179,
+                0.22151898734177214,
+                0.23845667299177736,
+                0.24240506329113923,
+                0.2125237191650854
+              ],
+              "counts": [
+                1581,
+                1580,
+                1581,
+                1580,
+                1581
+              ],
+              "spread_pp": 4.822416512542133
+            },
+            "close_over_ema50": {
+              "up_first_rate_by_quintile": [
+                0.16002530044275776,
+                0.2618595825426945,
+                0.27531645569620256,
+                0.2530044275774826,
+                0.15876027830487033
+              ],
+              "counts": [
+                1581,
+                1581,
+                1580,
+                1581,
+                1581
+              ],
+              "spread_pp": 11.655617739133223
+            },
+            "atr_over_price": {
+              "up_first_rate_by_quintile": [
+                0.30676786843769766,
+                0.20430107526881722,
+                0.21455696202531646,
+                0.21821631878557876,
+                0.1650853889943074
+              ],
+              "counts": [
+                1581,
+                1581,
+                1580,
+                1581,
+                1581
+              ],
+              "spread_pp": 14.168247944339024
+            },
+            "ret_24": {
+              "up_first_rate_by_quintile": [
+                0.16941624365482233,
+                0.26649746192893403,
+                0.25444162436548223,
+                0.24238578680203046,
+                0.17956852791878172
+              ],
+              "counts": [
+                1576,
+                1576,
+                1576,
+                1576,
+                1576
+              ],
+              "spread_pp": 9.708121827411171
+            }
+          }
+        }
+      },
+      "meta_label_deployed": {
+        "n_primary_events_total": 450,
+        "by_horizon": [
+          {
+            "horizon_bars": 12,
+            "n_events": 450,
+            "meta_label_pos_rate": 0.035555555555555556,
+            "frac_sl": 0.43333333333333335,
+            "frac_timeout": 0.5311111111111111,
+            "breakeven_winrate": 0.2413793103448276,
+            "expectancy_atr_per_trade": -0.09434185644656683,
+            "expectancy_pct_per_trade": -0.10597603613843089
+          },
+          {
+            "horizon_bars": 24,
+            "n_events": 449,
+            "meta_label_pos_rate": 0.0935412026726058,
+            "frac_sl": 0.6057906458797327,
+            "frac_timeout": 0.30066815144766146,
+            "breakeven_winrate": 0.2413793103448276,
+            "expectancy_atr_per_trade": -0.18545608286578416,
+            "expectancy_pct_per_trade": -0.13975135408196798
+          },
+          {
+            "horizon_bars": 48,
+            "n_events": 442,
+            "meta_label_pos_rate": 0.1832579185520362,
+            "frac_sl": 0.6719457013574661,
+            "frac_timeout": 0.14479638009049775,
+            "breakeven_winrate": 0.2413793103448276,
+            "expectancy_atr_per_trade": 0.055560586274739684,
+            "expectancy_pct_per_trade": 0.0006839314576019525
+          },
+          {
+            "horizon_bars": 96,
+            "n_events": 430,
+            "meta_label_pos_rate": 0.24186046511627907,
+            "frac_sl": 0.7395348837209302,
+            "frac_timeout": 0.018604651162790697,
+            "breakeven_winrate": 0.2413793103448276,
+            "expectancy_atr_per_trade": 0.04656357002306598,
+            "expectancy_pct_per_trade": -0.003117875139032866
+          },
+          {
+            "horizon_bars": 168,
+            "n_events": 425,
+            "meta_label_pos_rate": 0.2564705882352941,
+            "frac_sl": 0.7435294117647059,
+            "frac_timeout": 0.0,
+            "breakeven_winrate": 0.2413793103448276,
+            "expectancy_atr_per_trade": 0.10941176470588147,
+            "expectancy_pct_per_trade": 0.0593499516165579
+          },
+          {
+            "horizon_bars": 336,
+            "n_events": 403,
+            "meta_label_pos_rate": 0.26054590570719605,
+            "frac_sl": 0.739454094292804,
+            "frac_timeout": 0.0,
+            "breakeven_winrate": 0.2413793103448276,
+            "expectancy_atr_per_trade": 0.13895781637717042,
+            "expectancy_pct_per_trade": 0.07835609443425043
+          }
+        ]
+      }
+    },
+    {
+      "symbol": "ETH-USDT",
+      "csv": "ETH-USDT_1h.csv",
+      "n_bars_used": 8000,
+      "window_start": "2025-10-11 16:00:00+00:00",
+      "window_end": "2026-09-09 23:00:00+00:00",
+      "parity_check": {
+        "repo_dir": "/workspace/scratch/labelstudy/repo",
+        "geometry": "5.5/1.75",
+        "horizon": 24,
+        "n_events": 1976,
+        "label_mismatches": 0,
+        "touch_type_mismatches": 0,
+        "max_abs_ret_diff": 0.0,
+        "max_abs_trgt_diff": 0.0
+      },
+      "atr_scale_deployed_pt": {
+        "atr_over_price_pct": {
+          "p5": 0.35145217483337965,
+          "p25": 0.6175515027135912,
+          "p50": 0.8448973167308657,
+          "p75": 1.1192498044913628,
+          "p95": 1.6919143514551407
+        },
+        "atr_over_price_mean_pct": 0.9163173302134311,
+        "pt_move_pct": {
+          "p5": 1.9329869615835882,
+          "p25": 3.3965332649247513,
+          "p50": 4.646935242019761,
+          "p75": 6.155873924702495,
+          "p95": 9.305528933003274
+        },
+        "pt_move_mean_pct": 5.039745316173871
+      },
+      "geometry_grid_h24": [
+        {
+          "pt_mult": 5.5,
+          "sl_mult": 1.75,
+          "horizon_bars": 24,
+          "payoff_ratio": 3.142857142857143,
+          "breakeven_winrate": 0.2413793103448276,
+          "martingale_up_first": 0.2413793103448276,
+          "n_events": 7976,
+          "frac_up_first": 0.10581745235707121,
+          "frac_down_first": 0.5620611835506519,
+          "frac_timeout": 0.3321213640922768,
+          "frac_up_first_given_touched": 0.15843814529754083,
+          "trainer_label_counts": {
+            "class1_bullish": 2751,
+            "class2_bearish": 4747,
+            "class0_neutral": 478
+          },
+          "trainer_label_fracs": {
+            "class1_bullish": 0.3449097291875627,
+            "class2_bearish": 0.595160481444333,
+            "class0_neutral": 0.059929789368104315
+          },
+          "majority_class_share": 0.595160481444333,
+          "up_bars_to_touch_median": 13.0,
+          "up_bars_to_touch_p90": 22.0,
+          "down_bars_to_touch_median": 7.0
+        },
+        {
+          "pt_mult": 4.0,
+          "sl_mult": 2.0,
+          "horizon_bars": 24,
+          "payoff_ratio": 2.0,
+          "breakeven_winrate": 0.3333333333333333,
+          "martingale_up_first": 0.3333333333333333,
+          "n_events": 7976,
+          "frac_up_first": 0.1950852557673019,
+          "frac_down_first": 0.49648946840521563,
+          "frac_timeout": 0.30842527582748247,
+          "frac_up_first_given_touched": 0.2820884699057288,
+          "trainer_label_counts": {
+            "class1_bullish": 3079,
+            "class2_bearish": 4297,
+            "class0_neutral": 600
+          },
+          "trainer_label_fracs": {
+            "class1_bullish": 0.3860330992978937,
+            "class2_bearish": 0.5387412236710131,
+            "class0_neutral": 0.07522567703109329
+          },
+          "majority_class_share": 0.5387412236710131,
+          "up_bars_to_touch_median": 11.0,
+          "up_bars_to_touch_p90": 21.0,
+          "down_bars_to_touch_median": 8.0
+        },
+        {
+          "pt_mult": 1.5,
+          "sl_mult": 1.5,
+          "horizon_bars": 24,
+          "payoff_ratio": 1.0,
+          "breakeven_winrate": 0.5,
+          "martingale_up_first": 0.5,
+          "n_events": 7976,
+          "frac_up_first": 0.4665245737211635,
+          "frac_down_first": 0.4794383149448345,
+          "frac_timeout": 0.054037111334002005,
+          "frac_up_first_given_touched": 0.4931742876076872,
+          "trainer_label_counts": {
+            "class1_bullish": 3908,
+            "class2_bearish": 3917,
+            "class0_neutral": 151
+          },
+          "trainer_label_fracs": {
+            "class1_bullish": 0.4899699097291876,
+            "class2_bearish": 0.49109829488465395,
+            "class0_neutral": 0.018931795386158475
+          },
+          "majority_class_share": 0.49109829488465395,
+          "up_bars_to_touch_median": 5.0,
+          "up_bars_to_touch_p90": 16.0,
+          "down_bars_to_touch_median": 5.0
+        },
+        {
+          "pt_mult": 2.0,
+          "sl_mult": 2.0,
+          "horizon_bars": 24,
+          "payoff_ratio": 1.0,
+          "breakeven_winrate": 0.5,
+          "martingale_up_first": 0.5,
+          "n_events": 7976,
+          "frac_up_first": 0.43367602808425276,
+          "frac_down_first": 0.4315446339017051,
+          "frac_timeout": 0.13477933801404213,
+          "frac_up_first_given_touched": 0.5012317055499202,
+          "trainer_label_counts": {
+            "class1_bullish": 3890,
+            "class2_bearish": 3671,
+            "class0_neutral": 415
+          },
+          "trainer_label_fracs": {
+            "class1_bullish": 0.4877131394182548,
+            "class2_bearish": 0.4602557673019057,
+            "class0_neutral": 0.05203109327983952
+          },
+          "majority_class_share": 0.4877131394182548,
+          "up_bars_to_touch_median": 7.0,
+          "up_bars_to_touch_p90": 18.0,
+          "down_bars_to_touch_median": 7.0
+        },
+        {
+          "pt_mult": 3.0,
+          "sl_mult": 2.0,
+          "horizon_bars": 24,
+          "payoff_ratio": 1.5,
+          "breakeven_winrate": 0.4,
+          "martingale_up_first": 0.4,
+          "n_events": 7976,
+          "frac_up_first": 0.2909979939819458,
+          "frac_down_first": 0.47567703109327986,
+          "frac_timeout": 0.23332497492477433,
+          "frac_up_first_given_touched": 0.37955846279640226,
+          "trainer_label_counts": {
+            "class1_bullish": 3352,
+            "class2_bearish": 4084,
+            "class0_neutral": 540
+          },
+          "trainer_label_fracs": {
+            "class1_bullish": 0.4202607823470411,
+            "class2_bearish": 0.5120361083249749,
+            "class0_neutral": 0.06770310932798396
+          },
+          "majority_class_share": 0.5120361083249749,
+          "up_bars_to_touch_median": 9.0,
+          "up_bars_to_touch_p90": 20.0,
+          "down_bars_to_touch_median": 7.0
+        },
+        {
+          "pt_mult": 2.0,
+          "sl_mult": 3.0,
+          "horizon_bars": 24,
+          "payoff_ratio": 0.6666666666666666,
+          "breakeven_winrate": 0.6,
+          "martingale_up_first": 0.6,
+          "n_events": 7976,
+          "frac_up_first": 0.4760531594784353,
+          "frac_down_first": 0.30077733199598794,
+          "frac_timeout": 0.22316950852557674,
+          "frac_up_first_given_touched": 0.6128147191736604,
+          "trainer_label_counts": {
+            "class1_bullish": 4168,
+            "class2_bearish": 2986,
+            "class0_neutral": 822
+          },
+          "trainer_label_fracs": {
+            "class1_bullish": 0.522567703109328,
+            "class2_bearish": 0.3743731193580742,
+            "class0_neutral": 0.10305917753259779
+          },
+          "majority_class_share": 0.522567703109328,
+          "up_bars_to_touch_median": 8.0,
+          "up_bars_to_touch_p90": 19.0,
+          "down_bars_to_touch_median": 9.0
+        },
+        {
+          "pt_mult": 3.0,
+          "sl_mult": 3.0,
+          "horizon_bars": 24,
+          "payoff_ratio": 1.0,
+          "breakeven_winrate": 0.5,
+          "martingale_up_first": 0.5,
+          "n_events": 7976,
+          "frac_up_first": 0.31732698094282846,
+          "frac_down_first": 0.3304914744232698,
+          "frac_timeout": 0.3521815446339017,
+          "frac_up_first_given_touched": 0.489839365202245,
+          "trainer_label_counts": {
+            "class1_bullish": 3538,
+            "class2_bearish": 3369,
+            "class0_neutral": 1069
+          },
+          "trainer_label_fracs": {
+            "class1_bullish": 0.44358074222668004,
+            "class2_bearish": 0.42239217652958877,
+            "class0_neutral": 0.1340270812437312
+          },
+          "majority_class_share": 0.44358074222668004,
+          "up_bars_to_touch_median": 10.0,
+          "up_bars_to_touch_p90": 21.0,
+          "down_bars_to_touch_median": 10.0
+        },
+        {
+          "pt_mult": 4.0,
+          "sl_mult": 4.0,
+          "horizon_bars": 24,
+          "payoff_ratio": 1.0,
+          "breakeven_winrate": 0.5,
+          "martingale_up_first": 0.5,
+          "n_events": 7976,
+          "frac_up_first": 0.21965897693079237,
+          "frac_down_first": 0.2305667001003009,
+          "frac_timeout": 0.5497743229689067,
+          "frac_up_first_given_touched": 0.4878863826232247,
+          "trainer_label_counts": {
+            "class1_bullish": 3141,
+            "class2_bearish": 3131,
+            "class0_neutral": 1704
+          },
+          "trainer_label_fracs": {
+            "class1_bullish": 0.3938064192577733,
+            "class2_bearish": 0.39255265797392175,
+            "class0_neutral": 0.2136409227683049
+          },
+          "majority_class_share": 0.3938064192577733,
+          "up_bars_to_touch_median": 12.0,
+          "up_bars_to_touch_p90": 21.0,
+          "down_bars_to_touch_median": 12.0
+        },
+        {
+          "pt_mult": 5.5,
+          "sl_mult": 5.5,
+          "horizon_bars": 24,
+          "payoff_ratio": 1.0,
+          "breakeven_winrate": 0.5,
+          "martingale_up_first": 0.5,
+          "n_events": 7976,
+          "frac_up_first": 0.13164493480441325,
+          "frac_down_first": 0.12700601805416248,
+          "frac_timeout": 0.7413490471414242,
+          "frac_up_first_given_touched": 0.5089675230247213,
+          "trainer_label_counts": {
+            "class1_bullish": 2683,
+            "class2_bearish": 2768,
+            "class0_neutral": 2525
+          },
+          "trainer_label_fracs": {
+            "class1_bullish": 0.33638415245737213,
+            "class2_bearish": 0.34704112337011034,
+            "class0_neutral": 0.31657472417251753
+          },
+          "majority_class_share": 0.34704112337011034,
+          "up_bars_to_touch_median": 14.0,
+          "up_bars_to_touch_p90": 22.0,
+          "down_bars_to_touch_median": 14.0
+        }
+      ],
+      "horizon_sweep_deployed": [
+        {
+          "pt_mult": 5.5,
+          "sl_mult": 1.75,
+          "horizon_bars": 12,
+          "payoff_ratio": 3.142857142857143,
+          "breakeven_winrate": 0.2413793103448276,
+          "martingale_up_first": 0.2413793103448276,
+          "n_events": 7988,
+          "frac_up_first": 0.05195292939409114,
+          "frac_down_first": 0.41787681522283426,
+          "frac_timeout": 0.5301702553830746,
+          "frac_up_first_given_touched": 0.11057820410338395,
+          "trainer_label_counts": {
+            "class1_bullish": 2928,
+            "class2_bearish": 3998,
+            "class0_neutral": 1062
+          },
+          "trainer_label_fracs": {
+            "class1_bullish": 0.3665498247371057,
+            "class2_bearish": 0.50050075112669,
+            "class0_neutral": 0.1329494241362043
+          },
+          "majority_class_share": 0.50050075112669,
+          "up_bars_to_touch_median": 7.0,
+          "up_bars_to_touch_p90": 11.0,
+          "down_bars_to_touch_median": 5.0
+        },
+        {
+          "pt_mult": 5.5,
+          "sl_mult": 1.75,
+          "horizon_bars": 24,
+          "payoff_ratio": 3.142857142857143,
+          "breakeven_winrate": 0.2413793103448276,
+          "martingale_up_first": 0.2413793103448276,
+          "n_events": 7976,
+          "frac_up_first": 0.10581745235707121,
+          "frac_down_first": 0.5620611835506519,
+          "frac_timeout": 0.3321213640922768,
+          "frac_up_first_given_touched": 0.15843814529754083,
+          "trainer_label_counts": {
+            "class1_bullish": 2751,
+            "class2_bearish": 4747,
+            "class0_neutral": 478
+          },
+          "trainer_label_fracs": {
+            "class1_bullish": 0.3449097291875627,
+            "class2_bearish": 0.595160481444333,
+            "class0_neutral": 0.059929789368104315
+          },
+          "majority_class_share": 0.595160481444333,
+          "up_bars_to_touch_median": 13.0,
+          "up_bars_to_touch_p90": 22.0,
+          "down_bars_to_touch_median": 7.0
+        },
+        {
+          "pt_mult": 5.5,
+          "sl_mult": 1.75,
+          "horizon_bars": 48,
+          "payoff_ratio": 3.142857142857143,
+          "breakeven_winrate": 0.2413793103448276,
+          "martingale_up_first": 0.2413793103448276,
+          "n_events": 7952,
+          "frac_up_first": 0.16549295774647887,
+          "frac_down_first": 0.6654929577464789,
+          "frac_timeout": 0.16901408450704225,
+          "frac_up_first_given_touched": 0.19915254237288135,
+          "trainer_label_counts": {
+            "class1_bullish": 2394,
+            "class2_bearish": 5378,
+            "class0_neutral": 180
+          },
+          "trainer_label_fracs": {
+            "class1_bullish": 0.301056338028169,
+            "class2_bearish": 0.6763078470824949,
+            "class0_neutral": 0.022635814889336015
+          },
+          "majority_class_share": 0.6763078470824949,
+          "up_bars_to_touch_median": 19.0,
+          "up_bars_to_touch_p90": 41.0,
+          "down_bars_to_touch_median": 9.0
+        },
+        {
+          "pt_mult": 5.5,
+          "sl_mult": 1.75,
+          "horizon_bars": 96,
+          "payoff_ratio": 3.142857142857143,
+          "breakeven_winrate": 0.2413793103448276,
+          "martingale_up_first": 0.2413793103448276,
+          "n_events": 7904,
+          "frac_up_first": 0.2271002024291498,
+          "frac_down_first": 0.7259615384615384,
+          "frac_timeout": 0.04693825910931174,
+          "frac_up_first_given_touched": 0.2382848798619408,
+          "trainer_label_counts": {
+            "class1_bullish": 2080,
+            "class2_bearish": 5766,
+            "class0_neutral": 58
+          },
+          "trainer_label_fracs": {
+            "class1_bullish": 0.2631578947368421,
+            "class2_bearish": 0.729504048582996,
+            "class0_neutral": 0.007338056680161943
+          },
+          "majority_class_share": 0.729504048582996,
+          "up_bars_to_touch_median": 27.0,
+          "up_bars_to_touch_p90": 74.0,
+          "down_bars_to_touch_median": 10.0
+        },
+        {
+          "pt_mult": 5.5,
+          "sl_mult": 1.75,
+          "horizon_bars": 168,
+          "payoff_ratio": 3.142857142857143,
+          "breakeven_winrate": 0.2413793103448276,
+          "martingale_up_first": 0.2413793103448276,
+          "n_events": 7832,
+          "frac_up_first": 0.24067926455566904,
+          "frac_down_first": 0.7445097037793666,
+          "frac_timeout": 0.01481103166496425,
+          "frac_up_first_given_touched": 0.24429756350440643,
+          "trainer_label_counts": {
+            "class1_bullish": 1986,
+            "class2_bearish": 5837,
+            "class0_neutral": 9
+          },
+          "trainer_label_fracs": {
+            "class1_bullish": 0.2535750766087845,
+            "class2_bearish": 0.7452757916241062,
+            "class0_neutral": 0.0011491317671092952
+          },
+          "majority_class_share": 0.7452757916241062,
+          "up_bars_to_touch_median": 30.0,
+          "up_bars_to_touch_p90": 86.0,
+          "down_bars_to_touch_median": 10.0
+        },
+        {
+          "pt_mult": 5.5,
+          "sl_mult": 1.75,
+          "horizon_bars": 336,
+          "payoff_ratio": 3.142857142857143,
+          "breakeven_winrate": 0.2413793103448276,
+          "martingale_up_first": 0.2413793103448276,
+          "n_events": 7664,
+          "frac_up_first": 0.2453027139874739,
+          "frac_down_first": 0.7485647181628392,
+          "frac_timeout": 0.006132567849686848,
+          "frac_up_first_given_touched": 0.24681633188919522,
+          "trainer_label_counts": {
+            "class1_bullish": 1922,
+            "class2_bearish": 5739,
+            "class0_neutral": 3
+          },
+          "trainer_label_fracs": {
+            "class1_bullish": 0.2507828810020877,
+            "class2_bearish": 0.7488256784968684,
+            "class0_neutral": 0.00039144050104384135
+          },
+          "majority_class_share": 0.7488256784968684,
+          "up_bars_to_touch_median": 32.0,
+          "up_bars_to_touch_p90": 93.0,
+          "down_bars_to_touch_median": 10.0
+        }
+      ],
+      "excursion_by_horizon": [
+        {
+          "horizon_bars": 12,
+          "n": 7988,
+          "mfe_atr_quantiles": {
+            "p10": 0.25024363147259016,
+            "p25": 0.6312298408585251,
+            "p50": 1.3445294263760137,
+            "p75": 2.639390860913356,
+            "p90": 4.3577295005016925,
+            "p95": 6.004167440660182,
+            "p99": 9.774911923772539
+          },
+          "mae_atr_quantiles": {
+            "p10": 0.2744408713555924,
+            "p25": 0.6665665133164387,
+            "p50": 1.4403415247122942,
+            "p75": 2.6956146338210174,
+            "p90": 4.301642461869571,
+            "p95": 5.760141330427052,
+            "p99": 10.271558107340317
+          },
+          "frac_mfe_reaches_pt": 0.05946419629444166,
+          "frac_mae_reaches_sl": 0.420756134201302,
+          "frac_both_reachable": 0.010390585878818227,
+          "frac_neither_reachable": 0.5301702553830746
+        },
+        {
+          "horizon_bars": 24,
+          "n": 7976,
+          "mfe_atr_quantiles": {
+            "p10": 0.3570358335831144,
+            "p25": 0.916948266214773,
+            "p50": 2.05379203284947,
+            "p75": 3.7978429627653356,
+            "p90": 6.50221443509313,
+            "p95": 8.752017815116034,
+            "p99": 15.447445798676304
+          },
+          "mae_atr_quantiles": {
+            "p10": 0.3983858463772516,
+            "p25": 0.9856984345138253,
+            "p50": 2.1121302084208207,
+            "p75": 3.930924515300012,
+            "p90": 6.123393242650627,
+            "p95": 8.530263408360288,
+            "p99": 13.417157330126283
+          },
+          "frac_mfe_reaches_pt": 0.1354062186559679,
+          "frac_mae_reaches_sl": 0.5734704112337011,
+          "frac_both_reachable": 0.04099799398194584,
+          "frac_neither_reachable": 0.3321213640922768
+        },
+        {
+          "horizon_bars": 48,
+          "n": 7952,
+          "mfe_atr_quantiles": {
+            "p10": 0.5297932023398955,
+            "p25": 1.3618865599847183,
+            "p50": 2.943916232134243,
+            "p75": 5.709019815208013,
+            "p90": 9.426123177112437,
+            "p95": 12.803108540645127,
+            "p99": 24.856000747251223
+          },
+          "mae_atr_quantiles": {
+            "p10": 0.5682579845979648,
+            "p25": 1.402144156668122,
+            "p50": 3.126763524170171,
+            "p75": 5.717783543395127,
+            "p90": 9.492509238524688,
+            "p95": 12.82477997170995,
+            "p99": 17.901119294722513
+          },
+          "frac_mfe_reaches_pt": 0.2642102615694165,
+          "frac_mae_reaches_sl": 0.693536217303823,
+          "frac_both_reachable": 0.1267605633802817,
+          "frac_neither_reachable": 0.16901408450704225
+        },
+        {
+          "horizon_bars": 96,
+          "n": 7904,
+          "mfe_atr_quantiles": {
+            "p10": 0.7435878018365387,
+            "p25": 1.941177547939903,
+            "p50": 4.20613318082291,
+            "p75": 8.028345838847173,
+            "p90": 13.178244656488062,
+            "p95": 17.615097868659824,
+            "p99": 61.57967107905851
+          },
+          "mae_atr_quantiles": {
+            "p10": 0.8267796641721664,
+            "p25": 1.998315972356223,
+            "p50": 4.457889466797864,
+            "p75": 7.884748917401787,
+            "p90": 13.362551834434193,
+            "p95": 16.853616585703875,
+            "p99": 38.37144457036519
+          },
+          "frac_mfe_reaches_pt": 0.402580971659919,
+          "frac_mae_reaches_sl": 0.7863107287449392,
+          "frac_both_reachable": 0.23582995951417005,
+          "frac_neither_reachable": 0.04693825910931174
+        },
+        {
+          "horizon_bars": 168,
+          "n": 7832,
+          "mfe_atr_quantiles": {
+            "p10": 0.9741606099868056,
+            "p25": 2.4811739929842025,
+            "p50": 5.589048056309958,
+            "p75": 10.422433487839184,
+            "p90": 16.750946781699632,
+            "p95": 22.815218467732,
+            "p99": 78.58563518756846
+          },
+          "mae_atr_quantiles": {
+            "p10": 1.1509253381247548,
+            "p25": 2.7226272765427235,
+            "p50": 5.7134756220199465,
+            "p75": 10.592240659314324,
+            "p90": 17.481652936644718,
+            "p95": 24.60279306981287,
+            "p99": 46.752734635822726
+          },
+          "frac_mfe_reaches_pt": 0.5048518896833504,
+          "frac_mae_reaches_sl": 0.8434627170582226,
+          "frac_both_reachable": 0.3631256384065373,
+          "frac_neither_reachable": 0.01481103166496425
+        },
+        {
+          "horizon_bars": 336,
+          "n": 7664,
+          "mfe_atr_quantiles": {
+            "p10": 1.1953401925062652,
+            "p25": 3.109526900072786,
+            "p50": 7.717522714078669,
+            "p75": 14.560609997003864,
+            "p90": 23.96959328843211,
+            "p95": 41.108765715370836,
+            "p99": 125.96169101166956
+          },
+          "mae_atr_quantiles": {
+            "p10": 1.4734543072420292,
+            "p25": 3.6206811976910767,
+            "p50": 7.616035841728889,
+            "p75": 15.85912796718722,
+            "p90": 29.068079819768325,
+            "p95": 41.21901970510776,
+            "p99": 75.95692554383938
+          },
+          "frac_mfe_reaches_pt": 0.6126043841336117,
+          "frac_mae_reaches_sl": 0.8803496868475992,
+          "frac_both_reachable": 0.4990866388308977,
+          "frac_neither_reachable": 0.006132567849686848
+        }
+      ],
+      "up_bars_to_touch_deployed": {
+        "horizon_bars": 336,
+        "n_up_first": 1880,
+        "quantiles": {
+          "p10": 7.0,
+          "p25": 15.0,
+          "p50": 32.0,
+          "p75": 62.25,
+          "p90": 93.0
+        },
+        "frac_of_all_events": 0.2453027139874739
+      },
+      "conditional_rates": {
+        "h24": {
+          "horizon_bars": 24,
+          "base_up_first_rate": 0.10581745235707121,
+          "features": {
+            "rsi_14": {
+              "up_first_rate_by_quintile": [
+                0.07272727272727272,
+                0.10219435736677115,
+                0.09843260188087774,
+                0.10846394984326019,
+                0.14733542319749215
+              ],
+              "counts": [
+                1595,
+                1595,
+                1595,
+                1595,
+                1595
+              ],
+              "spread_pp": 7.460815047021943
+            },
+            "close_over_ema50": {
+              "up_first_rate_by_quintile": [
+                0.06203007518796992,
+                0.09655172413793103,
+                0.1579937304075235,
+                0.1335423197492163,
+                0.07899686520376176
+              ],
+              "counts": [
+                1596,
+                1595,
+                1595,
+                1595,
+                1595
+              ],
+              "spread_pp": 9.59636552195536
+            },
+            "atr_over_price": {
+              "up_first_rate_by_quintile": [
+                0.19987468671679198,
+                0.08087774294670846,
+                0.09905956112852665,
+                0.10031347962382445,
+                0.04890282131661442
+              ],
+              "counts": [
+                1596,
+                1595,
+                1595,
+                1595,
+                1595
+              ],
+              "spread_pp": 15.097186540017757
+            },
+            "ret_24": {
+              "up_first_rate_by_quintile": [
+                0.06411062225015714,
+                0.1069182389937107,
+                0.13333333333333333,
+                0.12327044025157233,
+                0.0917661847894406
+              ],
+              "counts": [
+                1591,
+                1590,
+                1590,
+                1590,
+                1591
+              ],
+              "spread_pp": 6.922271108317619
+            }
+          }
+        },
+        "h96": {
+          "horizon_bars": 96,
+          "base_up_first_rate": 0.2271002024291498,
+          "features": {
+            "rsi_14": {
+              "up_first_rate_by_quintile": [
+                0.17267552182163187,
+                0.2626582278481013,
+                0.25173940543959517,
+                0.2259493670886076,
+                0.2226438962681847
+              ],
+              "counts": [
+                1581,
+                1580,
+                1581,
+                1580,
+                1581
+              ],
+              "spread_pp": 8.99827060264694
+            },
+            "close_over_ema50": {
+              "up_first_rate_by_quintile": [
+                0.14294750158127767,
+                0.25173940543959517,
+                0.33354430379746836,
+                0.2593295382669197,
+                0.14800759013282733
+              ],
+              "counts": [
+                1581,
+                1581,
+                1580,
+                1581,
+                1581
+              ],
+              "spread_pp": 19.059680221619068
+            },
+            "atr_over_price": {
+              "up_first_rate_by_quintile": [
+                0.33270082226438963,
+                0.2232764073371284,
+                0.22784810126582278,
+                0.20746363061353573,
+                0.1442125237191651
+              ],
+              "counts": [
+                1581,
+                1581,
+                1580,
+                1581,
+                1581
+              ],
+              "spread_pp": 18.848829854522453
+            },
+            "ret_24": {
+              "up_first_rate_by_quintile": [
+                0.14022842639593908,
+                0.274746192893401,
+                0.27918781725888325,
+                0.25,
+                0.1833756345177665
+              ],
+              "counts": [
+                1576,
+                1576,
+                1576,
+                1576,
+                1576
+              ],
+              "spread_pp": 13.895939086294417
+            }
+          }
+        }
+      },
+      "meta_label_deployed": {
+        "n_primary_events_total": 420,
+        "by_horizon": [
+          {
+            "horizon_bars": 12,
+            "n_events": 419,
+            "meta_label_pos_rate": 0.05489260143198091,
+            "frac_sl": 0.39856801909307876,
+            "frac_timeout": 0.5465393794749404,
+            "breakeven_winrate": 0.2413793103448276,
+            "expectancy_atr_per_trade": 0.05116675140916436,
+            "expectancy_pct_per_trade": -0.033086924458189754
+          },
+          {
+            "horizon_bars": 24,
+            "n_events": 418,
+            "meta_label_pos_rate": 0.10526315789473684,
+            "frac_sl": 0.5454545454545454,
+            "frac_timeout": 0.3492822966507177,
+            "breakeven_winrate": 0.2413793103448276,
+            "expectancy_atr_per_trade": 0.12556007078007034,
+            "expectancy_pct_per_trade": 0.019806075053113055
+          },
+          {
+            "horizon_bars": 48,
+            "n_events": 415,
+            "meta_label_pos_rate": 0.21204819277108433,
+            "frac_sl": 0.6506024096385542,
+            "frac_timeout": 0.13734939759036144,
+            "breakeven_winrate": 0.2413793103448276,
+            "expectancy_atr_per_trade": 0.2268393575173501,
+            "expectancy_pct_per_trade": 0.055381548020980526
+          },
+          {
+            "horizon_bars": 96,
+            "n_events": 403,
+            "meta_label_pos_rate": 0.2655086848635236,
+            "frac_sl": 0.7047146401985112,
+            "frac_timeout": 0.02977667493796526,
+            "breakeven_winrate": 0.2413793103448276,
+            "expectancy_atr_per_trade": 0.2616146092792988,
+            "expectancy_pct_per_trade": 0.11843681221924314
+          },
+          {
+            "horizon_bars": 168,
+            "n_events": 395,
+            "meta_label_pos_rate": 0.2607594936708861,
+            "frac_sl": 0.739240506329114,
+            "frac_timeout": 0.0,
+            "breakeven_winrate": 0.2413793103448276,
+            "expectancy_atr_per_trade": 0.1405063291139239,
+            "expectancy_pct_per_trade": 0.049270566185697036
+          },
+          {
+            "horizon_bars": 336,
+            "n_events": 380,
+            "meta_label_pos_rate": 0.2710526315789474,
+            "frac_sl": 0.7289473684210527,
+            "frac_timeout": 0.0,
+            "breakeven_winrate": 0.2413793103448276,
+            "expectancy_atr_per_trade": 0.21513157894736815,
+            "expectancy_pct_per_trade": 0.10692276442195722
+          }
+        ]
+      }
+    },
+    {
+      "symbol": "SOL-USDT",
+      "csv": "SOL-USDT_1h.csv",
+      "n_bars_used": 960,
+      "window_start": "2026-08-01 00:00:00+00:00",
+      "window_end": "2026-09-09 23:00:00+00:00",
+      "parity_check": {
+        "repo_dir": "/workspace/scratch/labelstudy/repo",
+        "geometry": "5.5/1.75",
+        "horizon": 24,
+        "n_events": 936,
+        "label_mismatches": 0,
+        "touch_type_mismatches": 0,
+        "max_abs_ret_diff": 0.0,
+        "max_abs_trgt_diff": 0.0
+      },
+      "atr_scale_deployed_pt": {
+        "atr_over_price_pct": {
+          "p5": 0.34928755872112166,
+          "p25": 0.5006191539804276,
+          "p50": 0.6760462551616182,
+          "p75": 1.0892310868774513,
+          "p95": 1.6863858467830277
+        },
+        "atr_over_price_mean_pct": 0.8471058225062379,
+        "pt_move_pct": {
+          "p5": 1.9210815729661692,
+          "p25": 2.753405346892351,
+          "p50": 3.7182544033889,
+          "p75": 5.990770977825982,
+          "p95": 9.275122157306653
+        },
+        "pt_move_mean_pct": 4.6590820237843085
+      },
+      "geometry_grid_h24": [
+        {
+          "pt_mult": 5.5,
+          "sl_mult": 1.75,
+          "horizon_bars": 24,
+          "payoff_ratio": 3.142857142857143,
+          "breakeven_winrate": 0.2413793103448276,
+          "martingale_up_first": 0.2413793103448276,
+          "n_events": 936,
+          "frac_up_first": 0.19230769230769232,
+          "frac_down_first": 0.48717948717948717,
+          "frac_timeout": 0.32051282051282054,
+          "frac_up_first_given_touched": 0.2830188679245283,
+          "trainer_label_counts": {
+            "class1_bullish": 402,
+            "class2_bearish": 485,
+            "class0_neutral": 49
+          },
+          "trainer_label_fracs": {
+            "class1_bullish": 0.42948717948717946,
+            "class2_bearish": 0.5181623931623932,
+            "class0_neutral": 0.05235042735042735
+          },
+          "majority_class_share": 0.5181623931623932,
+          "up_bars_to_touch_median": 16.0,
+          "up_bars_to_touch_p90": 23.0,
+          "down_bars_to_touch_median": 7.0
+        },
+        {
+          "pt_mult": 4.0,
+          "sl_mult": 2.0,
+          "horizon_bars": 24,
+          "payoff_ratio": 2.0,
+          "breakeven_winrate": 0.3333333333333333,
+          "martingale_up_first": 0.3333333333333333,
+          "n_events": 936,
+          "frac_up_first": 0.3034188034188034,
+          "frac_down_first": 0.41025641025641024,
+          "frac_timeout": 0.2863247863247863,
+          "frac_up_first_given_touched": 0.4251497005988024,
+          "trainer_label_counts": {
+            "class1_bullish": 450,
+            "class2_bearish": 425,
+            "class0_neutral": 61
+          },
+          "trainer_label_fracs": {
+            "class1_bullish": 0.4807692307692308,
+            "class2_bearish": 0.45405982905982906,
+            "class0_neutral": 0.06517094017094018
+          },
+          "majority_class_share": 0.4807692307692308,
+          "up_bars_to_touch_median": 11.0,
+          "up_bars_to_touch_p90": 20.0,
+          "down_bars_to_touch_median": 9.0
+        },
+        {
+          "pt_mult": 1.5,
+          "sl_mult": 1.5,
+          "horizon_bars": 24,
+          "payoff_ratio": 1.0,
+          "breakeven_winrate": 0.5,
+          "martingale_up_first": 0.5,
+          "n_events": 936,
+          "frac_up_first": 0.5459401709401709,
+          "frac_down_first": 0.42094017094017094,
+          "frac_timeout": 0.03311965811965812,
+          "frac_up_first_given_touched": 0.5646408839779006,
+          "trainer_label_counts": {
+            "class1_bullish": 526,
+            "class2_bearish": 397,
+            "class0_neutral": 13
+          },
+          "trainer_label_fracs": {
+            "class1_bullish": 0.561965811965812,
+            "class2_bearish": 0.42414529914529914,
+            "class0_neutral": 0.013888888888888888
+          },
+          "majority_class_share": 0.561965811965812,
+          "up_bars_to_touch_median": 5.0,
+          "up_bars_to_touch_p90": 15.0,
+          "down_bars_to_touch_median": 5.0
+        },
+        {
+          "pt_mult": 2.0,
+          "sl_mult": 2.0,
+          "horizon_bars": 24,
+          "payoff_ratio": 1.0,
+          "breakeven_winrate": 0.5,
+          "martingale_up_first": 0.5,
+          "n_events": 936,
+          "frac_up_first": 0.49038461538461536,
+          "frac_down_first": 0.36752136752136755,
+          "frac_timeout": 0.1420940170940171,
+          "frac_up_first_given_touched": 0.5716064757160647,
+          "trainer_label_counts": {
+            "class1_bullish": 521,
+            "class2_bearish": 370,
+            "class0_neutral": 45
+          },
+          "trainer_label_fracs": {
+            "class1_bullish": 0.5566239316239316,
+            "class2_bearish": 0.3952991452991453,
+            "class0_neutral": 0.04807692307692308
+          },
+          "majority_class_share": 0.5566239316239316,
+          "up_bars_to_touch_median": 7.0,
+          "up_bars_to_touch_p90": 18.0,
+          "down_bars_to_touch_median": 8.0
+        },
+        {
+          "pt_mult": 3.0,
+          "sl_mult": 2.0,
+          "horizon_bars": 24,
+          "payoff_ratio": 1.5,
+          "breakeven_winrate": 0.4,
+          "martingale_up_first": 0.4,
+          "n_events": 936,
+          "frac_up_first": 0.37713675213675213,
+          "frac_down_first": 0.39316239316239315,
+          "frac_timeout": 0.2297008547008547,
+          "frac_up_first_given_touched": 0.4895977808599168,
+          "trainer_label_counts": {
+            "class1_bullish": 470,
+            "class2_bearish": 407,
+            "class0_neutral": 59
+          },
+          "trainer_label_fracs": {
+            "class1_bullish": 0.5021367521367521,
+            "class2_bearish": 0.43482905982905984,
+            "class0_neutral": 0.06303418803418803
+          },
+          "majority_class_share": 0.5021367521367521,
+          "up_bars_to_touch_median": 8.0,
+          "up_bars_to_touch_p90": 19.0,
+          "down_bars_to_touch_median": 9.0
+        },
+        {
+          "pt_mult": 2.0,
+          "sl_mult": 3.0,
+          "horizon_bars": 24,
+          "payoff_ratio": 0.6666666666666666,
+          "breakeven_winrate": 0.6,
+          "martingale_up_first": 0.6,
+          "n_events": 936,
+          "frac_up_first": 0.5267094017094017,
+          "frac_down_first": 0.21794871794871795,
+          "frac_timeout": 0.2553418803418803,
+          "frac_up_first_given_touched": 0.7073170731707317,
+          "trainer_label_counts": {
+            "class1_bullish": 551,
+            "class2_bearish": 299,
+            "class0_neutral": 86
+          },
+          "trainer_label_fracs": {
+            "class1_bullish": 0.5886752136752137,
+            "class2_bearish": 0.3194444444444444,
+            "class0_neutral": 0.09188034188034189
+          },
+          "majority_class_share": 0.5886752136752137,
+          "up_bars_to_touch_median": 7.0,
+          "up_bars_to_touch_p90": 19.0,
+          "down_bars_to_touch_median": 12.0
+        },
+        {
+          "pt_mult": 3.0,
+          "sl_mult": 3.0,
+          "horizon_bars": 24,
+          "payoff_ratio": 1.0,
+          "breakeven_winrate": 0.5,
+          "martingale_up_first": 0.5,
+          "n_events": 936,
+          "frac_up_first": 0.4017094017094017,
+          "frac_down_first": 0.23717948717948717,
+          "frac_timeout": 0.3611111111111111,
+          "frac_up_first_given_touched": 0.6287625418060201,
+          "trainer_label_counts": {
+            "class1_bullish": 490,
+            "class2_bearish": 335,
+            "class0_neutral": 111
+          },
+          "trainer_label_fracs": {
+            "class1_bullish": 0.5235042735042735,
+            "class2_bearish": 0.3579059829059829,
+            "class0_neutral": 0.11858974358974358
+          },
+          "majority_class_share": 0.5235042735042735,
+          "up_bars_to_touch_median": 9.0,
+          "up_bars_to_touch_p90": 20.0,
+          "down_bars_to_touch_median": 13.0
+        },
+        {
+          "pt_mult": 4.0,
+          "sl_mult": 4.0,
+          "horizon_bars": 24,
+          "payoff_ratio": 1.0,
+          "breakeven_winrate": 0.5,
+          "martingale_up_first": 0.5,
+          "n_events": 936,
+          "frac_up_first": 0.32051282051282054,
+          "frac_down_first": 0.1388888888888889,
+          "frac_timeout": 0.5405982905982906,
+          "frac_up_first_given_touched": 0.6976744186046512,
+          "trainer_label_counts": {
+            "class1_bullish": 461,
+            "class2_bearish": 310,
+            "class0_neutral": 165
+          },
+          "trainer_label_fracs": {
+            "class1_bullish": 0.49252136752136755,
+            "class2_bearish": 0.3311965811965812,
+            "class0_neutral": 0.1762820512820513
+          },
+          "majority_class_share": 0.49252136752136755,
+          "up_bars_to_touch_median": 11.0,
+          "up_bars_to_touch_p90": 20.100000000000023,
+          "down_bars_to_touch_median": 13.0
+        },
+        {
+          "pt_mult": 5.5,
+          "sl_mult": 5.5,
+          "horizon_bars": 24,
+          "payoff_ratio": 1.0,
+          "breakeven_winrate": 0.5,
+          "martingale_up_first": 0.5,
+          "n_events": 936,
+          "frac_up_first": 0.20405982905982906,
+          "frac_down_first": 0.07585470085470085,
+          "frac_timeout": 0.7200854700854701,
+          "frac_up_first_given_touched": 0.7290076335877863,
+          "trainer_label_counts": {
+            "class1_bullish": 404,
+            "class2_bearish": 278,
+            "class0_neutral": 254
+          },
+          "trainer_label_fracs": {
+            "class1_bullish": 0.43162393162393164,
+            "class2_bearish": 0.297008547008547,
+            "class0_neutral": 0.27136752136752135
+          },
+          "majority_class_share": 0.43162393162393164,
+          "up_bars_to_touch_median": 16.0,
+          "up_bars_to_touch_p90": 23.0,
+          "down_bars_to_touch_median": 13.0
+        }
+      ],
+      "horizon_sweep_deployed": [
+        {
+          "pt_mult": 5.5,
+          "sl_mult": 1.75,
+          "horizon_bars": 12,
+          "payoff_ratio": 3.142857142857143,
+          "breakeven_winrate": 0.2413793103448276,
+          "martingale_up_first": 0.2413793103448276,
+          "n_events": 948,
+          "frac_up_first": 0.06540084388185655,
+          "frac_down_first": 0.370253164556962,
+          "frac_timeout": 0.5643459915611815,
+          "frac_up_first_given_touched": 0.15012106537530268,
+          "trainer_label_counts": {
+            "class1_bullish": 406,
+            "class2_bearish": 438,
+            "class0_neutral": 104
+          },
+          "trainer_label_fracs": {
+            "class1_bullish": 0.4282700421940928,
+            "class2_bearish": 0.4620253164556962,
+            "class0_neutral": 0.10970464135021098
+          },
+          "majority_class_share": 0.4620253164556962,
+          "up_bars_to_touch_median": 8.0,
+          "up_bars_to_touch_p90": 12.0,
+          "down_bars_to_touch_median": 6.0
+        },
+        {
+          "pt_mult": 5.5,
+          "sl_mult": 1.75,
+          "horizon_bars": 24,
+          "payoff_ratio": 3.142857142857143,
+          "breakeven_winrate": 0.2413793103448276,
+          "martingale_up_first": 0.2413793103448276,
+          "n_events": 936,
+          "frac_up_first": 0.19230769230769232,
+          "frac_down_first": 0.48717948717948717,
+          "frac_timeout": 0.32051282051282054,
+          "frac_up_first_given_touched": 0.2830188679245283,
+          "trainer_label_counts": {
+            "class1_bullish": 402,
+            "class2_bearish": 485,
+            "class0_neutral": 49
+          },
+          "trainer_label_fracs": {
+            "class1_bullish": 0.42948717948717946,
+            "class2_bearish": 0.5181623931623932,
+            "class0_neutral": 0.05235042735042735
+          },
+          "majority_class_share": 0.5181623931623932,
+          "up_bars_to_touch_median": 16.0,
+          "up_bars_to_touch_p90": 23.0,
+          "down_bars_to_touch_median": 7.0
+        },
+        {
+          "pt_mult": 5.5,
+          "sl_mult": 1.75,
+          "horizon_bars": 48,
+          "payoff_ratio": 3.142857142857143,
+          "breakeven_winrate": 0.2413793103448276,
+          "martingale_up_first": 0.2413793103448276,
+          "n_events": 912,
+          "frac_up_first": 0.29276315789473684,
+          "frac_down_first": 0.5932017543859649,
+          "frac_timeout": 0.11403508771929824,
+          "frac_up_first_given_touched": 0.33044554455445546,
+          "trainer_label_counts": {
+            "class1_bullish": 337,
+            "class2_bearish": 556,
+            "class0_neutral": 19
+          },
+          "trainer_label_fracs": {
+            "class1_bullish": 0.36951754385964913,
+            "class2_bearish": 0.6096491228070176,
+            "class0_neutral": 0.020833333333333332
+          },
+          "majority_class_share": 0.6096491228070176,
+          "up_bars_to_touch_median": 20.0,
+          "up_bars_to_touch_p90": 34.0,
+          "down_bars_to_touch_median": 10.0
+        },
+        {
+          "pt_mult": 5.5,
+          "sl_mult": 1.75,
+          "horizon_bars": 96,
+          "payoff_ratio": 3.142857142857143,
+          "breakeven_winrate": 0.2413793103448276,
+          "martingale_up_first": 0.2413793103448276,
+          "n_events": 864,
+          "frac_up_first": 0.33796296296296297,
+          "frac_down_first": 0.625,
+          "frac_timeout": 0.037037037037037035,
+          "frac_up_first_given_touched": 0.35096153846153844,
+          "trainer_label_counts": {
+            "class1_bullish": 322,
+            "class2_bearish": 540,
+            "class0_neutral": 2
+          },
+          "trainer_label_fracs": {
+            "class1_bullish": 0.3726851851851852,
+            "class2_bearish": 0.625,
+            "class0_neutral": 0.0023148148148148147
+          },
+          "majority_class_share": 0.625,
+          "up_bars_to_touch_median": 21.0,
+          "up_bars_to_touch_p90": 43.80000000000007,
+          "down_bars_to_touch_median": 10.5
+        },
+        {
+          "pt_mult": 5.5,
+          "sl_mult": 1.75,
+          "horizon_bars": 168,
+          "payoff_ratio": 3.142857142857143,
+          "breakeven_winrate": 0.2413793103448276,
+          "martingale_up_first": 0.2413793103448276,
+          "n_events": 792,
+          "frac_up_first": 0.3345959595959596,
+          "frac_down_first": 0.6590909090909091,
+          "frac_timeout": 0.006313131313131313,
+          "frac_up_first_given_touched": 0.33672172808132145,
+          "trainer_label_counts": {
+            "class1_bullish": 270,
+            "class2_bearish": 522,
+            "class0_neutral": 0
+          },
+          "trainer_label_fracs": {
+            "class1_bullish": 0.3409090909090909,
+            "class2_bearish": 0.6590909090909091,
+            "class0_neutral": 0.0
+          },
+          "majority_class_share": 0.6590909090909091,
+          "up_bars_to_touch_median": 22.0,
+          "up_bars_to_touch_p90": 54.79999999999998,
+          "down_bars_to_touch_median": 11.0
+        },
+        {
+          "pt_mult": 5.5,
+          "sl_mult": 1.75,
+          "horizon_bars": 336,
+          "payoff_ratio": 3.142857142857143,
+          "breakeven_winrate": 0.2413793103448276,
+          "martingale_up_first": 0.2413793103448276,
+          "n_events": 624,
+          "frac_up_first": 0.3798076923076923,
+          "frac_down_first": 0.6137820512820513,
+          "frac_timeout": 0.00641025641025641,
+          "frac_up_first_given_touched": 0.38225806451612904,
+          "trainer_label_counts": {
+            "class1_bullish": 241,
+            "class2_bearish": 383,
+            "class0_neutral": 0
+          },
+          "trainer_label_fracs": {
+            "class1_bullish": 0.38621794871794873,
+            "class2_bearish": 0.6137820512820513,
+            "class0_neutral": 0.0
+          },
+          "majority_class_share": 0.6137820512820513,
+          "up_bars_to_touch_median": 23.0,
+          "up_bars_to_touch_p90": 61.400000000000006,
+          "down_bars_to_touch_median": 10.0
+        }
+      ],
+      "excursion_by_horizon": [
+        {
+          "horizon_bars": 12,
+          "n": 948,
+          "mfe_atr_quantiles": {
+            "p10": 0.3419969580333228,
+            "p25": 0.7941097586209782,
+            "p50": 1.5563402099870078,
+            "p75": 3.1394818903604564,
+            "p90": 4.9482509600437075,
+            "p95": 5.866817518087398,
+            "p99": 16.270300035200446
+          },
+          "mae_atr_quantiles": {
+            "p10": 0.20906393107671878,
+            "p25": 0.5670329116951801,
+            "p50": 1.295193231176461,
+            "p75": 2.2419446435617165,
+            "p90": 3.632667204875824,
+            "p95": 4.739592541179284,
+            "p99": 9.570306202313668
+          },
+          "frac_mfe_reaches_pt": 0.06540084388185655,
+          "frac_mae_reaches_sl": 0.379746835443038,
+          "frac_both_reachable": 0.00949367088607595,
+          "frac_neither_reachable": 0.5643459915611815
+        },
+        {
+          "horizon_bars": 24,
+          "n": 936,
+          "mfe_atr_quantiles": {
+            "p10": 0.5880734269601312,
+            "p25": 1.2208269922784718,
+            "p50": 2.4815857708753892,
+            "p75": 4.854994280729002,
+            "p90": 7.211843542376299,
+            "p95": 9.675114035915147,
+            "p99": 27.18753578228251
+          },
+          "mae_atr_quantiles": {
+            "p10": 0.25243383917041023,
+            "p25": 0.7410574864497106,
+            "p50": 1.7707971239159082,
+            "p75": 3.2041219167274977,
+            "p90": 4.823087032575584,
+            "p95": 7.23464820840792,
+            "p99": 9.992265511939364
+          },
+          "frac_mfe_reaches_pt": 0.20405982905982906,
+          "frac_mae_reaches_sl": 0.5085470085470085,
+          "frac_both_reachable": 0.03311965811965812,
+          "frac_neither_reachable": 0.32051282051282054
+        },
+        {
+          "horizon_bars": 48,
+          "n": 912,
+          "mfe_atr_quantiles": {
+            "p10": 0.8800901730780804,
+            "p25": 1.8804717295558921,
+            "p50": 4.205692639680493,
+            "p75": 7.3042715385038415,
+            "p90": 12.340107540693227,
+            "p95": 18.9758386684801,
+            "p99": 36.488604907780555
+          },
+          "mae_atr_quantiles": {
+            "p10": 0.32805172999021087,
+            "p25": 0.9796697346447084,
+            "p50": 2.5274972159397007,
+            "p75": 4.184252009410743,
+            "p90": 5.95588143966304,
+            "p95": 7.885402056332996,
+            "p99": 10.011618612977474
+          },
+          "frac_mfe_reaches_pt": 0.38048245614035087,
+          "frac_mae_reaches_sl": 0.6260964912280702,
+          "frac_both_reachable": 0.1206140350877193,
+          "frac_neither_reachable": 0.11403508771929824
+        },
+        {
+          "horizon_bars": 96,
+          "n": 864,
+          "mfe_atr_quantiles": {
+            "p10": 1.7220614829121126,
+            "p25": 3.2638672026850495,
+            "p50": 6.22314838562594,
+            "p75": 11.106065408425401,
+            "p90": 40.16891719638223,
+            "p95": 60.6577143325428,
+            "p99": 73.47557585995834
+          },
+          "mae_atr_quantiles": {
+            "p10": 0.4093241791536817,
+            "p25": 1.1403629883812108,
+            "p50": 3.101432921121569,
+            "p75": 4.722083223567372,
+            "p90": 6.862543321455261,
+            "p95": 9.478609030600698,
+            "p99": 13.455474033873946
+          },
+          "frac_mfe_reaches_pt": 0.5578703703703703,
+          "frac_mae_reaches_sl": 0.6863425925925926,
+          "frac_both_reachable": 0.28125,
+          "frac_neither_reachable": 0.037037037037037035
+        },
+        {
+          "horizon_bars": 168,
+          "n": 792,
+          "mfe_atr_quantiles": {
+            "p10": 2.5758757269454318,
+            "p25": 4.948141786785263,
+            "p50": 9.747894164970834,
+            "p75": 17.097948378158748,
+            "p90": 71.52067729347122,
+            "p95": 97.95057208222936,
+            "p99": 151.09177263239303
+          },
+          "mae_atr_quantiles": {
+            "p10": 0.48934981116310866,
+            "p25": 1.4077614155939022,
+            "p50": 3.3861267156567743,
+            "p75": 5.45318384411312,
+            "p90": 7.284310016389101,
+            "p95": 9.808354029084311,
+            "p99": 13.58579908179393
+          },
+          "frac_mfe_reaches_pt": 0.7285353535353535,
+          "frac_mae_reaches_sl": 0.7184343434343434,
+          "frac_both_reachable": 0.4532828282828283,
+          "frac_neither_reachable": 0.006313131313131313
+        },
+        {
+          "horizon_bars": 336,
+          "n": 624,
+          "mfe_atr_quantiles": {
+            "p10": 8.871656284059489,
+            "p25": 12.534498872075606,
+            "p50": 37.51413161698765,
+            "p75": 80.45412159347256,
+            "p90": 106.48263472341321,
+            "p95": 158.05776696043395,
+            "p99": 199.3019686284404
+          },
+          "mae_atr_quantiles": {
+            "p10": 0.4018323064129741,
+            "p25": 1.1378303321148755,
+            "p50": 3.011874360831305,
+            "p75": 4.977977735455626,
+            "p90": 6.818051968955114,
+            "p95": 8.104265430693626,
+            "p99": 10.554329674779673
+          },
+          "frac_mfe_reaches_pt": 0.9807692307692307,
+          "frac_mae_reaches_sl": 0.6762820512820513,
+          "frac_both_reachable": 0.6634615384615384,
+          "frac_neither_reachable": 0.00641025641025641
+        }
+      ],
+      "up_bars_to_touch_deployed": {
+        "horizon_bars": 336,
+        "n_up_first": 237,
+        "quantiles": {
+          "p10": 8.0,
+          "p25": 15.0,
+          "p50": 23.0,
+          "p75": 35.0,
+          "p90": 61.400000000000006
+        },
+        "frac_of_all_events": 0.3798076923076923
+      },
+      "conditional_rates": {
+        "h24": {
+          "horizon_bars": 24,
+          "base_up_first_rate": 0.19230769230769232,
+          "features": {
+            "rsi_14": {
+              "up_first_rate_by_quintile": [
+                0.058823529411764705,
+                0.10160427807486631,
+                0.24064171122994651,
+                0.28342245989304815,
+                0.27807486631016043
+              ],
+              "counts": [
+                187,
+                187,
+                187,
+                187,
+                187
+              ],
+              "spread_pp": 22.459893048128343
+            },
+            "close_over_ema50": {
+              "up_first_rate_by_quintile": [
+                0.13297872340425532,
+                0.10160427807486631,
+                0.17647058823529413,
+                0.22994652406417113,
+                0.32085561497326204
+              ],
+              "counts": [
+                188,
+                187,
+                187,
+                187,
+                187
+              ],
+              "spread_pp": 21.92513368983957
+            },
+            "atr_over_price": {
+              "up_first_rate_by_quintile": [
+                0.1595744680851064,
+                0.19786096256684493,
+                0.10160427807486631,
+                0.27807486631016043,
+                0.22459893048128343
+              ],
+              "counts": [
+                188,
+                187,
+                187,
+                187,
+                187
+              ],
+              "spread_pp": 17.64705882352941
+            },
+            "ret_24": {
+              "up_first_rate_by_quintile": [
+                0.14754098360655737,
+                0.07692307692307693,
+                0.07692307692307693,
+                0.33516483516483514,
+                0.3333333333333333
+              ],
+              "counts": [
+                183,
+                182,
+                182,
+                182,
+                183
+              ],
+              "spread_pp": 25.82417582417582
+            }
+          }
+        },
+        "h96": {
+          "horizon_bars": 96,
+          "base_up_first_rate": 0.33796296296296297,
+          "features": {
+            "rsi_14": {
+              "up_first_rate_by_quintile": [
+                0.27167630057803466,
+                0.20930232558139536,
+                0.35260115606936415,
+                0.46511627906976744,
+                0.3930635838150289
+              ],
+              "counts": [
+                173,
+                172,
+                173,
+                172,
+                173
+              ],
+              "spread_pp": 25.581395348837212
+            },
+            "close_over_ema50": {
+              "up_first_rate_by_quintile": [
+                0.3468208092485549,
+                0.2023121387283237,
+                0.31976744186046513,
+                0.3468208092485549,
+                0.47398843930635837
+              ],
+              "counts": [
+                173,
+                173,
+                172,
+                173,
+                173
+              ],
+              "spread_pp": 27.167630057803464
+            },
+            "atr_over_price": {
+              "up_first_rate_by_quintile": [
+                0.2138728323699422,
+                0.42196531791907516,
+                0.20930232558139536,
+                0.4508670520231214,
+                0.3930635838150289
+              ],
+              "counts": [
+                173,
+                173,
+                172,
+                173,
+                173
+              ],
+              "spread_pp": 24.156472644172602
+            },
+            "ret_24": {
+              "up_first_rate_by_quintile": [
+                0.3630952380952381,
+                0.19047619047619047,
+                0.25,
+                0.4642857142857143,
+                0.43452380952380953
+              ],
+              "counts": [
+                168,
+                168,
+                168,
+                168,
+                168
+              ],
+              "spread_pp": 27.380952380952383
+            }
+          }
+        }
+      },
+      "meta_label_deployed": {
+        "n_primary_events_total": 108,
+        "by_horizon": [
+          {
+            "horizon_bars": 12,
+            "n_events": 106,
+            "meta_label_pos_rate": 0.018867924528301886,
+            "frac_sl": 0.4716981132075472,
+            "frac_timeout": 0.5094339622641509,
+            "breakeven_winrate": 0.2413793103448276,
+            "expectancy_atr_per_trade": -0.21579903161751332,
+            "expectancy_pct_per_trade": -0.22206285924099087
+          },
+          {
+            "horizon_bars": 24,
+            "n_events": 105,
+            "meta_label_pos_rate": 0.09523809523809523,
+            "frac_sl": 0.580952380952381,
+            "frac_timeout": 0.3238095238095238,
+            "breakeven_winrate": 0.2413793103448276,
+            "expectancy_atr_per_trade": -0.0428252372817755,
+            "expectancy_pct_per_trade": 0.025342575481137164
+          },
+          {
+            "horizon_bars": 48,
+            "n_events": 100,
+            "meta_label_pos_rate": 0.23,
+            "frac_sl": 0.66,
+            "frac_timeout": 0.11,
+            "breakeven_winrate": 0.2413793103448276,
+            "expectancy_atr_per_trade": 0.2696461185407095,
+            "expectancy_pct_per_trade": 0.4097844078753644
+          },
+          {
+            "horizon_bars": 96,
+            "n_events": 89,
+            "meta_label_pos_rate": 0.25842696629213485,
+            "frac_sl": 0.6853932584269663,
+            "frac_timeout": 0.056179775280898875,
+            "breakeven_winrate": 0.2413793103448276,
+            "expectancy_atr_per_trade": 0.3003687789786934,
+            "expectancy_pct_per_trade": 0.5296077033022588
+          },
+          {
+            "horizon_bars": 168,
+            "n_events": 79,
+            "meta_label_pos_rate": 0.22784810126582278,
+            "frac_sl": 0.7721518987341772,
+            "frac_timeout": 0.0,
+            "breakeven_winrate": 0.2413793103448276,
+            "expectancy_atr_per_trade": -0.09810126582278515,
+            "expectancy_pct_per_trade": 0.48829683318099
+          },
+          {
+            "horizon_bars": 336,
+            "n_events": 62,
+            "meta_label_pos_rate": 0.24193548387096775,
+            "frac_sl": 0.7580645161290323,
+            "frac_timeout": 0.0,
+            "breakeven_winrate": 0.2413793103448276,
+            "expectancy_atr_per_trade": 0.0040322580645160535,
+            "expectancy_pct_per_trade": 0.8906739092182495
+          }
+        ]
+      }
+    }
+  ],
+  "holdout_verification": [
+    {
+      "geometry": "5.5/1.75",
+      "horizon_bars": 24,
+      "event_sampled": true,
+      "n_labelled_events_total": 1860,
+      "holdout_n": 372,
+      "holdout_positive": 123,
+      "holdout_negative": 249,
+      "holdout_positive_rate": 0.33064516129032256,
+      "holdout_majority_share_2class": 0.6693548387096775,
+      "holdout_counts_3class": {
+        "class1": 123,
+        "class2": 229,
+        "class0": 20
+      },
+      "holdout_majority_share_3class": 0.6155913978494624,
+      "positives_that_touched_pt": 37,
+      "positives_that_only_timed_out": 86,
+      "mean_ret_pct_pt_positives": 2.7029089396063313,
+      "mean_ret_pct_timeout_positives": 1.2172667893174272,
+      "symbol": "BTC-USDT",
+      "n_bars_full_history": 25248
+    },
+    {
+      "geometry": "5.5/1.75",
+      "horizon_bars": 24,
+      "event_sampled": false,
+      "n_labelled_events_total": 25224,
+      "holdout_n": 5040,
+      "holdout_positive": 1793,
+      "holdout_negative": 3247,
+      "holdout_positive_rate": 0.35575396825396827,
+      "holdout_majority_share_2class": 0.6442460317460317,
+      "holdout_counts_3class": {
+        "class1": 1793,
+        "class2": 3009,
+        "class0": 238
+      },
+      "holdout_majority_share_3class": 0.5970238095238095,
+      "positives_that_touched_pt": 507,
+      "positives_that_only_timed_out": 1286,
+      "mean_ret_pct_pt_positives": 3.1461082078375275,
+      "mean_ret_pct_timeout_positives": 1.4671418651334207,
+      "symbol": "BTC-USDT",
+      "n_bars_full_history": 25248
+    }
+  ],
+  "rejected_model_reconstruction": {
+    "n_holdout": 372,
+    "true_class1_bullish": 123,
+    "true_class2_bearish": 249,
+    "true_class0_neutral": 0,
+    "pred_class1": 11,
+    "pred_class2": 361,
+    "pred_class0": 0,
+    "correct": 246,
+    "tp_class1": 4,
+    "tp_class2": 242,
+    "tp_class0": 0,
+    "accuracy": 0.6612903225806451,
+    "majority_class_share": 0.6693548387096774,
+    "accuracy_minus_majority": -0.008064516129032251,
+    "reported_holdout_sharpe": 3.224986454918626,
+    "binary_hits_implied_by_holdout_sharpe": 217,
+    "sharpe_of_final_calibrated_model": 6.502200263753314,
+    "sharpe_of_always_majority": 6.868315512151634
+  }
+}
