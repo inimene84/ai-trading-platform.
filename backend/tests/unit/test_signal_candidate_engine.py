@@ -564,12 +564,18 @@ async def test_execute_candidate_keeps_ready_on_paper_failure():
     ), patch(
         "backend.services.signal_candidate_engine.UnifiedTrading"
     ) as mock_ut_cls:
+        mock_ut_cls.return_value.list_sessions.return_value = [
+            {"id": "binance_futures_paper", "broker": "binance_futures", "mode": "paper"}
+        ]
         mock_ut_cls.return_value.place_order.return_value = mock_resp
         res = await signal_candidate_engine.execute_candidate(sig_id, force=True)
 
     assert res["success"] is False
     assert signal_candidate_engine.candidates[sig_id]["status"] == CandidateStatus.READY
     assert signal_candidate_engine.candidates[sig_id]["execution_result"]["success"] is False
+    # Order must be routed to the broker's own session, never the global default
+    _, kwargs = mock_ut_cls.return_value.place_order.call_args
+    assert kwargs.get("session_id") == "binance_futures_paper"
 
 
 def test_resolve_equity_uses_live_broker_and_logs_fallback():
@@ -773,3 +779,89 @@ def test_anti_whipsaw_symbol_cooldown():
         res_forced = asyncio.run(engine.execute_candidate(cand_id, force=True))
         assert res_forced.get("success") is True
 
+
+
+@pytest.mark.asyncio
+async def test_scan_markets_dedupes_live_twin():
+    """A live (symbol, strategy, direction) candidate must not be re-armed by the next scan."""
+    engine = SignalCandidateEngine()
+    engine.candidates.clear()
+    bars = [
+        {"close": 1.08, "high": 1.081, "low": 1.079, "volume": 1}
+        for _ in range(25)
+    ]
+    raw = {
+        "strategy": "MOMENTUM_TREND_PULSE",
+        "direction": "BUY",
+        "entry_price": 1.08,
+        "stop_loss": 1.075,
+        "take_profit": 1.09,
+        "timing_mode": TimingMode.POST_REACTION,
+        "confidence": 0.8,
+        "reason": "test",
+    }
+    with patch.object(CTraderService, "get_trendbars", return_value=bars), \
+         patch.object(engine, "_attach_stop_atr", new_callable=AsyncMock), \
+         patch.object(engine, "_evaluate_momentum", side_effect=lambda *a, **k: dict(raw)), \
+         patch.object(engine, "_evaluate_fade", return_value=None), \
+         patch.object(engine, "_evaluate_straddle", return_value=None), \
+         patch.object(engine, "_evaluate_slingshot", return_value=None), \
+         patch.object(engine, "_fx_gate_mode", return_value="off"):
+        first = await engine.scan_markets(universe=["EURUSD"], timeframe="M5")
+        second = await engine.scan_markets(universe=["EURUSD"], timeframe="M5")
+
+    assert len(first) == 1
+    assert second == []
+    live = [
+        c for c in engine.candidates.values()
+        if c["status"] in (CandidateStatus.PENDING, CandidateStatus.READY)
+    ]
+    assert len(live) == 1
+
+
+@pytest.mark.asyncio
+async def test_execute_candidate_cancels_duplicate_siblings():
+    """Executing one candidate must cancel live twins on the same symbol+direction."""
+    engine = SignalCandidateEngine()
+    engine.candidates.clear()
+    now_ts = int(time.time())
+
+    def _cand(cid):
+        return {
+            "id": cid,
+            "symbol": "BTCUSDT",
+            "broker": "binance_futures",
+            "strategy": "MOMENTUM_TREND_PULSE",
+            "direction": "BUY",
+            "entry_price": 100000,
+            "stop_loss": 99000,
+            "take_profit": 102000,
+            "timing_mode": TimingMode.BAR_CLOSE,
+            "status": CandidateStatus.READY,
+            "earliest_exec_at": now_ts - 5,
+            "latest_exec_at": now_ts + 600,
+            "sizing": {"lots": 0.01, "quantity": 0.01, "risk_usd": 50.0},
+        }
+
+    engine.candidates["dup-a"] = _cand("dup-a")
+    engine.candidates["dup-b"] = _cand("dup-b")
+
+    mock_resp = MagicMock(success=True, order_id="ord-1", message="filled")
+    with patch.dict(engine.execution_config, {"forex_only": False}), patch(
+        "backend.services.sentry_state.is_trading_allowed", return_value=True
+    ), patch.object(
+        engine, "_resolve_mark_price", new_callable=AsyncMock, return_value=100000.0
+    ), patch(
+        "backend.services.signal_candidate_engine.UnifiedTrading"
+    ) as mock_ut_cls:
+        mock_ut_cls.return_value.list_sessions.return_value = [
+            {"id": "binance_futures_paper", "broker": "binance_futures", "mode": "paper"}
+        ]
+        mock_ut_cls.return_value.place_order.return_value = mock_resp
+        res = await engine.execute_candidate("dup-a", force=True)
+
+    assert res["success"] is True
+    assert engine.candidates["dup-a"]["status"] == CandidateStatus.EXECUTED
+    assert engine.candidates["dup-b"]["status"] == CandidateStatus.CANCELLED
+    _, kwargs = mock_ut_cls.return_value.place_order.call_args
+    assert kwargs.get("session_id") == "binance_futures_paper"
