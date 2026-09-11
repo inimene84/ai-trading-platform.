@@ -313,7 +313,10 @@ def simulate_trade(
         timestamp = frame.index[location]
         row = frame.iloc[location]
         if timestamp > entry_time and _is_funding_timestamp(timestamp, costs.funding_hours_utc):
-            funding_cost += remaining * side * costs.assumed_funding_rate
+            # Historical rates are unavailable. Debit the configured absolute
+            # rate on either side as a conservative scenario instead of
+            # inventing a directional funding credit.
+            funding_cost += remaining * abs(costs.assumed_funding_rate)
             funding_events += 1
 
         if side == 1:
@@ -793,8 +796,9 @@ def main() -> None:
         "cost_scenario": {
             **asdict(costs),
             "funding_interpretation": (
-                "Scenario assumption, not historical funding: positive fixed rate means longs pay "
-                "and shorts receive at 00:00/08:00/16:00 UTC while open."
+                "Conservative scenario assumption, not historical funding: the absolute fixed "
+                "rate is debited from either side at 00:00/08:00/16:00 UTC while open because "
+                "the source has no funding-rate history. This is not claimed to be realistic."
             ),
             "fill_accounting": (
                 "Fees are charged on exact entry/exit fill notionals; adverse slippage is applied "

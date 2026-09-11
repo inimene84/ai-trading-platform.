@@ -83,7 +83,7 @@ def test_exit_scan_includes_entry_bar_after_next_open() -> None:
     assert trade.net_return > 0
 
 
-def test_funding_uses_fixed_timestamps_and_side_sign() -> None:
+def test_missing_historical_funding_uses_conservative_fixed_timestamp_debits() -> None:
     frame = _candles(
         [100] * 12,
         high_offset=0.01,
@@ -99,7 +99,7 @@ def test_funding_uses_fixed_timestamps_and_side_sign() -> None:
     assert long_trade.funding_events == 1
     assert short_trade.funding_events == 1
     assert long_trade.net_return == pytest.approx(-0.0001)
-    assert short_trade.net_return == pytest.approx(0.0001)
+    assert short_trade.net_return == pytest.approx(-0.0001)
 
 
 def test_fees_and_slippage_are_applied_through_fill_notionals() -> None:
