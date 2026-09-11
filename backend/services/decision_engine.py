@@ -75,6 +75,126 @@ def _sentiment_filter_enabled() -> bool:
     return os.getenv("SENTIMENT_FILTER_ENABLED", "false").lower() == "true"
 
 
+def _ml_model_health_fail_open() -> bool:
+    """Whether a Jesse ML response that OMITS the model-health fields may trade.
+
+    Mirrors _reviewer_gate_fail_open: an older predict_server build that does
+    not report model_expired / feature_schema_parity is tolerated in
+    paper/backtest, but in LIVE an unverifiable model must not size a position.
+    JESSE_ML_MODEL_HEALTH_FAIL_OPEN=true overrides (operator escape hatch when
+    the research stack is knowingly behind this engine).
+    """
+    if os.getenv("JESSE_ML_MODEL_HEALTH_FAIL_OPEN", "false").lower() == "true":
+        return True
+    return not live_exchange_orders_allowed()
+
+
+def _expected_feature_schema_hash() -> str:
+    """Feature-schema hash the live Jesse model was trained against."""
+    return os.getenv("JESSE_FEATURE_SCHEMA_HASH", "cd15d2380809b247").strip().lower()
+
+
+_ABSENT = object()
+_EXPIRED_TRUE = {"true", "1", "yes", "y", "expired", "stale"}
+_EXPIRED_FALSE = {"false", "0", "no", "n", "fresh", "valid", "ok", "current"}
+_PARITY_TRUE = {"true", "1", "yes", "y", "ok", "match", "matched", "pass", "passed", "same", "identical"}
+_PARITY_FALSE = {"false", "0", "no", "n", "mismatch", "mismatched", "fail", "failed", "drift", "drifted", "unknown"}
+
+
+def _read_model_expired(value: Any) -> Optional[bool]:
+    """Read predict_server's model_expired field. None when unreadable."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and value in (0, 1):
+        return bool(value)
+    if isinstance(value, dict):
+        for key in ("expired", "is_expired", "model_expired"):
+            if key in value:
+                return _read_model_expired(value[key])
+        return None
+    if isinstance(value, str):
+        token = value.strip().lower()
+        if token in _EXPIRED_TRUE:
+            return True
+        if token in _EXPIRED_FALSE:
+            return False
+    return None
+
+
+def _read_schema_parity(value: Any) -> tuple[Optional[bool], str]:
+    """Read predict_server's feature_schema_parity field -> (parity, detail).
+
+    The field may carry a verdict (bool / ok-mismatch token / {"match": ...})
+    or the raw live schema hash, which is compared against the hash the model
+    was trained on. None means unreadable.
+    """
+    if isinstance(value, bool):
+        return value, f"parity={value}"
+    if isinstance(value, (int, float)) and value in (0, 1):
+        return bool(value), f"parity={value}"
+    if isinstance(value, dict):
+        for key in ("parity", "match", "matches", "ok", "in_parity"):
+            if key in value:
+                parity, _ = _read_schema_parity(value[key])
+                return parity, f"{key}={value[key]!r}"
+        live = value.get("hash") or value.get("live_hash") or value.get("current_hash")
+        expected = str(
+            value.get("expected_hash") or value.get("trained_hash") or _expected_feature_schema_hash()
+        ).strip().lower()
+        if live:
+            live = str(live).strip().lower()
+            return live == expected, f"live={live} expected={expected}"
+        return None, f"unreadable parity payload {value!r}"
+    if isinstance(value, str):
+        token = value.strip().lower()
+        if token in _PARITY_TRUE:
+            return True, f"parity={token}"
+        if token in _PARITY_FALSE:
+            return False, f"parity={token}"
+        if token:
+            expected = _expected_feature_schema_hash()
+            return token == expected, f"live={token} expected={expected}"
+    return None, f"unreadable parity value {value!r}"
+
+
+def jesse_ml_model_health(ml_res: Dict[str, Any]) -> tuple[str, str]:
+    """Model-health verdict for a Jesse ML prediction: ("ok"|"failed"|"unknown", detail).
+
+    predict_server reports model_expired and feature_schema_parity on every
+    prediction. A stale model, or one trained against a different feature
+    schema than the engine now feeds it, must never size a position, so both
+    are hard failures in every mode. A field that is present but unreadable is
+    also a failure — an unreadable verdict is not evidence of health. Fields
+    missing entirely (older predict_server build) return "unknown" and are left
+    to the caller's mode gate.
+    """
+    missing: List[str] = []
+
+    expired_raw = ml_res.get("model_expired", _ABSENT)
+    if expired_raw is _ABSENT:
+        missing.append("model_expired")
+    else:
+        expired = _read_model_expired(expired_raw)
+        if expired is None:
+            return "failed", f"model_expired unreadable ({expired_raw!r})"
+        if expired:
+            return "failed", "model expired (model_expired=true)"
+
+    parity_raw = ml_res.get("feature_schema_parity", _ABSENT)
+    if parity_raw is _ABSENT:
+        missing.append("feature_schema_parity")
+    else:
+        parity, detail = _read_schema_parity(parity_raw)
+        if parity is None:
+            return "failed", f"feature schema parity unreadable ({detail})"
+        if not parity:
+            return "failed", f"feature schema mismatch ({detail})"
+
+    if missing:
+        return "unknown", "prediction response omits " + ", ".join(missing)
+    return "ok", "model fresh, feature schema in parity"
+
+
 
 def _positive_price_level(level: Optional[float]) -> Optional[float]:
     """Treat 0 / negative / unparseable as 'no level' — never a valid stop or target."""
@@ -546,6 +666,21 @@ class DecisionEngine:
                 from backend.services.jesse_bridge import jesse_bridge
                 ml_res = await jesse_bridge.get_ml_prediction(symbol=symbol, timeframe="1h")
                 if ml_res.get("status") == "success":
+                    # Model-health gate, evaluated before anything else in the
+                    # response is trusted: an expired model, or one trained on
+                    # a different feature schema than we now feed it, must not
+                    # reach the direction veto, the confidence boost or Kelly
+                    # sizing. Hard veto in every mode; absent fields only veto
+                    # where live orders are allowed (see _ml_model_health_fail_open).
+                    health, health_detail = jesse_ml_model_health(ml_res)
+                    if health == "failed" or (health == "unknown" and not _ml_model_health_fail_open()):
+                        logger.warning(f"[{symbol}] Jesse ML Model Health Gate VETO: {health_detail} blocks {signal.signal}")
+                        self._record_eval(symbol, signal.signal, signal.confidence,
+                                          f"vetoed by Jesse ML model health gate ({health_detail})")
+                        return None
+                    if health == "unknown":
+                        logger.warning(f"[{symbol}] Jesse ML model health unverified ({health_detail}) — fail-open outside live")
+
                     ml_sig = ml_res.get("signal")
                     ml_conf = ml_res.get("confidence", 0.0)
                     probs = ml_res.get("probabilities", {})

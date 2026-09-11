@@ -59,6 +59,13 @@ def test_classify_gate_from_deploy_branch_reason_strings():
     ) == "min_edge_gate"
     assert classify_gate("AI opinion too weak (<0.30)") == "ai_opinion_gate"
     assert classify_gate("Insufficient margin: available=1.2 < 5.0") == "margin_gate"
+    assert classify_gate(
+        "vetoed by Jesse ML model health gate (model expired (model_expired=true))"
+    ) == "jesse_ml_model_health"
+    assert classify_gate(
+        "vetoed by Jesse ML model health gate (feature schema mismatch "
+        "(live=deadbeefdeadbeef expected=cd15d2380809b247))"
+    ) == "jesse_ml_model_health"
     assert classify_gate("entry decision", "executed") == "other"
 
 

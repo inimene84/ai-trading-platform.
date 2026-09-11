@@ -63,6 +63,9 @@ def is_crypto_symbol(symbol: str) -> bool:
 # reason mentions "Kronos/LLM cost" so ranging must beat the Kronos needle;
 # and "vetoed by risk reviewer" must not be swallowed by a Kronos match.
 _GATE_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("jesse_ml_model_health", (
+        "jesse ml model health", "model expired", "feature schema",
+    )),
     ("llm_risk_reviewer", ("vetoed by risk reviewer", "risk reviewer")),
     ("confidence_gate", ("confidence below threshold", "below threshold")),
     ("ranging_block", ("ranging regime", "ranging:")),
