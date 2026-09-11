@@ -1003,10 +1003,11 @@ class SignalCandidateEngine:
                         curr,
                     )
                     continue
+                # One live macro candidate per symbol: keying on the event name
+                # let 3 same-hour USD events arm 3 identical EURUSD candidates.
                 already = any(
                     c.get("strategy") == "MACRO_EVENT_POST_REACTION"
                     and c.get("symbol") == matched_sym
-                    and (c.get("reason") or "").find(str(ev.get("event") or "")) >= 0
                     and c.get("status") in (CandidateStatus.PENDING, CandidateStatus.READY)
                     for c in self.candidates.values()
                 )
@@ -1200,6 +1201,34 @@ class SignalCandidateEngine:
             logger.warning(f"Could not resolve mark price for {sym}: {err}")
         return 0.0
 
+    @staticmethod
+    def _resolve_broker_session(ut: UnifiedTrading, broker: str) -> Optional[str]:
+        """Session id that routes to the candidate's own broker.
+
+        place_order() without a session id follows the global default session —
+        whatever startup or the trading loop last selected — so a binance_futures
+        candidate could fill on an unrelated (e.g. paper) book. Pick explicitly.
+        """
+        from backend.services.trading_mode import (
+            BINANCE_PAPER_SESSION_ID,
+            TradingMode,
+            binance_paper_parallel_enabled,
+            get_trading_mode,
+        )
+
+        sessions = [s for s in ut.list_sessions() if s.get("broker") == broker]
+        if not sessions:
+            return None
+        if broker == "binance_futures" and binance_paper_parallel_enabled():
+            for s in sessions:
+                if s.get("id") == BINANCE_PAPER_SESSION_ID:
+                    return s["id"]
+        want_live = get_trading_mode() == TradingMode.LIVE
+        for s in sessions:
+            if (s.get("mode") == "live") == want_live:
+                return s.get("id")
+        return sessions[0].get("id")
+
     # ── Execution Dispatcher ────────────────────────────────────────────────
     async def execute_candidate(self, candidate_id: str, force: bool = False) -> Dict[str, Any]:
         """Dispatch candidate trade signal through smart unified broker router."""
@@ -1375,6 +1404,17 @@ class SignalCandidateEngine:
                     cand["symbol"], cand["broker"], float(cand.get("entry_price") or 0)
                 )
                 ut = UnifiedTrading()
+                session_id = self._resolve_broker_session(ut, cand["broker"])
+                if not session_id:
+                    return {
+                        "success": False,
+                        "candidate_id": candidate_id,
+                        "symbol": cand["symbol"],
+                        "error": (
+                            f"No trading session registered for broker "
+                            f"{cand.get('broker')}; refusing to route via the default session."
+                        ),
+                    }
                 order_req = UnifiedOrder(
                     symbol=cand["symbol"],
                     side=order_side,
@@ -1384,7 +1424,7 @@ class SignalCandidateEngine:
                     stop_loss=cand.get("stop_loss"),
                     take_profit=cand.get("take_profit"),
                 )
-                res = ut.place_order(order_req)
+                res = ut.place_order(order_req, session_id=session_id)
                 success = res.success
                 order_id = res.order_id
                 msg = res.message
@@ -1398,6 +1438,22 @@ class SignalCandidateEngine:
             if success:
                 cand["status"] = CandidateStatus.EXECUTED
                 cand["executed_at"] = datetime.now(timezone.utc).isoformat()
+                # Defuse live twins: the position is on, so any remaining
+                # same symbol+direction candidate is pure overlapping risk.
+                for other_id, other in list(self.candidates.items()):
+                    if other_id == candidate_id:
+                        continue
+                    if (
+                        other.get("status") in (CandidateStatus.PENDING, CandidateStatus.READY)
+                        and str(other.get("symbol") or "").upper() == cand_sym
+                        and str(other.get("direction") or "").upper() == side
+                    ):
+                        other["status"] = CandidateStatus.CANCELLED
+                        other["cancel_reason"] = f"duplicate of executed {candidate_id}"
+                        logger.info(
+                            f"[{cand_sym}] Cancelled duplicate candidate {other_id} "
+                            f"(superseded by executed {candidate_id})"
+                        )
                 if cand["broker"] == "ctrader":
                     persist_ctrader_execution(
                         symbol=cand["symbol"],
