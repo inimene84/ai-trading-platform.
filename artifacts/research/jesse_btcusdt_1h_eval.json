@@ -1,0 +1,181 @@
+{
+  "code_commit": "3ce7975",
+  "command": "python3 scripts/research/jesse_chronological_eval.py --symbol 'BTC-USDT' --exchange 'Binance Perpetual Futures' --source-timeframe '1m' --timeframe '1h' --start '2024-01-01T00:00:00Z' --end '2026-09-09T00:00:00Z' --fee-per-side 0.0004 --slippage-per-side 0.0002 --assumed-funding-rate 0.0001 --code-commit 3ce7975",
+  "cost_scenario": {
+    "assumed_funding_rate": 0.0001,
+    "fee_per_side": 0.0004,
+    "fill_accounting": "Fees are charged on exact entry/exit fill notionals; adverse slippage is applied to each fill price.",
+    "funding_hours_utc": [
+      0,
+      8,
+      16
+    ],
+    "funding_interpretation": "Scenario assumption, not historical funding: positive fixed rate means longs pay and shorts receive at 00:00/08:00/16:00 UTC while open.",
+    "slippage_per_side": 0.0002
+  },
+  "data_provenance": {
+    "database_table": "candle",
+    "exchange": "Binance Perpetual Futures",
+    "funding_provenance": "Unavailable: the Jesse PostgreSQL schema has no funding-rate table.",
+    "raw_end": "2026-09-08T23:59:00+00:00",
+    "raw_quality": {
+      "expected_interval_seconds": 60,
+      "largest_interval_seconds": 60,
+      "missing_interval_estimate": 0,
+      "timestamp_monotonic": true,
+      "timestamp_unique": true,
+      "unexpected_interval_count": 0
+    },
+    "raw_rows": 1414080,
+    "raw_sha256": "2356d889c4fa775d3e15522f52fb62c153311014dd7549bb6e68d089d3acac52",
+    "raw_start": "2024-01-01T00:00:00+00:00",
+    "requested_end_exclusive": "2026-09-09T00:00:00+00:00",
+    "requested_start_inclusive": "2024-01-01T00:00:00+00:00",
+    "resampled_quality": {
+      "expected_interval_seconds": 3600,
+      "largest_interval_seconds": 3600,
+      "missing_interval_estimate": 0,
+      "timestamp_monotonic": true,
+      "timestamp_unique": true,
+      "unexpected_interval_count": 0
+    },
+    "source_timeframe": "1m",
+    "symbol": "BTC-USDT"
+  },
+  "experiments": [
+    {
+      "confidence_threshold_selected_on_validation": 0.45,
+      "exit_policy": {
+        "max_holding_bars": 72,
+        "name": "symmetric_fixed_barrier_reference",
+        "partial_atr": null,
+        "partial_fraction": 0.0,
+        "stop_atr": 1.0,
+        "target_atr": 2.5,
+        "trailing_activation_atr": null,
+        "trailing_distance_atr": null
+      },
+      "scope": "Research proxy for RiskConfig exit defaults only; it does not reproduce the CombinedStrategy, regime/Kronos/LLM gates, exchange tick ordering, or live sizing.",
+      "temperature_selected_on_validation": 2.2777132503397963,
+      "test_metrics": {
+        "annualized_sharpe": -1.7248221283790504,
+        "annualized_sortino": -1.920221913768295,
+        "equity_end": "2026-09-08T22:00:00+00:00",
+        "equity_start": "2026-02-22T08:00:00+00:00",
+        "funding_events": 12,
+        "max_drawdown_pct": -14.470820587654764,
+        "partial_exits": 0,
+        "total_return_pct": -10.945655928437926,
+        "trades": 14,
+        "win_rate_pct": 14.285714285714285
+      },
+      "validation_metrics": {
+        "annualized_sharpe": -0.5402244549004435,
+        "annualized_sortino": -0.8922901888651616,
+        "equity_end": "2026-02-22T07:00:00+00:00",
+        "equity_start": "2025-08-10T18:00:00+00:00",
+        "funding_events": 23,
+        "max_drawdown_pct": -16.60132552386313,
+        "partial_exits": 0,
+        "total_return_pct": -5.253593552369362,
+        "trades": 22,
+        "win_rate_pct": 18.181818181818183
+      }
+    },
+    {
+      "confidence_threshold_selected_on_validation": 0.4,
+      "exit_policy": {
+        "max_holding_bars": 72,
+        "name": "production_defaults_exit_proxy",
+        "partial_atr": 1.0,
+        "partial_fraction": 0.5,
+        "stop_atr": 1.0,
+        "target_atr": 2.5,
+        "trailing_activation_atr": 2.0,
+        "trailing_distance_atr": 0.8
+      },
+      "scope": "Research proxy for RiskConfig exit defaults only; it does not reproduce the CombinedStrategy, regime/Kronos/LLM gates, exchange tick ordering, or live sizing.",
+      "temperature_selected_on_validation": 2.2777132503397963,
+      "test_metrics": {
+        "annualized_sharpe": -3.244155899240852,
+        "annualized_sortino": -3.6902404124861836,
+        "equity_end": "2026-09-08T22:00:00+00:00",
+        "equity_start": "2026-02-22T08:00:00+00:00",
+        "funding_events": 75,
+        "max_drawdown_pct": -22.06255988033763,
+        "partial_exits": 26,
+        "total_return_pct": -20.382207098446624,
+        "trades": 79,
+        "win_rate_pct": 31.645569620253166
+      },
+      "validation_metrics": {
+        "annualized_sharpe": -1.9518186229654353,
+        "annualized_sortino": -2.3900849934309427,
+        "equity_end": "2026-02-22T07:00:00+00:00",
+        "equity_start": "2025-08-10T18:00:00+00:00",
+        "funding_events": 65,
+        "max_drawdown_pct": -27.247582188542495,
+        "partial_exits": 25,
+        "total_return_pct": -21.848045517201964,
+        "trades": 75,
+        "win_rate_pct": 30.666666666666664
+      }
+    }
+  ],
+  "generated_at": "2026-09-11T02:33:33.035052+00:00",
+  "library_versions": {
+    "lightgbm": "4.7.0",
+    "numpy": "1.26.4",
+    "pandas": "2.2.3",
+    "psycopg2-binary": "2.9.12",
+    "python": "3.11.16",
+    "scikit-learn": "1.8.0"
+  },
+  "notes": [
+    "Features observed at candle close execute no earlier than the next candle open.",
+    "Labels use the same next-open fills, exit policy, costs, and funding scenario as simulation.",
+    "Strategy and benchmark use the identical equity start/end horizon and daily MTM metrics.",
+    "Models are trained in memory and are not saved or promoted.",
+    "Test is evaluated only after validation-only calibration and threshold selection.",
+    "Same-bar stop/target ambiguity is resolved conservatively as stop first."
+  ],
+  "random_seed": 42,
+  "resampled_data": {
+    "bars": 23568,
+    "end": "2026-09-08T23:00:00+00:00",
+    "start": "2024-01-01T00:00:00+00:00",
+    "timeframe": "1h"
+  },
+  "splits": {
+    "common_equity_horizon": {
+      "end": "2026-09-08T22:00:00+00:00",
+      "start": "2026-02-22T08:00:00+00:00"
+    },
+    "purge_bars_between_train_validation_and_validation_test": 72,
+    "test": {
+      "observations": 4695,
+      "signal_end": "2026-09-05T22:00:00+00:00",
+      "signal_start": "2026-02-22T08:00:00+00:00"
+    },
+    "train": {
+      "observations": 14010,
+      "signal_end": "2025-08-07T17:00:00+00:00",
+      "signal_start": "2024-01-02T00:00:00+00:00"
+    },
+    "validation": {
+      "observations": 4622,
+      "signal_end": "2026-02-19T07:00:00+00:00",
+      "signal_start": "2025-08-10T18:00:00+00:00"
+    }
+  },
+  "spot_buy_and_hold_test_baseline": {
+    "annualized_sharpe": 0.8527455489516974,
+    "annualized_sortino": 1.354423095944524,
+    "description": "Unlevered spot buy-and-hold with identical fee/slippage fill model.",
+    "equity_end": "2026-09-08T22:00:00+00:00",
+    "equity_start": "2026-02-22T08:00:00+00:00",
+    "funding_included": false,
+    "max_drawdown_pct": -29.393063313347277,
+    "total_return_pct": 15.501314610068873
+  }
+}
