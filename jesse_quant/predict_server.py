@@ -127,14 +127,14 @@ def get_cached_model(symbol: str, timeframe: str = "1h", model_type: str = "ligh
             break
         candidates = [
             c for c in glob.glob(os.path.join(sdir, f"{norm_symbol}_{timeframe}_*.joblib"))
-            if ".rejected." not in os.path.basename(c)
+            if os.path.basename(c) == f"{norm_symbol}_{timeframe}_{model_type}.joblib"
         ]
         if candidates:
             found_path = candidates[0]
             break
         any_cand = [
-            c for c in glob.glob(os.path.join(sdir, f"{norm_symbol}_*.joblib"))
-            if ".rejected." not in os.path.basename(c)
+            c for c in glob.glob(os.path.join(sdir, f"{norm_symbol}_{timeframe}_{model_type}.joblib"))
+            if os.path.isfile(c)
         ]
         if any_cand:
             found_path = any_cand[0]
@@ -365,9 +365,15 @@ def run_inference(
 
     feats_df = pd.DataFrame([feats], columns=FEATURE_NAMES)
     probs = pipeline.predict_proba(feats_df)[0]
-    p_neutral = float(probs[0])
-    p_bullish = float(probs[1])
-    p_bearish = float(probs[2]) if len(probs) > 2 else 0.0
+    if len(probs) == 2:
+        # Binary meta-labeler: P(fail), P(TP-before-SL) for a long setup
+        p_bearish = float(probs[0])
+        p_bullish = float(probs[1])
+        p_neutral = 0.0
+    else:
+        p_neutral = float(probs[0])
+        p_bullish = float(probs[1])
+        p_bearish = float(probs[2]) if len(probs) > 2 else 0.0
 
     uncertainty_info = calculate_conformal_uncertainty(probs)
     gated = False
@@ -436,6 +442,8 @@ def run_inference(
             "sl_mult": sl_mult,
             "n_trials": metrics.get("n_trials"),
             "holdout_sharpe": metrics.get("holdout_sharpe"),
+            "bullish_recall": metrics.get("bullish_recall"),
+            "bearish_recall": metrics.get("bearish_recall"),
         },
         "latest_close": latest_close,
         "model": model_data.get("filename", "unknown"),

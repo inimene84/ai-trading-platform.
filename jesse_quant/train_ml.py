@@ -96,6 +96,26 @@ def load_candles_from_db(symbol: str = "BTC-USDT", timeframe: str = "1h") -> pd.
     return df
 
 
+def quantum_ai_event_index(df: pd.DataFrame) -> pd.Index:
+    """Bars where QuantumAIStrategy's long filter would fire (event-sampled labels)."""
+    close = df["close"]
+    ema_fast = close.ewm(span=20, adjust=False).mean()
+    ema_mid = close.ewm(span=50, adjust=False).mean()
+    ema_slow = close.ewm(span=200, adjust=False).mean()
+    delta = close.diff()
+    gain = delta.clip(lower=0.0)
+    loss = (-delta).clip(lower=0.0)
+    avg_gain = gain.ewm(span=14, adjust=False).mean()
+    avg_loss = loss.ewm(span=14, adjust=False).mean()
+    rsi = 100.0 - (100.0 / (1.0 + avg_gain / (avg_loss + 1e-12)))
+    bull_regime = (close > ema_slow) & (ema_mid > ema_slow)
+    pullback = (close <= ema_fast * 1.005) & (close >= ema_mid * 0.99)
+    rsi_dip = (rsi >= 38.0) & (rsi <= 54.0)
+    candle_bull = close > df["open"]
+    mask = bull_regime & pullback & rsi_dip & candle_bull
+    return df.index[mask]
+
+
 def prepare_dataset(
     df: pd.DataFrame,
     labeling_mode: str = "triple_barrier",
@@ -115,15 +135,29 @@ def prepare_dataset(
     X = compute_features_df(df)
 
     if labeling_mode == "triple_barrier":
-        print(f"[*] Applying Triple-Barrier Method: PT={pt_mult}x ATR, SL={sl_mult}x ATR, Max Holding={max_holding} bars...")
-        tb_df = apply_triple_barrier(df, pt_multiplier=pt_mult, sl_multiplier=sl_mult, max_holding_bars=max_holding)
+        events_idx = quantum_ai_event_index(df)
+        print(
+            f"[*] Applying Triple-Barrier Method on {len(events_idx):,} QuantumAI entry events: "
+            f"PT={pt_mult}x ATR, SL={sl_mult}x ATR, Max Holding={max_holding} bars..."
+        )
+        if len(events_idx) < 50:
+            print("[!] Too few strategy events; falling back to every-bar labeling")
+            events_idx = None
+        tb_df = apply_triple_barrier(
+            df,
+            events_idx=events_idx,
+            pt_multiplier=pt_mult,
+            sl_multiplier=sl_mult,
+            max_holding_bars=max_holding,
+        )
         sample_weights = compute_sample_uniqueness(tb_df, df.index)
 
-        # Mapping: +1 -> 1 (Bullish), -1 -> 2 (Bearish), 0 -> 0 (Neutral/Timeout)
+        # Meta-label relative to the long primary: TP-before-SL is class 1,
+        # everything else (SL or timeout) is class 0. Served as a 2-class
+        # P(setup works) so the live BUY gate is not a majority-class veto.
         y_raw = tb_df["label"]
         y = pd.Series(0, index=tb_df.index, dtype=int)
         y[y_raw == 1] = 1
-        y[y_raw == -1] = 2
 
         samples_info_sets = tb_df["t1"]
         common_idx = X.index.intersection(y.index)
@@ -149,7 +183,7 @@ def prepare_dataset(
 
     class_counts = y_clean.value_counts().to_dict()
     print(f"    Dataset prepared in {time.time()-t0:.2f}s: {len(X_clean):,} valid rows")
-    print(f"    Class Distribution: Neutral(0)={class_counts.get(0, 0):,}, Bullish(1)={class_counts.get(1, 0):,}, Bearish(2)={class_counts.get(2, 0):,}")
+    print(f"    Class Distribution: Fail/Timeout(0)={class_counts.get(0, 0):,}, TP-hit(1)={class_counts.get(1, 0):,}, Bearish(2)={class_counts.get(2, 0):,}")
     return X_clean, y_clean, w_clean, info_sets_clean
 
 
@@ -251,8 +285,8 @@ def train_model(
         else:
             clf.fit(X_train_s, y_train)
         preds = clf.predict(X_test_s)
-        pred_signal = np.where(preds == 1, 1.0, np.where(preds == 2, -1.0, 0.0))
-        actual_signal = np.where(y_test.to_numpy() == 1, 1.0, np.where(y_test.to_numpy() == 2, -1.0, 0.0))
+        pred_signal = np.where(preds == 1, 1.0, -1.0)
+        actual_signal = np.where(y_test.to_numpy() == 1, 1.0, -1.0)
         rets = pred_signal * actual_signal * 0.01
         holdout_columns.append(rets)
         sr = calculate_sharpe_ratio(rets)
@@ -322,8 +356,8 @@ def train_model(
         "pbo_median_rank": float(med_rank),
         "bullish_precision": float(report.get("1", {}).get("precision", 0)),
         "bullish_recall": float(report.get("1", {}).get("recall", 0)),
-        "bearish_precision": float(report.get("2", {}).get("precision", 0)),
-        "bearish_recall": float(report.get("2", {}).get("recall", 0)),
+        "bearish_precision": float(report.get("0", report.get("2", {})).get("precision", 0)),
+        "bearish_recall": float(report.get("0", report.get("2", {})).get("recall", 0)),
         "feature_importances": importances,
     }
 

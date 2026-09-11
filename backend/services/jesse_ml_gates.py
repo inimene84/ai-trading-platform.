@@ -93,6 +93,26 @@ def evaluate_promotion(
             sl_mult=sl,
         )
 
+    bullish_recall = _as_float(metrics.get("bullish_recall"))
+    bearish_recall = _as_float(metrics.get("bearish_recall"))
+    if (
+        bullish_recall is not None
+        and bearish_recall is not None
+        and bullish_recall < 0.05
+        and bearish_recall > 0.90
+    ):
+        return PromotionDecision(
+            ok=False,
+            reason=(
+                f"collapsed classifier (bullish recall {bullish_recall:.1%}, "
+                f"bearish recall {bearish_recall:.1%}) — would veto every BUY"
+            ),
+            dsr=dsr,
+            pbo=pbo,
+            pt_mult=pt,
+            sl_mult=sl,
+        )
+
     if dsr is None or pbo is None:
         if allow_overfit:
             return PromotionDecision(
