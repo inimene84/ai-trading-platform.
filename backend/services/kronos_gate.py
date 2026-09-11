@@ -98,7 +98,10 @@ def apply_pre_execution_gate(
 
     if not veto_reason:
         if strategy_signal == "BUY":
-            if k_cum5 <= -KRONOS_VETO_CUM5_PCT or k_mae <= -KRONOS_VETO_MAE_PCT or k_reversal:
+            # reversal_risk is a bounce-then-dump (cum_5 < 0) or dip-then-pump
+            # (cum_5 > 0). Only the dump path is adverse to a long.
+            opposing_reversal = k_reversal and k_cum5 < 0
+            if k_cum5 <= -KRONOS_VETO_CUM5_PCT or k_mae <= -KRONOS_VETO_MAE_PCT or opposing_reversal:
                 veto_reason = (
                     f"Kronos forecasts opposing drop "
                     f"(cum_5={k_cum5:+.2f}%, MAE={k_mae:+.2f}%)."
@@ -109,7 +112,10 @@ def apply_pre_execution_gate(
                     f"(sig={k_sig}, conf={k_conf:.2f}, cum_5={k_cum5:+.2f}%)."
                 )
         elif strategy_signal == "SELL":
-            if k_cum5 >= KRONOS_VETO_CUM5_PCT or k_mae >= KRONOS_VETO_MAE_PCT or k_reversal:
+            # Only a dip-then-pump reversal is adverse to a short. A drop path
+            # with reversal_risk=True used to veto aligned SELLs as "opposing pump".
+            opposing_reversal = k_reversal and k_cum5 > 0
+            if k_cum5 >= KRONOS_VETO_CUM5_PCT or k_mae >= KRONOS_VETO_MAE_PCT or opposing_reversal:
                 veto_reason = (
                     f"Kronos forecasts opposing pump "
                     f"(cum_5={k_cum5:+.2f}%, MAE={k_mae:+.2f}%)."

@@ -11,6 +11,7 @@ from backend.services.opinion_layer import analyze_symbol as opinion_analyze
 from backend.services.kronos_gate import apply_kronos_gate
 from backend.services import kronos_service
 from backend.services.skill_miner import skill_miner
+from backend.services.jesse_bridge import is_jesse_ml_model_gap, jesse_bridge
 
 logger = logging.getLogger(__name__)
 
@@ -543,7 +544,6 @@ class DecisionEngine:
         # 4e. Jesse Machine Learning Directional Consensus & Meta-Label Gate
         if self.enable_jesse_ml:
             try:
-                from backend.services.jesse_bridge import jesse_bridge
                 ml_res = await jesse_bridge.get_ml_prediction(symbol=symbol, timeframe="1h")
                 if ml_res.get("status") == "success":
                     ml_sig = ml_res.get("signal")
@@ -591,12 +591,21 @@ class DecisionEngine:
                         self._record_eval(symbol, signal.signal, signal.confidence, "confidence reduced below threshold by Jesse ML gate")
                         return None
                 else:
-                    if live_exchange_orders_allowed():
-                        err = ml_res.get("error") or "Jesse ML status not success"
+                    err = ml_res.get("error") or "Jesse ML status not success"
+                    # Missing / unpromoted artifacts are expected for most of the
+                    # universe. Fail-closed on those vetoed every live entry after
+                    # the ML gate landed (0 deployable models on the VPS).
+                    if ml_res.get("status") == "no_model" or is_jesse_ml_model_gap(err):
+                        logger.warning(
+                            f"[{symbol}] Jesse ML gate skipped — no deployable model ({err})"
+                        )
+                        setattr(signal, "jesse_ml_gap", err)
+                    elif live_exchange_orders_allowed():
                         logger.error(f"[{symbol}] Jesse ML gate returned non-success in LIVE mode ({err}) — fail closed: vetoing {signal.signal}")
                         self._record_eval(symbol, signal.signal, signal.confidence, f"vetoed by Jesse ML error in LIVE mode ({err})")
                         return None
-                    logger.debug(f"[{symbol}] Jesse ML returned non-success in paper mode ({ml_res.get('error')}) — skipping gate")
+                    else:
+                        logger.debug(f"[{symbol}] Jesse ML returned non-success in paper mode ({err}) — skipping gate")
             except Exception as e:
                 if live_exchange_orders_allowed():
                     logger.error(f"[{symbol}] Jesse ML gate failed in LIVE mode ({e}) — fail closed: vetoing {signal.signal}")
@@ -812,6 +821,11 @@ class DecisionEngine:
             )
             return None
 
+        reasoning = f"Regime: {regime}"
+        gap = getattr(signal, "jesse_ml_gap", None)
+        if gap:
+            reasoning += " | Jesse ML gate skipped (no deployable model)"
+
         return Decision(
             action=direction,
             symbol=symbol,
@@ -820,7 +834,7 @@ class DecisionEngine:
             stop_loss=sl,
             take_profit=tp,
             confidence=signal.confidence,
-            reasoning=f"Regime: {regime}",
+            reasoning=reasoning,
             is_pyramid=is_pyramid
         )
 
