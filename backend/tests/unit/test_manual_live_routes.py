@@ -280,6 +280,36 @@ async def test_manual_close_binance_paper_parallel_closes_db_without_exchange():
 
 
 @pytest.mark.asyncio
+async def test_manual_close_live_mode_skips_exchange_for_paper_ghost():
+    """mode=paper with no venue id must not send a live reduce-only close."""
+    trade = SimpleNamespace(
+        id=9944, symbol="ETHUSDT", direction="BUY", quantity=0.1,
+        entry_price=100.0, status="open", exit_price=None, pnl=0.0,
+        closed_at=None, notes="", broker="binance_futures", exchange="binance_futures",
+        broker_position_id=None, broker_order_id=None, binance_order_id=None,
+        mode="paper",
+    )
+    db = _db_with_trade(trade)
+    router = MagicMock()
+    tick = {"lastPrice": "105.0"}
+    market = MagicMock()
+    market.get_ticker_24h = AsyncMock(return_value=tick)
+
+    with patch("backend.routes.trading.SessionLocal", return_value=db), \
+         patch("backend.routes.trading.UnifiedTrading", return_value=router), \
+         patch("backend.services.trading_mode.get_trading_mode", return_value=TradingMode.LIVE), \
+         patch("backend.services.trading_mode.binance_paper_parallel_enabled", return_value=False), \
+         patch("backend.services.trading_mode.live_binance_orders_allowed", return_value=True), \
+         patch("backend.services.binance_market_data.binance_market_data", market):
+        result = await close_position(9944)
+
+    router.place_order.assert_not_called()
+    assert trade.status == "closed"
+    assert result["paper_mode"] is True
+    db.commit.assert_called_once()
+
+
+@pytest.mark.asyncio
 async def test_manual_close_finds_trade_by_broker_position_id():
     trade = SimpleNamespace(
         id=9933, symbol="USDJPY", direction="SELL", quantity=0.02,

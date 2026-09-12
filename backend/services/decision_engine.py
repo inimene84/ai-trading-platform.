@@ -10,7 +10,7 @@ from backend.ml.promotion_service import (
     promotion_required,
     resolve_promotion,
 )
-from backend.services.jesse_bridge import is_jesse_ml_model_gap, jesse_bridge
+from backend.services.jesse_bridge import jesse_bridge
 from backend.services.kronos_gate import apply_kronos_gate
 from backend.services.opinion_layer import analyze_symbol as opinion_analyze
 from backend.services.risk_config import RiskConfig
@@ -772,10 +772,10 @@ class DecisionEngine:
                                 return None
                     else:
                         err = ml_res.get("error") or "Jesse ML status not success"
-                        # Missing / unpromoted artifacts are expected for most of the
-                        # universe. Fail-closed on those vetoed every live entry after
-                        # the ML gate landed (0 deployable models on the VPS).
-                        if ml_res.get("status") == "no_model" or is_jesse_ml_model_gap(err):
+                        # Only the bridge may classify a gap as no_model (200 / 4xx).
+                        # Do not re-parse error text here — a 5xx traceback that
+                        # mentions artifacts is still an outage and must veto live.
+                        if ml_res.get("status") == "no_model":
                             logger.warning(
                                 f"[{symbol}] Jesse ML gate skipped — no deployable model ({err})"
                             )

@@ -179,6 +179,57 @@ async def test_jesse_ml_gate_skips_no_model_in_live(ml_risk_config, monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_jesse_ml_gate_fail_closed_on_payload_error_in_live(ml_risk_config, monkeypatch):
+    """status=error (timeout) must veto live even when no exception is raised."""
+    monkeypatch.setenv("TRADING_MODE", "live")
+    monkeypatch.setenv("JESSE_ML_GATE_ENABLED", "true")
+    engine = DecisionEngine(ml_risk_config)
+    engine.enable_kronos = False
+    engine.promotion_state = None
+    engine.account_equity = 1000.0
+    engine.account_available = 1000.0
+    bars = _make_bars(50)
+
+    mock_signal = StrategySignal(symbol="BTCUSDC", signal="BUY", confidence=0.60, entry_price=bars[-1]["close"])
+    engine.strategy.generate_signal = MagicMock(return_value=mock_signal)
+    engine.regime_detector.detect = MagicMock(return_value=MagicMock(regime="TRENDING", weights=MagicMock(return_value={})))
+
+    mock_ml_res = {"status": "error", "error": "timeout"}
+    with patch("backend.services.decision_engine.jesse_bridge.get_ml_prediction", AsyncMock(return_value=mock_ml_res)):
+        decision = await engine.evaluate_symbol("BTCUSDC", bars, None, 0, [], False)
+
+    assert decision is None
+    assert "vetoed by Jesse ML error in LIVE mode" in engine.last_evaluation.get("reason", "")
+
+
+@pytest.mark.asyncio
+async def test_jesse_ml_gate_fail_closed_on_5xx_body_mentioning_artifact(ml_risk_config, monkeypatch):
+    """A 5xx traceback that mentions artifacts is still an outage — do not skip."""
+    monkeypatch.setenv("TRADING_MODE", "live")
+    monkeypatch.setenv("JESSE_ML_GATE_ENABLED", "true")
+    engine = DecisionEngine(ml_risk_config)
+    engine.enable_kronos = False
+    engine.promotion_state = None
+    engine.account_equity = 1000.0
+    engine.account_available = 1000.0
+    bars = _make_bars(50)
+
+    mock_signal = StrategySignal(symbol="BTCUSDC", signal="BUY", confidence=0.60, entry_price=bars[-1]["close"])
+    engine.strategy.generate_signal = MagicMock(return_value=mock_signal)
+    engine.regime_detector.detect = MagicMock(return_value=MagicMock(regime="TRENDING", weights=MagicMock(return_value={})))
+
+    mock_ml_res = {
+        "status": "error",
+        "error": "ML server returned HTTP 500: Traceback no model artifact found",
+    }
+    with patch("backend.services.decision_engine.jesse_bridge.get_ml_prediction", AsyncMock(return_value=mock_ml_res)):
+        decision = await engine.evaluate_symbol("BTCUSDC", bars, None, 0, [], False)
+
+    assert decision is None
+    assert "vetoed by Jesse ML error in LIVE mode" in engine.last_evaluation.get("reason", "")
+
+
+@pytest.mark.asyncio
 async def test_jesse_ml_gate_fail_closed_in_live_mode(ml_risk_config, monkeypatch):
     """In LIVE mode, when Jesse ML server is down or errors, gate fails closed (vetoes entry)."""
     monkeypatch.setenv("TRADING_MODE", "live")

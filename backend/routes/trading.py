@@ -1981,13 +1981,12 @@ async def close_position(position_id: str):
             raise HTTPException(status_code=404, detail=f"Open position {position_id} not found")
 
         target_broker = getattr(trade, "broker", None) or getattr(trade, "exchange", None) or "binance_futures"
-        binance_order_id = getattr(trade, "binance_order_id", None)
         is_binance_paper = (
             target_broker != "ctrader"
             and (
                 not live_binance_orders_allowed()
                 or binance_paper_parallel_enabled()
-                or (bool(binance_order_id) and str(binance_order_id).startswith("paper_"))
+                or is_binance_paper_fill(trade)
             )
         )
         paper_mode = (get_trading_mode() != TradingMode.LIVE) or is_binance_paper
