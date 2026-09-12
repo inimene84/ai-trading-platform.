@@ -6,14 +6,16 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 from typing import Any, Dict, Optional
 
+from backend.ml.promotion_service import resolve_promotion
 from backend.services.jesse_bridge import jesse_bridge
+from backend.services.risk_config import get_risk_config
 
 router = APIRouter(tags=["Jesse Quant Engine"])
 
 
 class StrategySyncRequest(BaseModel):
-    sl_atr_mult: float = 2.0
-    tp_atr_mult: float = 4.0
+    sl_atr_mult: float = 1.75
+    tp_atr_mult: float = 5.5
     trail_activation_atr: float = 1.8
     trail_atr_mult: float = 1.6
 
@@ -65,6 +67,22 @@ class MLPredictionRequest(BaseModel):
     timeframe: str = "1h"
     model_type: str = "lightgbm"
     threshold: float = 0.45
+
+
+@router.get("/promotion-status")
+def get_promotion_status() -> Dict[str, Any]:
+    """Read-only promotion contract verdict. Does not place orders or hit /trading/*."""
+    state = resolve_promotion(get_risk_config())
+    if state is None:
+        return {"status": "unconfigured", "verdict": None, "reason": "no promotion artifacts loaded"}
+    return {
+        "status": "ok",
+        "verdict": state.verdict,
+        "reason": state.result.reason,
+        "failed_gate": state.result.failed_gate,
+        "warnings": state.result.warnings,
+        "details": state.result.details,
+    }
 
 
 @router.get("/ml-models")

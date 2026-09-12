@@ -170,12 +170,17 @@ class RiskConfig(BaseSettings):
     
     # SL/TP (env-tunable so the payoff geometry can be tuned without a rebuild)
     sl_atr_mult: float = PydanticField(
-        default=1.0,
+        default=1.75,
         validation_alias=AliasChoices("sl_atr_mult", "SL_ATR_MULT"),
     )
     tp_atr_mult: float = PydanticField(
-        default=2.5,
+        default=5.5,
         validation_alias=AliasChoices("tp_atr_mult", "TP_ATR_MULT"),
+    )
+    # Must match training Triple-Barrier ATR period (geometry.json locked field).
+    atr_period: int = PydanticField(
+        default=14,
+        validation_alias=AliasChoices("atr_period", "ATR_PERIOD"),
     )
 
     # ── Min-edge gate (fee-churn killer) ──

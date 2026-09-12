@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://quantumtrade.local/schema/qtp-promotion-contract/1.0.0/metrics.schema.json",
+  "title": "QTP metrics.json",
+  "type": "object",
+  "additionalProperties": true,
+  "required": [
+    "spec_version",
+    "hashes",
+    "n_trials_effective",
+    "n_trials_source",
+    "dsr",
+    "dsr_is_probability",
+    "pbo",
+    "pbo_n_configs",
+    "pbo_n_obs",
+    "pbo_n_splits",
+    "pbo_matrix_complete",
+    "pbo_feasible",
+    "n_trades",
+    "net_sharpe_after_costs",
+    "costed_edge_bps",
+    "zero_cost",
+    "holdout",
+    "promote_requested"
+  ],
+  "properties": {
+    "spec_version": { "type": "string", "const": "1.0.0" },
+    "strategy_id": { "type": "string" },
+    "hashes": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["geometry_hash", "feature_schema_hash"],
+      "properties": {
+        "geometry_hash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "feature_schema_hash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "holdout_id": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+      }
+    },
+    "n_trials_raw": { "type": "number", "minimum": 1 },
+    "n_trials_effective": { "type": "number", "exclusiveMinimum": 0 },
+    "n_trials_source": {
+      "type": "string",
+      "enum": [
+        "effective_n_trials",
+        "TrialSharpeRecorder.n_effective",
+        "TrialSharpeRecorder.n_effective()",
+        "recorder.n_effective",
+        "recorder.n_effective()"
+      ]
+    },
+    "dsr": { "type": "number", "minimum": 0, "maximum": 1 },
+    "dsr_is_probability": { "type": "boolean", "const": true },
+    "pbo": { "type": "number", "minimum": 0, "maximum": 1 },
+    "pbo_n_configs": { "type": "integer", "minimum": 0 },
+    "pbo_n_obs": { "type": "integer", "minimum": 0 },
+    "pbo_n_splits": { "type": "integer", "minimum": 2 },
+    "pbo_matrix_complete": { "type": "boolean" },
+    "pbo_feasible": { "type": "boolean" },
+    "n_trades": { "type": "integer", "minimum": 0 },
+    "net_sharpe_after_costs": { "type": "number" },
+    "costed_edge_bps": { "type": "number" },
+    "zero_cost": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["used_for_promotion"],
+      "properties": {
+        "dsr": { "type": ["number", "null"] },
+        "net_sharpe": { "type": ["number", "null"] },
+        "used_for_promotion": { "type": "boolean" }
+      }
+    },
+    "holdout": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "spent": { "type": "boolean" },
+        "spent_this_run": { "type": "boolean" },
+        "passed": { "type": ["boolean", "null"] },
+        "start": { "type": "string" },
+        "end": { "type": "string" },
+        "instrument": { "type": "string" },
+        "timeframe": { "type": "string" }
+      }
+    },
+    "path_sharpe_p10": { "type": ["number", "null"] },
+    "conformal_coverage": { "type": ["number", "null"] },
+    "minbtl_years": { "type": ["number", "null"] },
+    "track_record_years": { "type": ["number", "null"] },
+    "promote_requested": { "type": "boolean" },
+    "production_kill": { "type": "boolean" },
+    "production_drift": { "type": "boolean" },
+    "advisory_verdict": {
+      "type": "string",
+      "enum": ["REJECT", "SHADOW", "PROMOTE", "ROLLBACK"]
+    }
+  }
+}

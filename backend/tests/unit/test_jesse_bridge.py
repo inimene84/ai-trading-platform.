@@ -150,6 +150,15 @@ async def test_jesse_bridge_get_ml_prediction():
         assert res["confidence"] == 0.58
 
 
+def test_jesse_promotion_status_unconfigured(client, monkeypatch):
+    api_key = os.getenv("ADMIN_API_KEY", "test_key")
+    monkeypatch.setenv("ADMIN_API_KEY", api_key)
+    monkeypatch.delenv("QTP_PROMOTION_ARTIFACT_DIR", raising=False)
+    res = client.get("/api/jesse/promotion-status", headers={"x-api-key": api_key})
+    assert res.status_code == 200
+    assert res.json()["status"] == "unconfigured"
+
+
 def test_jesse_ml_predict_routes(client, monkeypatch):
     """Test /api/jesse/ml-predict (GET and POST) and /api/jesse/ml-models."""
     api_key = os.getenv("ADMIN_API_KEY", "test_key")

@@ -8,7 +8,6 @@ QuantumTrade trading platform:
 """
 
 import os
-import json
 import logging
 import httpx
 from typing import Any, Dict, Optional
@@ -207,8 +206,8 @@ class JesseBridgeService:
 
     def sync_strategy_to_risk_config(
         self,
-        sl_atr_mult: float = 2.0,
-        tp_atr_mult: float = 4.0,
+        sl_atr_mult: float = 1.75,
+        tp_atr_mult: float = 5.5,
         trail_activation_atr: float = 1.8,
         trail_atr_mult: float = 1.6,
     ) -> Dict[str, Any]:

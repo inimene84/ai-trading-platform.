@@ -9,17 +9,32 @@ description = "Hardcoded admin API fallback previously shipped in the frontend"
 regex = '''39b2487d5386c4fd52e258721a2170915797f7280b8b0afc'''
 tags = ["key", "quantumtrade"]
 
+  [[rules.allowlists]]
+  description = "Keep the burned value only in the deny-list and this config"
+  paths = [
+    '''(^|/)scripts/ci/forbidden_substrings\.txt$''',
+    '''(^|/)\.gitleaks\.toml$''',
+  ]
+
+# Path and regex allowlists MUST be separate. A single [[allowlists]] table
+# with both `paths` and `regexes` is treated as AND, which hid .env.example
+# and the deny-list file from the path exceptions.
 [[allowlists]]
-description = "Documented placeholders and the scanner's own deny-list"
+description = "Example env files, scanner config, and the burned-marker deny list"
 paths = [
   '''(^|/)\.env\.example$''',
   '''(^|/)n8n/\.env\.example$''',
   '''(^|/)scripts/ci/forbidden_substrings\.txt$''',
   '''(^|/)\.gitleaks\.toml$''',
 ]
+
+[[allowlists]]
+description = "Documented placeholders — not live credentials"
 regexTarget = "match"
 regexes = [
-  '''your_[A-Za-z0-9_]+_here''',
+  '''(?i)your_[A-Za-z0-9_]+(_here)?''',
   '''change-me-strong-password''',
   '''sk-local-litellm-key''',
+  '''YOUR_ADMIN_API_KEY''',
+  '''YOUR_TOKEN_HERE''',
 ]
