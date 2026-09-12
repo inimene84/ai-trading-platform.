@@ -39,6 +39,13 @@ class ExecuteCandidateRequest(BaseModel):
     force: bool = Field(default=False, description="Override timing window check")
 
 
+class CancelCandidatesRequest(BaseModel):
+    candidate_id: Optional[str] = Field(default=None, description="Cancel a single live candidate")
+    symbol: Optional[str] = Field(default=None, description="Cancel live candidates for this symbol")
+    direction: Optional[str] = Field(default=None, description="Required with symbol (BUY/SELL)")
+    reason: str = Field(default="admin cancel", description="Stored on each cancelled row")
+
+
 class TimingConfigPayload(BaseModel):
     pre_event_window_min: Optional[int] = Field(default=15, ge=1, le=120)
     at_release_window_sec: Optional[int] = Field(default=45, ge=5, le=300)
@@ -141,6 +148,48 @@ async def get_ready_signals(
         "open_ctrader_positions": signal_candidate_engine._open_ctrader_position_count(),
         "execution_config": signal_candidate_engine.execution_config,
     }
+
+
+@router.post("/candidates/cancel")
+async def cancel_candidates(payload: CancelCandidatesRequest = Body(...)):
+    """Cancel live PENDING/READY candidates. Never closes broker positions."""
+    if payload.candidate_id:
+        ok = signal_candidate_engine.cancel_candidate(
+            payload.candidate_id, reason=payload.reason
+        )
+        if not ok:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Live candidate {payload.candidate_id} not found.",
+            )
+        return {
+            "status": "ok",
+            "cancelled": [payload.candidate_id],
+            "remaining_live": sum(
+                1
+                for c in signal_candidate_engine.candidates.values()
+                if c.get("status") in ("PENDING", "READY")
+            ),
+            "timestamp": int(time.time()),
+        }
+    if payload.symbol and payload.direction:
+        cancelled = signal_candidate_engine.cancel_live_same_direction(
+            payload.symbol, payload.direction, reason=payload.reason
+        )
+        return {
+            "status": "ok",
+            "cancelled": cancelled,
+            "remaining_live": sum(
+                1
+                for c in signal_candidate_engine.candidates.values()
+                if c.get("status") in ("PENDING", "READY")
+            ),
+            "timestamp": int(time.time()),
+        }
+    raise HTTPException(
+        status_code=400,
+        detail="Provide candidate_id, or both symbol and direction.",
+    )
 
 
 @router.post("/candidates/clear")

@@ -21,11 +21,20 @@ _CTRADER_EXTRA_SYMBOLS = {
 
 
 def is_ctrader_trade(trade: Any) -> bool:
-    """True for trades originating from or belonging to cTrader."""
+    """True for trades originating from or belonging to cTrader.
+
+    Live Binance rows stamp broker_position_id as SYMBOL:LONG/SHORT. Treating
+    any PID as cTrader made GET /positions close those legs as FX ghosts.
+    """
+    from backend.services.ledger import is_binance_position_key
+
     broker = (getattr(trade, "broker", None) or getattr(trade, "exchange", None) or "").lower()
-    if "ctrader" in broker:
+    if "binance" in broker:
+        return False
+    if "ctrader" in broker or broker in {"ic", "icmarkets"}:
         return True
-    if getattr(trade, "broker_position_id", None):
+    pid = getattr(trade, "broker_position_id", None)
+    if pid and not is_binance_position_key(pid):
         return True
     sym = str(getattr(trade, "symbol", "") or "").upper().strip()
     clean_sym = sym.split(".")[0].split("_")[0].replace("/", "").replace("-", "")
@@ -48,6 +57,8 @@ def persist_ctrader_execution(
     notes: Optional[str] = None,
 ) -> Optional[int]:
     """Insert an open Trade row for a successful cTrader dispatch."""
+    from backend.services.trading_mode import live_ctrader_orders_allowed
+
     db = SessionLocal()
     try:
         trade = Trade(
@@ -64,6 +75,7 @@ def persist_ctrader_execution(
             broker_order_id=str(order_id) if order_id else None,
             broker_position_id=str(position_id) if position_id else None,
             notes=notes or "cTrader live execution",
+            mode="live" if live_ctrader_orders_allowed() else "paper",
         )
         db.add(trade)
         db.commit()
@@ -86,7 +98,11 @@ def count_open_ctrader_db_trades() -> int:
         from backend.database.models import Trade
         return int(
             db.query(Trade)
-            .filter(Trade.broker == "ctrader", Trade.status == "open", Trade.closed_at.is_(None))
+            .filter(
+                Trade.broker == "ctrader",
+                Trade.status.in_(_OPEN_STATUSES),
+                Trade.closed_at.is_(None),
+            )
             .count()
         )
     except Exception as exc:
@@ -103,7 +119,11 @@ def open_ctrader_db_symbols() -> set:
         from backend.database.models import Trade
         rows = (
             db.query(Trade.symbol)
-            .filter(Trade.broker == "ctrader", Trade.status == "open", Trade.closed_at.is_(None))
+            .filter(
+                Trade.broker == "ctrader",
+                Trade.status.in_(_OPEN_STATUSES),
+                Trade.closed_at.is_(None),
+            )
             .all()
         )
         return {str(r[0]).upper() for r in rows if r and r[0]}
@@ -114,17 +134,18 @@ def open_ctrader_db_symbols() -> set:
         db.close()
 
 
-def open_ctrader_db_positions() -> list:
-    """Open cTrader Trade rows as {symbol, direction} dicts (live + simulated).
-
-    Used for net currency exposure caps, which need direction, not just symbols.
-    """
+def try_open_ctrader_db_positions() -> Optional[list]:
+    """Open cTrader Trade rows, or None if the DB cannot be read."""
     db = SessionLocal()
     try:
         from backend.database.models import Trade
         rows = (
             db.query(Trade.symbol, Trade.direction)
-            .filter(Trade.broker == "ctrader", Trade.status == "open", Trade.closed_at.is_(None))
+            .filter(
+                Trade.broker == "ctrader",
+                Trade.status.in_(_OPEN_STATUSES),
+                Trade.closed_at.is_(None),
+            )
             .all()
         )
         return [
@@ -133,9 +154,18 @@ def open_ctrader_db_positions() -> list:
         ]
     except Exception as exc:
         logger.warning("Could not list open cTrader DB positions: %s", exc)
-        return []
+        return None
     finally:
         db.close()
+
+
+def open_ctrader_db_positions() -> list:
+    """Open cTrader Trade rows as {symbol, direction} dicts (live + simulated).
+
+    Used for net currency exposure caps, which need direction, not just symbols.
+    """
+    found = try_open_ctrader_db_positions()
+    return found if found is not None else []
 
 
 def close_simulated_open_ctrader_trades(*, reason: str = "simulated ghost cleanup") -> int:
@@ -449,9 +479,15 @@ def overlay_live_mark(
     """Prefer live-book PnL/qty when the dashboard row is a cTrader trade."""
     broker = (payload.get("broker") or "").lower()
     sym = str(payload.get("symbol") or "").upper()
+    if "binance" in broker:
+        return payload
+    from backend.services.ledger import is_binance_position_key
     is_ctrader = (
         broker == "ctrader"
-        or payload.get("broker_position_id")
+        or (
+            payload.get("broker_position_id")
+            and not is_binance_position_key(payload.get("broker_position_id"))
+        )
         or (len(sym) == 6 and sym.isalpha() and not sym.endswith("USDT"))
         or sym in ("XAUUSD", "XAGUSD")
     )

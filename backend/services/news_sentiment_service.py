@@ -280,8 +280,12 @@ class NewsSentimentService:
                     )
                     scored_records.append(rec)
                 return scored_records
+            return scored_records
 
-        # Fallback to fast triage keyword score for detected pairs
+        if not is_actionable:
+            return scored_records
+
+        # Keyword fallback only for high-impact (actionable) headlines when LLM is off.
         for pair in candidate_pairs:
             rec = self.record_sentiment(
                 article_id=article.id,
@@ -350,6 +354,18 @@ class NewsSentimentService:
                 conf_sum += (s.confidence or 0.5)
 
             n = len(scores)
+            min_headlines = int(os.getenv("SENTIMENT_MIN_HEADLINES", "3") or 3)
+            if n < min_headlines:
+                return {
+                    "pair": pair.upper(),
+                    "article_count": n,
+                    "avg_score": 0.0,
+                    "recency_weighted_score": 0.0,
+                    "signal": "neutral",
+                    "confidence": 0.0,
+                    "last_updated": scores[0].created_at.isoformat() if scores else None,
+                    "reason": f"insufficient_headlines:{n}<{min_headlines}",
+                }
             avg_score = round(simple_sum / n, 4)
             recency_weighted_score = round(weighted_sum / total_weight, 4) if total_weight > 0 else 0.0
 

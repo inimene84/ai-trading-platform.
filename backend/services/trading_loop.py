@@ -29,8 +29,10 @@ from backend.services.sentry_state import get_trading_status, is_trading_allowed
 from backend.services.trading_mode import (
     BINANCE_PAPER_SESSION_ID,
     TradingMode,
+    binance_order_session_id,
     binance_paper_parallel_enabled,
     get_trading_mode,
+    live_binance_orders_allowed,
     paper_leverage_for_broker,
     paper_reported_equity,
     paper_starting_balance,
@@ -45,6 +47,12 @@ from backend.services.trading_loop_helpers import (
     remove_closed_pyramid_layer,
     trades_for_direction_cap,
     is_ctrader_trade,
+)
+from backend.services.symbol_aliases import (
+    first_matching_open,
+    is_flatten_action,
+    perp_alias_set,
+    same_crypto_perp_leg,
 )
 
 load_dotenv()
@@ -228,22 +236,32 @@ class TradingLoopService:
 
     @staticmethod
     def _is_live_binance() -> bool:
-        return (
-            os.getenv("ACTIVE_BROKER", "ctrader") == "binance_futures"
-            and get_trading_mode() == TradingMode.LIVE
-            and not binance_paper_parallel_enabled()
-        )
+        """True when crypto fills/sync must talk to the live Binance book.
+
+        Dual-broker live (ACTIVE_BROKER=ctrader + TRADING_MODE=live) still
+        owns USDT-M rows on Binance unless BINANCE_PAPER_PARALLEL is on.
+        """
+        return live_binance_orders_allowed()
 
     @staticmethod
     def _crypto_session_id() -> str | None:
-        """Paper-parallel crypto fills use a dedicated session, not live cTrader."""
+        """Paper-parallel crypto fills use a dedicated session, not live cTrader.
+
+        Live dual-broker must NOT return the Binance live session here — callers
+        treat a non-None value as 'use the paper book / paper leverage'.
+        """
         if binance_paper_parallel_enabled() and not TradingLoopService._is_live_binance():
             return BINANCE_PAPER_SESSION_ID
         return None
 
     @staticmethod
+    def _binance_order_session_id() -> str | None:
+        """Session id for crypto UnifiedTrading.place_order (paper or live)."""
+        return binance_order_session_id()
+
+    @staticmethod
     def _crypto_broker_name() -> str:
-        if TradingLoopService._crypto_session_id():
+        if TradingLoopService._crypto_session_id() or TradingLoopService._is_live_binance():
             return "binance_futures"
         return get_active_broker_name()
 
@@ -407,6 +425,21 @@ class TradingLoopService:
                 )
             self._unified_trading.set_default_session(sid)
             logger.info("Trading loop crypto fills → Binance paper session %s", sid)
+        else:
+            live_sid = self._binance_order_session_id()
+            if live_sid:
+                if not self._unified_trading.get_session(live_sid):
+                    self._unified_trading.init_session(
+                        "binance_futures",
+                        mode="live",
+                        leverage=paper_leverage_for_broker("binance_futures"),
+                        session_id=live_sid,
+                    )
+                logger.info(
+                    "Trading loop crypto fills → Binance live session %s "
+                    "(default session unchanged)",
+                    live_sid,
+                )
 
         mode = get_trading_mode()
         logger.info(f"TradingLoopService starting in mode={mode.value.upper()}")
@@ -879,7 +912,7 @@ class TradingLoopService:
                                 quantity=trade.quantity,
                                 price=float(curr_price or 0),
                                 reduce_only=True,
-                            ), session_id=self._crypto_session_id())
+                            ), session_id=self._binance_order_session_id())
                             if res.success:
                                 trade.exit_price = res.filled_price or curr_price
                                 if res.realized_pnl is not None:
@@ -1144,16 +1177,22 @@ class TradingLoopService:
 
         try:
             # 1. Fetch existing position (DB + live exchange — hedge mode can drift)
-            existing = db.query(Trade).filter(
-                Trade.symbol == symbol,
-                Trade.status.in_(["open", "filled"])
-            ).first()
+            # USDT/USDC perps are one book: BTCUSDC must see a live BTCUSDT long.
+            alias_syms = perp_alias_set(symbol)
+            existing = first_matching_open(
+                db.query(Trade).filter(
+                    Trade.symbol.in_(alias_syms),
+                    Trade.status.in_(["open", "filled"]),
+                ).all(),
+                symbol,
+            )
 
             # Use cycle-level cached positions instead of per-symbol API call.
             # get_positions() returns ALL symbols; filtering is cheap.
             exchange_legs = [
                 p for p in self._cycle_positions
-                if p.get("symbol") == symbol and float(p.get("quantity") or 0) > 0
+                if same_crypto_perp_leg(p.get("symbol"), symbol)
+                and float(p.get("quantity") or 0) > 0
             ]
 
             if exchange_legs and not existing:
@@ -1202,7 +1241,7 @@ class TradingLoopService:
             # 3b. Margin gate — when the cycle pre-check found no affordable
             # margin, skip the whole entry pipeline (strategy + Kronos + LLM)
             # for this symbol. Exits and SL/TP management still run below.
-            if getattr(self, "_entries_blocked", False):
+            if getattr(self, "_entries_blocked", False) and not existing:
                 self._check_sl_tp(db, symbol, bars)
                 db.commit()
                 return {"signals": 0, "trades": 0}
@@ -1286,8 +1325,12 @@ class TradingLoopService:
                     logger.warning(f"  [ {symbol} ] InfluxDB write_signal failed: {_ie}")
 
                 # Check directional exposure + correlation limits (if not pyramid)
+                # Flatten/reverse of an existing BTC (etc.) leg is not a new slot.
                 _new_notional = decision.quantity * decision.entry_price
-                if not decision.is_pyramid:
+                if is_flatten_action(decision.action):
+                    signal_status = "approved"
+                    signal_reason = "opposing flatten"
+                elif not decision.is_pyramid:
                     all_open = db.query(Trade).filter(Trade.status.in_(["open", "filled"])).all()
                     scoped_open = trades_for_direction_cap(all_open, get_active_broker_name())
                     _long_notional = sum(
@@ -1362,7 +1405,11 @@ class TradingLoopService:
                     max_binance_cap = getattr(self.risk_config, "max_binance_positions", 10)
                     max_total_cap = self.risk_config.max_positions
                     total_open = getattr(self, "_total_open_count", self._open_count)
-                    if not existing and (self._open_count >= max_binance_cap or total_open >= max_total_cap):
+                    if (
+                        not existing
+                        and not is_flatten_action(getattr(decision, "action", ""))
+                        and (self._open_count >= max_binance_cap or total_open >= max_total_cap)
+                    ):
                         cap_msg = f"binance cap ({max_binance_cap})" if self._open_count >= max_binance_cap else f"total cap ({max_total_cap})"
                         logger.warning(
                             f"  [ {symbol} ] entry skipped: max positions "
@@ -1375,30 +1422,87 @@ class TradingLoopService:
                         )
                         decision = None
 
+                    flatten_now = is_flatten_action(getattr(decision, "action", ""))
+                    if flatten_now and existing:
+                        try:
+                            db.refresh(existing)
+                        except Exception:
+                            pass
+                        if getattr(existing, "status", "") not in ("open", "filled"):
+                            logger.info(
+                                f"  [ {symbol} ] flatten skipped: {existing.symbol} already {existing.status}"
+                            )
+                            signal_status = "evaluated"
+                            signal_reason = "opposing flatten already closed this cycle"
+                            decision = None
+                            flatten_now = False
+                    if getattr(self, "_entries_blocked", False) and not flatten_now:
+                        logger.warning(
+                            f"  [ {symbol} ] entry skipped: margin gate blocked this cycle"
+                        )
+                        signal_status = "rejected"
+                        signal_reason = f"{signal_reason} | margin gate"
+                        decision = None
+
                     if decision:
                         ut = UnifiedTrading()
-                        order_side = OrderSide.BUY if decision.action == "BUY" else OrderSide.SELL
-
-                        logger.info(
-                            f"  [ {symbol} ] Attempting {decision.action} order: "
-                            f"qty={decision.quantity:.6f} @ {decision.entry_price} | "
-                            f"SL={decision.stop_loss} TP={decision.take_profit}"
+                        flatten_now = is_flatten_action(decision.action)
+                        close_symbol = (
+                            getattr(existing, "symbol", None) or decision.symbol or symbol
                         )
-
-                        order = UnifiedOrder(
-                            symbol=symbol, side=order_side, quantity=decision.quantity,
-                            price=decision.entry_price,
-                            stop_loss=decision.stop_loss, take_profit=decision.take_profit,
-                            is_pyramid=decision.is_pyramid,
-                        )
+                        if flatten_now:
+                            order_side = (
+                                OrderSide.SELL if decision.action == "CLOSE_LONG" else OrderSide.BUY
+                            )
+                            live_qty = sum(
+                                float(p.get("quantity") or 0)
+                                for p in exchange_legs
+                                if float(p.get("quantity") or 0) > 0
+                            )
+                            flatten_qty = float(
+                                live_qty
+                                or getattr(existing, "quantity", None)
+                                or decision.quantity
+                                or 0
+                            )
+                            logger.info(
+                                f"  [ {symbol} ] Flatten {decision.action} "
+                                f"{close_symbol} qty={flatten_qty:.6f} (reduce-only)"
+                            )
+                            order = UnifiedOrder(
+                                symbol=close_symbol,
+                                side=order_side,
+                                order_type=OrderType.MARKET,
+                                quantity=flatten_qty,
+                                price=float(decision.entry_price or 0),
+                                reduce_only=True,
+                            )
+                        else:
+                            order_side = OrderSide.BUY if decision.action == "BUY" else OrderSide.SELL
+                            logger.info(
+                                f"  [ {symbol} ] Attempting {decision.action} order: "
+                                f"qty={decision.quantity:.6f} @ {decision.entry_price} | "
+                                f"SL={decision.stop_loss} TP={decision.take_profit}"
+                            )
+                            order = UnifiedOrder(
+                                symbol=symbol, side=order_side, quantity=decision.quantity,
+                                price=decision.entry_price,
+                                stop_loss=decision.stop_loss, take_profit=decision.take_profit,
+                                is_pyramid=decision.is_pyramid,
+                            )
 
                         order_result = await asyncio.get_event_loop().run_in_executor(
-                            None, lambda: ut.place_order(order, session_id=self._crypto_session_id())
+                            None, lambda: ut.place_order(order, session_id=self._binance_order_session_id())
                         )
-                        if order_result.success and not existing:
+                        if order_result.success and not existing and not flatten_now:
                             self._open_count += 1
                             self._total_open_count = getattr(self, "_total_open_count", 0) + 1
                             reserved_open_slot = True
+                        if order_result.success and flatten_now:
+                            self._open_count = max(0, self._open_count - 1)
+                            self._total_open_count = max(
+                                0, getattr(self, "_total_open_count", 1) - 1
+                            )
                 if decision and order_result and order_result.success:
                     _trades = 1
                     filled_px = float(order_result.filled_price or decision.entry_price)
@@ -1407,32 +1511,67 @@ class TradingLoopService:
                     signal_reason = f"{signal_reason} | filled {order_result.order_id}"
                     logger.info(f"  [ {symbol} ] SUCCESS: {order_result.order_id} filled @ {filled_px}")
 
-                    if decision.is_pyramid:
-                        self._pyramid_layers.setdefault(symbol, []).append(filled_px)
-
-                    trade = Trade(
-                        symbol=symbol, direction=decision.action, quantity=filled_qty,
-                        entry_price=filled_px, status="open",
-                        strategy=self._strategy_name,
-                        binance_order_id=order_result.order_id,
-                        stop_loss=decision.stop_loss, take_profit=decision.take_profit,
-                        notes=f"pyramid_layer_{len(self._pyramid_layers.get(symbol, []))}" if decision.is_pyramid else None,
-                        broker=self._crypto_broker_name(),
-                        exchange=self._crypto_broker_name(),
-                    )
-                    db.add(trade)
-                    db.commit()
-                    open_slot_committed = True
-
-                    # Write to InfluxDB for Grafana dashboards
-                    try:
-                        await influx.write_trade(
-                            symbol=symbol, direction=decision.action,
-                            quantity=filled_qty, entry_price=filled_px,
-                            status="open", strategy=self._strategy_name, pnl=0.0,
+                    if is_flatten_action(decision.action) and existing:
+                        existing.exit_price = filled_px
+                        if getattr(order_result, "realized_pnl", None) is not None:
+                            existing.pnl = float(order_result.realized_pnl) - float(
+                                getattr(order_result, "commission", 0) or 0
+                            )
+                        elif existing.entry_price:
+                            if existing.direction == "BUY":
+                                existing.pnl = (filled_px - existing.entry_price) * existing.quantity
+                            else:
+                                existing.pnl = (existing.entry_price - filled_px) * existing.quantity
+                        existing.status = "closed"
+                        existing.closed_at = datetime.now(timezone.utc)
+                        existing.notes = (existing.notes or "") + (
+                            f" | OPPOSING FLATTEN {decision.action} "
+                            f"conf={decision.confidence:.2f}"
                         )
-                    except Exception as _ie:
-                        logger.warning(f"  [ {symbol} ] InfluxDB write_trade failed: {_ie}")
+                        db.add(existing)
+                        if self._pyramid_mode:
+                            remove_closed_pyramid_layer(self._pyramid_layers, existing)
+                        db.commit()
+                    else:
+                        if decision.is_pyramid:
+                            self._pyramid_layers.setdefault(symbol, []).append(filled_px)
+
+                        from backend.services.ledger import binance_position_key, fill_mode_from_order
+
+                        fill_mode = fill_mode_from_order(
+                            getattr(order_result, "mode", None),
+                            get_trading_mode().value,
+                        )
+                        crypto_broker = self._crypto_broker_name()
+                        trade = Trade(
+                            symbol=symbol, direction=decision.action, quantity=filled_qty,
+                            entry_price=filled_px, status="open",
+                            strategy=self._strategy_name,
+                            binance_order_id=order_result.order_id,
+                            stop_loss=decision.stop_loss, take_profit=decision.take_profit,
+                            notes=f"pyramid_layer_{len(self._pyramid_layers.get(symbol, []))}" if decision.is_pyramid else None,
+                            broker=crypto_broker,
+                            exchange=crypto_broker,
+                            mode=fill_mode,
+                            broker_position_id=(
+                                binance_position_key(symbol, decision.action)
+                                if fill_mode == "live" and crypto_broker == "binance_futures"
+                                else None
+                            ),
+                        )
+                        db.add(trade)
+                        db.commit()
+                        open_slot_committed = True
+
+                        # Write to InfluxDB for Grafana dashboards
+                        try:
+                            await influx.write_trade(
+                                symbol=symbol, direction=decision.action,
+                                quantity=filled_qty, entry_price=filled_px,
+                                status="open", strategy=self._strategy_name, pnl=0.0,
+                            )
+                        except Exception as _ie:
+                            logger.warning(f"  [ {symbol} ] InfluxDB write_trade failed: {_ie}")
                 elif decision and order_result:
                     signal_status = "skipped"
                     fail_msg = order_result.message or "unknown"
@@ -1537,6 +1676,8 @@ class TradingLoopService:
                 Trade.status == "closed"
             ).scalar() or 0.0
 
+            distinct_open_symbols = len({t.symbol for t in open_trades if getattr(t, "symbol", None)})
+
             # Compute positions value from open trades
             positions_val = sum(
                 (t.quantity or 0) * (t.entry_price or 0)
@@ -1545,7 +1686,7 @@ class TradingLoopService:
             distinct_open_symbols = len({t.symbol for t in open_trades if t.symbol})
 
             # Save snapshot
-            from backend.services.trading_mode import get_trading_mode, get_active_broker_name
+            from backend.services.trading_mode import get_trading_mode
             active_broker = get_active_broker_name()
             current_mode = get_trading_mode().value if hasattr(get_trading_mode(), "value") else str(get_trading_mode())
 
@@ -1663,7 +1804,7 @@ class TradingLoopService:
                     quantity=trade.quantity,
                     price=float(current_price or 0),
                     reduce_only=True
-                ), session_id=self._crypto_session_id())
+                ), session_id=self._binance_order_session_id())
 
                 if res.success:
                     trade.exit_price = res.filled_price or current_price
@@ -1782,6 +1923,23 @@ class TradingLoopService:
             logger.warning(
                 f"  [SYMBOL GATE] blacklisted but open — manage only: {blacklisted_managed}"
             )
+
+        # 1a) Binance USDT-M/USDC-M exchangeInfo: drop unlisted/halted perps
+        # before evaluation so we never send them to place_order.
+        listed, unlisted = [], []
+        for s in candidates:
+            su = s.upper()
+            status = binance_futures_broker.futures_listing_status(s)
+            if status is False and su not in open_symbols:
+                unlisted.append(s)
+            else:
+                listed.append(s)
+        if unlisted:
+            logger.warning(
+                "  [SYMBOL GATE] not TRADING on Binance futures (skipped): %s",
+                unlisted,
+            )
+        candidates = listed
 
         # 1b) Per-symbol expectancy gate: skip symbols that measurably bleed.
         candidates = self._apply_expectancy_gate(candidates)

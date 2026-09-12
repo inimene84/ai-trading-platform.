@@ -48,6 +48,21 @@ if [[ -n "$ip_hits" ]]; then
   fail=1
 fi
 
+echo "scanning working tree for additional deny-list entries (line 5+)"
+extra_hits=""
+while IFS= read -r needle; do
+  [[ -z "$needle" || "$needle" =~ ^# ]] && continue
+  hits="$(git grep -nF -- "$needle" -- \
+    ':!scripts/ci/forbidden_substrings.txt' \
+    ':!.gitleaks.toml' \
+    || true)"
+  if [[ -n "$hits" ]]; then
+    echo "FORBIDDEN deny-list marker present: $needle" >&2
+    echo "$hits" >&2
+    fail=1
+  fi
+done < <(tail -n +5 "$denylist")
+
 if [[ "$fail" -ne 0 ]]; then
   echo "secret_guards: refuse merge until markers are removed and credentials rotated." >&2
   exit 1

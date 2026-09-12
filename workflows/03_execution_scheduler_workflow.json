@@ -25,7 +25,16 @@
       "parameters": {
         "method": "GET",
         "url": "http://backend:8000/api/signals/ready-for-execution?limit=10",
-        "options": {}
+        "options": {},
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "={{ $env.BACKEND_API_KEY }}"
+            }
+          ]
+        }
       },
       "id": "22222222-3333-4444-5555-666666666602",
       "name": "HTTP: Fetch Ready Signals",

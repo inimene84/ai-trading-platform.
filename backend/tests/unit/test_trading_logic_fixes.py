@@ -73,6 +73,10 @@ async def test_news_nzd_event_maps_to_nzdusd_not_gold():
             "backend.routes.news.get_news_feed", new=AsyncMock(return_value={})
         ), patch(
             "backend.routes.news.get_market_sentiment", new=AsyncMock(return_value={})
+        ), patch.object(
+            engine, "_has_open_position", return_value=False
+        ), patch.object(
+            engine, "_portfolio_risk_breach", return_value=None
         ):
             created = await engine.scan_news_and_events()
         assert created
@@ -88,6 +92,8 @@ async def test_scan_markets_skips_metals_when_disabled():
     previous_cfg = dict(engine.execution_config)
     previous = dict(engine.candidates)
     engine.candidates.clear()
+    # Leftover post-loss cooldowns from earlier tests (ctrader_trade_sync sets
+    # real 45-min cooldowns on this singleton) would skip symbols before fetch.
     previous_cooldowns = dict(engine._symbol_cooldowns)
     engine._symbol_cooldowns.clear()
     try:
@@ -95,7 +101,9 @@ async def test_scan_markets_skips_metals_when_disabled():
         with patch(
             "backend.services.signal_candidate_engine.ctrader_service.get_trendbars",
             return_value=[],
-        ) as fetch:
+        ) as fetch, patch(
+            "backend.services.sentry_state.is_trading_allowed", return_value=True
+        ):
             await engine.scan_markets(universe=["XAGUSD", "EURUSD"], timeframe="M5")
         fetched = [c.args[0] for c in fetch.call_args_list]
         assert "XAGUSD" not in fetched

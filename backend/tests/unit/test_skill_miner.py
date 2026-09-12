@@ -156,6 +156,25 @@ def test_score_zero_variance_sharpe_none():
     check(abs(win_rate - 1.0) < 1e-9, "win_rate 1.0")
 
 
+def test_score_zero_win_rate_demoted():
+    print("test_score_zero_win_rate_demoted")
+    cluster = [_sample("NZDUSD", "SELL", p, {}) for p in [-2, -3, -1, -4, -2, -5, -1, -2, -3, -1]]
+    direction, win_rate, avg_pnl, total_pnl, sharpe, edge = score_cluster(cluster)
+    check(win_rate == 0.0, "all losers -> 0% win rate")
+    check(edge == 0.0, f"0% WR must not rank (got {edge})")
+    check(direction == "bearish", f"losing cluster -> bearish (got {direction})")
+
+
+def test_score_winners_outrank_losers():
+    print("test_score_winners_outrank_losers")
+    losers = [_sample("USDCHF", "BUY", -1.0, {}) for _ in range(10)]
+    winners = [_sample("EURJPY", "BUY", 1.0, {}) for _ in range(10)]
+    _, _, _, _, _, loser_edge = score_cluster(losers)
+    _, _, _, _, _, winner_edge = score_cluster(winners)
+    check(loser_edge == 0.0, "losers edge 0")
+    check(winner_edge > loser_edge, f"winners outrank losers ({winner_edge} > {loser_edge})")
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # naming + key
 # ─────────────────────────────────────────────────────────────────────────────
@@ -249,6 +268,8 @@ def main():
         test_score_bearish,
         test_score_neutral,
         test_score_zero_variance_sharpe_none,
+        test_score_zero_win_rate_demoted,
+        test_score_winners_outrank_losers,
         test_name_skill,
         test_skill_key_stable_and_direction_sensitive,
         test_mine_skills_respects_min_cluster,

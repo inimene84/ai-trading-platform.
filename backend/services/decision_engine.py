@@ -19,6 +19,10 @@ from backend.services.trading_mode import TradingMode, get_trading_mode, live_ex
 from backend.services import kronos_service
 from backend.strategies.combined import CombinedStrategy
 from backend.strategies.market_regime import MarketRegimeDetector
+from backend.services.symbol_aliases import (
+    is_opposing_side,
+    normalize_side,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +44,45 @@ def affordable_notional(
     if avail > 0:
         caps.append(avail * lev * frac)
     return min(caps) if caps else 0.0
+
+
+def apply_hard_notional_caps(
+    notional: float,
+    *,
+    trade_usdt: float,
+    max_directional_usdt: float,
+    leverage: float,
+    live: bool,
+    exchange_min_notional: float = 0.0,
+) -> tuple[float, str | None]:
+    """Clip a single order so it cannot breach configured USDT caps.
+
+    Live per-order cap is trade_usdt * leverage when that is at least the
+    venue minimum; otherwise only max_directional_exposure_usdt binds (so a
+    $10 paper-style trade_usdt cannot veto Binance's $20 min notional).
+    """
+    if notional <= 0:
+        return 0.0, "non-positive notional"
+    caps: list[float] = []
+    if max_directional_usdt and max_directional_usdt > 0:
+        caps.append(float(max_directional_usdt))
+    if live:
+        lev = max(float(leverage or 1.0), 1.0)
+        per_order = max(float(trade_usdt or 0.0), 0.0) * lev
+        if per_order >= max(float(exchange_min_notional or 0.0), 0.0):
+            caps.append(per_order)
+    if not caps:
+        return float(notional), None
+    cap = min(caps)
+    if exchange_min_notional > 0 and cap < exchange_min_notional:
+        cap = float(exchange_min_notional)
+    if notional > cap:
+        logger.warning(
+            "Hard notional cap: clipping $%.2f -> $%.2f (live=%s trade_usdt=%.2f dir_max=%.2f lev=%.1f)",
+            notional, cap, live, trade_usdt, max_directional_usdt, leverage,
+        )
+        return cap, None
+    return float(notional), None
 
 
 def pyramid_price_improved(
@@ -262,6 +305,94 @@ class DecisionEngine:
     def _ranging_entry_allowed(self, symbol: str, signal: Any) -> bool:
         return self._ranging_entries_permitted() and self._ranging_setup_matches(symbol, signal)
 
+    @staticmethod
+    def _position_field(position: Any, name: str, default: Any = None) -> Any:
+        if position is None:
+            return default
+        if isinstance(position, dict):
+            return position.get(name, default)
+        return getattr(position, name, default)
+
+    def _flatten_opposing_position(
+        self,
+        symbol: str,
+        bars: List[Dict[str, Any]],
+        existing_position: Any,
+    ) -> Optional[Decision]:
+        """CLOSE_LONG / CLOSE_SHORT when Combined fires opposite the live leg.
+
+        BTCUSDT / BTCUSDC are resolved by the loop before this is called.
+        Does not open a reverse slot here — next cycle can enter if caps allow.
+        """
+        existing_side = normalize_side(self._position_field(existing_position, "direction"))
+        live_symbol = str(self._position_field(existing_position, "symbol") or symbol or "").upper()
+        try:
+            qty = float(self._position_field(existing_position, "quantity") or 0)
+        except (TypeError, ValueError):
+            qty = 0.0
+        if existing_side not in ("BUY", "SELL") or qty <= 0:
+            return None
+        regime_result = self.regime_detector.detect(bars)
+        signal = self.strategy.generate_signal(
+            symbol,
+            bars,
+            regime=regime_result.regime,
+            regime_weights=regime_result.weights(),
+        )
+        if not signal or signal.signal not in ("BUY", "SELL"):
+            self._record_eval(
+                symbol,
+                existing_side,
+                float(getattr(signal, "confidence", 0.0) or 0.0) if signal else 0.0,
+                "existing position; no opposing signal",
+            )
+            return None
+        if not is_opposing_side(signal.signal, existing_side):
+            self._record_eval(
+                symbol,
+                existing_side,
+                signal.confidence,
+                "existing same-direction position — skip entry",
+            )
+            return None
+        if signal.confidence < self.config.min_signal_strength:
+            self._record_eval(
+                symbol,
+                signal.signal,
+                signal.confidence,
+                "opposing signal below threshold; hold existing",
+            )
+            return None
+        action = "CLOSE_LONG" if existing_side == "BUY" else "CLOSE_SHORT"
+        decision = Decision(
+            action=action,
+            symbol=live_symbol,
+            quantity=qty,
+            entry_price=float(bars[-1]["close"]),
+            confidence=float(signal.confidence),
+            reasoning=(
+                f"opposing {signal.signal} flatten of {existing_side} {live_symbol}"
+            ),
+        )
+        self._record_eval(
+            live_symbol,
+            action,
+            signal.confidence,
+            "opposing flatten",
+            entry=decision.entry_price,
+            approved=True,
+        )
+        logger.info(
+            "[%s] opposing %s (conf=%.2f) flattens live %s %s qty=%s",
+            symbol,
+            signal.signal,
+            signal.confidence,
+            existing_side,
+            live_symbol,
+            qty,
+        )
+        return decision
+
     async def evaluate_symbol(
         self,
         symbol: str,
@@ -372,6 +503,9 @@ class DecisionEngine:
                                                       "pyramid add blocked: risk reviewer gate errored (fail-closed in live)")
                                     return None
                         return decision
+            flatten = self._flatten_opposing_position(symbol, bars, existing_position)
+            if flatten:
+                return flatten
             return None
 
         # 2. Cooldown check
@@ -637,12 +771,21 @@ class DecisionEngine:
                                 self._record_eval(symbol, signal.signal, signal.confidence, "confidence reduced below threshold by Jesse ML gate")
                                 return None
                     else:
-                        if live_exchange_orders_allowed():
-                            err = ml_res.get("error") or "Jesse ML status not success"
+                        err = ml_res.get("error") or "Jesse ML status not success"
+                        # Only the bridge may classify a gap as no_model (200 / 4xx).
+                        # Do not re-parse error text here — a 5xx traceback that
+                        # mentions artifacts is still an outage and must veto live.
+                        if ml_res.get("status") == "no_model":
+                            logger.warning(
+                                f"[{symbol}] Jesse ML gate skipped — no deployable model ({err})"
+                            )
+                            setattr(signal, "jesse_ml_gap", err)
+                        elif live_exchange_orders_allowed():
                             logger.error(f"[{symbol}] Jesse ML gate returned non-success in LIVE mode ({err}) — fail closed: vetoing {signal.signal}")
                             self._record_eval(symbol, signal.signal, signal.confidence, f"vetoed by Jesse ML error in LIVE mode ({err})")
                             return None
-                        logger.debug(f"[{symbol}] Jesse ML returned non-success in paper mode ({ml_res.get('error')}) — skipping gate")
+                        else:
+                            logger.debug(f"[{symbol}] Jesse ML returned non-success in paper mode ({err}) — skipping gate")
                 except Exception as e:
                     if live_exchange_orders_allowed():
                         logger.error(f"[{symbol}] Jesse ML gate failed in LIVE mode ({e}) — fail closed: vetoing {signal.signal}")
@@ -689,7 +832,7 @@ class DecisionEngine:
                 if signal.confidence < self.config.min_signal_strength + 0.1:
                     return None
 
-        # 6. Max positions check
+        # 6. Max positions check (flatten/reverse of an existing leg is not a new slot)
         max_positions_cap = getattr(self.config, "max_binance_positions", self.config.max_positions)
         if open_count >= max_positions_cap:
             self._record_eval(symbol, signal.signal, signal.confidence,
@@ -854,7 +997,27 @@ class DecisionEngine:
         # Floor at Binance MIN_NOTIONAL ($20 for most symbols, $100 for BTC)
         # BTC uses $100 flat to match Binance min notional requirement.
         _bn_min = 100.0 if 'BTC' in symbol else 20.0
-        notional = max(notional, _bn_min)
+        live = get_trading_mode() == TradingMode.LIVE
+        notional, reject = apply_hard_notional_caps(
+            notional,
+            trade_usdt=float(self.config.trade_usdt_amount),
+            max_directional_usdt=float(self.config.max_directional_exposure_usdt or 0),
+            leverage=float(self.account_leverage or 1.0),
+            live=live,
+            exchange_min_notional=_bn_min if live else 0.0,
+        )
+        if reject:
+            logger.warning(f"[{symbol}] REJECT notional cap: {reject}")
+            self._record_eval(
+                symbol, direction, getattr(signal, "confidence", 0.0),
+                f"SKIP (notional cap): {reject}",
+                entry=entry_price, sl=sl, tp=tp,
+            )
+            return None
+        if not live:
+            notional = max(notional, _bn_min)
+        elif notional < _bn_min:
+            notional = _bn_min
         quantity = notional / entry_price if entry_price > 0 else 0
 
         # Min-edge / fee-churn gate: reject trades whose *captured* move can't clear cost.
@@ -874,7 +1037,11 @@ class DecisionEngine:
             stop_loss=sl,
             take_profit=tp,
             confidence=signal.confidence,
-            reasoning=f"Regime: {regime}",
+            reasoning=(
+                f"Regime: {regime}"
+                + (" | Jesse ML gate skipped (no deployable model)"
+                   if getattr(signal, "jesse_ml_gap", None) else "")
+            ),
             is_pyramid=is_pyramid
         )
 

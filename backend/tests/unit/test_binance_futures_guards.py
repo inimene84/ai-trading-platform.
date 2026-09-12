@@ -72,6 +72,33 @@ def test_to_futures_symbol(symbol, expected):
     assert _broker()._to_futures_symbol(symbol) == expected
 
 
+def test_futures_listing_status_unknown_without_cache():
+    svc = _broker()
+    assert svc.futures_listing_status("AVAXUSDT") is None
+
+
+def test_futures_listing_status_rejects_unlisted_when_cache_loaded():
+    svc = _broker()
+    svc._tradable_symbols = {"BTCUSDT", "ETHUSDT", "AVAXUSDT"}
+    assert svc.futures_listing_status("AVAXUSDT") is True
+    assert svc.futures_listing_status("NOTAREALUSDT") is False
+    assert svc.futures_listing_status("EURUSD") is False
+
+
+def test_place_order_skips_unlisted_futures_symbol(monkeypatch):
+    monkeypatch.setenv("TRADING_MODE", "live")
+    monkeypatch.setenv("BINANCE_PAPER_PARALLEL", "false")
+    svc = _broker()
+    svc._tradable_symbols = {"BTCUSDT"}
+    svc.api_key = "x"
+    svc.api_secret = "y"
+    with patch.object(svc, "_get_client") as get_client:
+        res = svc.place_order(symbol="AVAXUSDT", direction="SELL", quantity=1.0, price=7.5)
+    get_client.assert_not_called()
+    assert res["status"] == "skipped"
+    assert "not TRADING" in res["reason"]
+
+
 # --------------------------------------------------------------------------- #
 # _round_price — tick-size rounding (PRICE_PRECISION table is empty in tests)
 # --------------------------------------------------------------------------- #

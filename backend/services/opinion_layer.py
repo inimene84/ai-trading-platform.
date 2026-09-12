@@ -484,10 +484,24 @@ _SIGNAL_MAP = {
 }
 
 
+_LEARNING_AGENT_FLOORS = {
+    "semantic_trade_memory": 0.08,
+    "learned_skill": 0.08,
+    "trade_memory": 0.04,
+}
+_AGENT_WEIGHT_FLOOR = 0.02
+_AGENT_WEIGHT_CAP = 0.35
+
+
 def _get_combined_weights() -> dict:
-    """Merge base agent weights with persona weights."""
+    """Merge base agent weights with persona weights; keep learning agents live."""
     combined = dict(_AGENT_WEIGHTS)
     combined.update(get_persona_weights())
+    for agent, floor in _LEARNING_AGENT_FLOORS.items():
+        current = float(combined.get(agent) or 0.0)
+        combined[agent] = max(current, floor)
+    for agent, weight in list(combined.items()):
+        combined[agent] = min(max(float(weight or 0.0), 0.0), _AGENT_WEIGHT_CAP)
     return combined
 
 

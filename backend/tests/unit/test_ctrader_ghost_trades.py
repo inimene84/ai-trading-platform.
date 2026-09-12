@@ -30,11 +30,26 @@ def test_is_ctrader_trade_detection():
     t4 = SimpleNamespace(symbol="XAUUSD", broker=None, exchange=None, broker_position_id=None)
     t5 = SimpleNamespace(symbol="ETHUSDT", broker=None, exchange=None, broker_position_id=None)
 
+    t6 = SimpleNamespace(
+        symbol="BTCUSDT",
+        broker="binance_futures",
+        exchange="binance_futures",
+        broker_position_id="BTCUSDT:LONG",
+    )
+    t7 = SimpleNamespace(
+        symbol="AVAXUSDT",
+        broker="binance_futures",
+        exchange="binance_futures",
+        broker_position_id="AVAXUSDT:SHORT",
+    )
+
     assert is_ctrader_trade(t1) is True
     assert is_ctrader_trade(t2) is False
     assert is_ctrader_trade(t3) is True
     assert is_ctrader_trade(t4) is True
     assert is_ctrader_trade(t5) is False
+    assert is_ctrader_trade(t6) is False
+    assert is_ctrader_trade(t7) is False
 
 
 def test_reconcile_closes_position_when_sl_hit():
@@ -234,6 +249,10 @@ async def test_dashboard_positions_filters_out_ghost_trades():
         "backend.routes.trading._fetch_mark_prices_for_symbols",
         new_callable=AsyncMock,
         return_value={},
+    ), patch(
+        "backend.routes.trading._live_binance_book",
+        new_callable=AsyncMock,
+        return_value=([], True),
     ):
         result = await get_positions()
 
@@ -298,6 +317,10 @@ async def test_reconcile_14_trades_down_to_9_live_positions():
         "backend.routes.trading._fetch_mark_prices_for_symbols",
         new_callable=AsyncMock,
         return_value={},
+    ), patch(
+        "backend.routes.trading._live_binance_book",
+        new_callable=AsyncMock,
+        return_value=([], True),
     ):
         positions_res = await get_positions()
         portfolio_res = await get_portfolio()

@@ -6,7 +6,7 @@ from unittest.mock import patch, AsyncMock
 from fastapi.testclient import TestClient
 
 from backend.main import app
-from backend.services.jesse_bridge import JesseBridgeService, jesse_bridge
+from backend.services.jesse_bridge import JesseBridgeService, is_jesse_ml_model_gap, jesse_bridge
 from backend.services.risk_config import get_risk_config
 
 
@@ -150,6 +150,13 @@ async def test_jesse_bridge_get_ml_prediction():
         assert res["confidence"] == 0.58
 
 
+def test_is_jesse_ml_model_gap_detects_missing_and_unpromoted():
+    assert is_jesse_ml_model_gap("No model artifact found for AVAX-USDT (1h, lightgbm)") is True
+    assert is_jesse_ml_model_gap("Model artifact ETH-USDT_1h_lightgbm.joblib refused: promotion gate failed") is True
+    assert is_jesse_ml_model_gap("Connection refused") is False
+    assert is_jesse_ml_model_gap("") is False
+
+
 def test_jesse_promotion_status_unconfigured(client, monkeypatch):
     api_key = os.getenv("ADMIN_API_KEY", "test_key")
     monkeypatch.setenv("ADMIN_API_KEY", api_key)
@@ -210,3 +217,12 @@ def test_jesse_ml_predict_routes(client, monkeypatch):
         assert res_models.status_code == 200
         assert "BTC-USDT_1h_lightgbm.joblib" in res_models.json()["available_models"]
 
+
+@pytest.mark.asyncio
+async def test_jesse_bridge_fail_closed_without_password(monkeypatch):
+    """With JESSE_PASSWORD unset, get_token returns None (no hardcoded fallback)."""
+    monkeypatch.delenv("JESSE_PASSWORD", raising=False)
+    monkeypatch.setattr("backend.services.jesse_bridge.JESSE_PASSWORD", "")
+    service = JesseBridgeService()
+    token = await service.get_token()
+    assert token is None

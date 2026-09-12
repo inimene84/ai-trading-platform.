@@ -141,6 +141,64 @@ async def test_modify_position_persists_only_after_exchange_updates():
 
 
 @pytest.mark.asyncio
+async def test_manual_live_order_refuses_when_sl_tp_cannot_be_computed():
+    router = MagicMock()
+    with patch("backend.routes.trading.UnifiedTrading", return_value=router), \
+         patch(
+             "backend.services.trading_loop.trading_loop._fetch_bars",
+             new=AsyncMock(return_value=[]),
+         ), \
+         patch(
+             "backend.services.sentry_state.is_trading_allowed",
+             return_value=True,
+         ), \
+         patch(
+             "backend.routes.trading.get_trading_mode",
+             return_value=TradingMode.LIVE,
+         ):
+        with pytest.raises(HTTPException) as exc:
+            await place_live_order(LiveOrderRequest(
+                symbol="ETHUSDT",
+                side="buy",
+                quantity=0.2,
+                price=100.0,
+            ))
+    assert exc.value.status_code == 400
+    assert "without stop_loss" in str(exc.value.detail)
+    router.place_order.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_manual_paper_order_may_proceed_without_computed_sl_tp():
+    router = MagicMock()
+    router.place_order.return_value = UnifiedOrderResponse(
+        True, "paper-1", "filled", "paper", filled_price=100.0, filled_qty=0.2,
+    )
+    with patch("backend.routes.trading.UnifiedTrading", return_value=router), \
+         patch(
+             "backend.services.trading_loop.trading_loop._fetch_bars",
+             new=AsyncMock(return_value=[]),
+         ), \
+         patch(
+             "backend.services.sentry_state.is_trading_allowed",
+             return_value=True,
+         ), \
+         patch(
+             "backend.routes.trading.get_trading_mode",
+             return_value=TradingMode.PAPER,
+         ):
+        result = await place_live_order(LiveOrderRequest(
+            symbol="ETHUSDT",
+            side="buy",
+            quantity=0.2,
+            price=100.0,
+        ))
+    router.place_order.assert_called_once()
+    assert result["success"] is True
+    assert result["mode"] == "paper"
+
+
+@pytest.mark.asyncio
 async def test_manual_live_order_records_exchange_fill():
     router = MagicMock()
     router.place_order.return_value = UnifiedOrderResponse(
@@ -218,6 +276,36 @@ async def test_manual_close_binance_paper_parallel_closes_db_without_exchange():
     assert trade.exit_price == 1.852
     assert result["paper_mode"] is True
     assert result["success"] is True
+    db.commit.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_manual_close_live_mode_skips_exchange_for_paper_ghost():
+    """mode=paper with no venue id must not send a live reduce-only close."""
+    trade = SimpleNamespace(
+        id=9944, symbol="ETHUSDT", direction="BUY", quantity=0.1,
+        entry_price=100.0, status="open", exit_price=None, pnl=0.0,
+        closed_at=None, notes="", broker="binance_futures", exchange="binance_futures",
+        broker_position_id=None, broker_order_id=None, binance_order_id=None,
+        mode="paper",
+    )
+    db = _db_with_trade(trade)
+    router = MagicMock()
+    tick = {"lastPrice": "105.0"}
+    market = MagicMock()
+    market.get_ticker_24h = AsyncMock(return_value=tick)
+
+    with patch("backend.routes.trading.SessionLocal", return_value=db), \
+         patch("backend.routes.trading.UnifiedTrading", return_value=router), \
+         patch("backend.services.trading_mode.get_trading_mode", return_value=TradingMode.LIVE), \
+         patch("backend.services.trading_mode.binance_paper_parallel_enabled", return_value=False), \
+         patch("backend.services.trading_mode.live_binance_orders_allowed", return_value=True), \
+         patch("backend.services.binance_market_data.binance_market_data", market):
+        result = await close_position(9944)
+
+    router.place_order.assert_not_called()
+    assert trade.status == "closed"
+    assert result["paper_mode"] is True
     db.commit.assert_called_once()
 
 

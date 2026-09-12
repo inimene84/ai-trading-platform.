@@ -41,6 +41,8 @@ def _seed(db):
                 entry_price=3000.0,
                 status="open",
                 broker="binance_futures",
+                mode="live",
+                binance_order_id="1001",
             ),
         ]
     )
@@ -100,6 +102,8 @@ async def test_legacy_null_broker_rows_reconcile_with_binance():
             entry_price=100.0,
             status="open",
             broker=None,
+            mode="live",
+            binance_order_id="2002",
         )
     )
     db.commit()

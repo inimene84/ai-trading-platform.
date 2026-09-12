@@ -162,9 +162,9 @@ def test_filter_symbols_blacklist_skips_new_but_keeps_open_legs():
     open_db.query.return_value = oq
 
     with patch("backend.services.trading_loop.SessionLocal", return_value=open_db):
-        result = _filter_symbols_sync(loop, ["GOODUSDT", "BADUSDT"])
+        result = _filter_symbols_sync(loop, ["BTCUSDT", "BADUSDT"])
 
-    assert "GOODUSDT" in result
+    assert "BTCUSDT" in result
     assert "BADUSDT" in result  # kept for management despite blacklist
 
 
@@ -172,9 +172,21 @@ def test_filter_symbols_blacklist_removes_new_entries():
     loop = _loop(_fake_risk_config(symbol_blacklist={"BADUSDT"}, min_24h_quote_volume_usdt=0))
 
     with patch("backend.services.trading_loop.SessionLocal", return_value=_no_open_positions_db()):
-        result = _filter_symbols_sync(loop, ["GOODUSDT", "BADUSDT"])
+        result = _filter_symbols_sync(loop, ["BTCUSDT", "BADUSDT"])
 
-    assert result == ["GOODUSDT"]
+    assert result == ["BTCUSDT"]
+
+
+def test_filter_symbols_drops_unlisted_futures_for_new_entries():
+    """exchangeInfo TRADING set must drop unknown perps before place_order."""
+    loop = _loop(_fake_risk_config(min_24h_quote_volume_usdt=0))
+    with patch("backend.services.trading_loop.SessionLocal", return_value=_no_open_positions_db()), \
+         patch(
+             "backend.services.trading_loop.binance_futures_broker.futures_listing_status",
+             side_effect=lambda s: True if s == "AVAXUSDT" else False,
+         ):
+        result = _filter_symbols_sync(loop, ["AVAXUSDT", "NOTAREALUSDT"])
+    assert result == ["AVAXUSDT"]
 
 
 def test_filter_symbols_fails_open_on_volume_error():

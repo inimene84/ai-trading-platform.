@@ -1,0 +1,25 @@
+---
+description: Universal shared project memory — read before starting, update before finishing
+globs:
+alwaysApply: true
+---
+
+# Project Memory (universal, shared across all agents)
+
+This project has a single shared memory file, `MEMORY.md`, maintained for all
+agents (Cursor, Kimi Work, Antigravity, Agent-Zero). It contains the current
+system state, ops details, known issues, and the prioritized fix list.
+
+Rules:
+
+1. **Read it first.** Before doing non-trivial work, read `MEMORY.md`:
+   - Local workspace: `../MEMORY.md` (one level above this repo root), or
+   - On the VPS: `/root/ai-trading-platform-v3/MEMORY.md`
+     (also `/root/jesse-trading/MEMORY.md` for the Jesse quant stack).
+2. **Never commit it.** `MEMORY.md` contains operational details. It is
+   git-excluded on the VPS; do not add it to this repository.
+3. **Update it last.** When you change system state, flags, credentials,
+   deployment layout, or resolve an item from its open-issues list, update
+   `MEMORY.md` (all copies you can reach) in the same work session.
+4. Treat its "Open issues" list as the authoritative backlog; do not re-derive
+   priorities from scratch when it covers the topic.

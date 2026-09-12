@@ -61,13 +61,10 @@ def read_state() -> dict[str, Any]:
         return _default_state()
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(data, dict):
-            raise ValueError("state file is not a JSON object")
-        status = data.get("status", TradingStatus.ACTIVE.value)
-        if status not in {s.value for s in TradingStatus}:
-            logger.warning("Unknown trading status in state file; treating as HALTED_BY_SENTRY", status=status)
-            data["status"] = TradingStatus.HALTED_BY_SENTRY.value
-        return data
+    except FileNotFoundError:
+        # File vanished between exists() and read (concurrent atomic replace)
+        # — no halt was recorded, so default to ACTIVE rather than failing closed.
+        return _default_state()
     except Exception as exc:
         logger.error("Failed to read sentry state; fail-closed to HALTED_BY_SENTRY", error=str(exc))
         return {
@@ -77,6 +74,20 @@ def read_state() -> dict[str, Any]:
             "halted_at": _utc_now(),
             "halted_by": "sentry_state",
         }
+    if not isinstance(data, dict):
+        logger.error("Sentry state file is not a JSON object; fail-closed to HALTED_BY_SENTRY")
+        return {
+            **_default_state(),
+            "status": TradingStatus.HALTED_BY_SENTRY.value,
+            "reason": "state_read_error: not a JSON object",
+            "halted_at": _utc_now(),
+            "halted_by": "sentry_state",
+        }
+    status = data.get("status", TradingStatus.ACTIVE.value)
+    if status not in {s.value for s in TradingStatus}:
+        logger.warning("Unknown trading status in state file; treating as HALTED_BY_SENTRY", status=status)
+        data["status"] = TradingStatus.HALTED_BY_SENTRY.value
+    return data
 
 
 def write_state(

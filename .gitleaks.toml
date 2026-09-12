@@ -8,13 +8,24 @@ id = "burned-admin-fallback"
 description = "Hardcoded admin API fallback previously shipped in the frontend"
 regex = '''39b2487d5386c4fd52e258721a2170915797f7280b8b0afc'''
 tags = ["key", "quantumtrade"]
+[rules.allowlist]
+paths = ['''(^|/)scripts/ci/forbidden_substrings\.txt$''', '''(^|/)\.gitleaks\.toml$''']
 
-  [[rules.allowlists]]
-  description = "Keep the burned value only in the deny-list and this config"
-  paths = [
-    '''(^|/)scripts/ci/forbidden_substrings\.txt$''',
-    '''(^|/)\.gitleaks\.toml$''',
-  ]
+[[rules]]
+id = "jesse-dashboard-password"
+description = "Jesse dashboard password previously hardcoded as a code default and pasted in walkthrough docs"
+regex = '''QuantumTrading2026'''
+tags = ["password", "quantumtrade", "jesse"]
+[rules.allowlist]
+paths = ['''(^|/)scripts/ci/forbidden_substrings\.txt$''', '''(^|/)\.gitleaks\.toml$''']
+
+[[rules]]
+id = "jesse-postgres-password"
+description = "Jesse PostgreSQL password pasted in walkthrough docs"
+regex = '''jesse_secure_pass_[0-9]+'''
+tags = ["password", "quantumtrade", "jesse"]
+[rules.allowlist]
+paths = ['''(^|/)scripts/ci/forbidden_substrings\.txt$''', '''(^|/)\.gitleaks\.toml$''']
 
 # gitleaks 8.24.3 (the version CI pins) unmarshals a singular [allowlist]
 # only. Array [[allowlists]] is ignored until 8.25.0. Do not path-exclude

@@ -12,9 +12,9 @@ def client():
     return TestClient(app)
 
 
-def test_get_brokers_endpoint(client):
+def test_get_brokers_endpoint(client, auth_headers):
     """Verify /api/trading/brokers returns both Binance and cTrader status."""
-    response = client.get("/api/trading/brokers")
+    response = client.get("/api/trading/brokers", headers=auth_headers)
     assert response.status_code == 200
     data = response.json()
     assert "brokers" in data
@@ -24,9 +24,9 @@ def test_get_brokers_endpoint(client):
     assert "circuit_breaker" in data["brokers"]["ctrader"]
 
 
-def test_get_markets_endpoint(client):
+def test_get_markets_endpoint(client, auth_headers):
     """Verify /api/trading/markets returns combined forex, metals, and crypto instruments."""
-    response = client.get("/api/trading/markets")
+    response = client.get("/api/trading/markets", headers=auth_headers)
     assert response.status_code == 200
     data = response.json()
     assert "markets" in data
@@ -108,9 +108,9 @@ def test_smart_order_forex_routing(client, auth_headers):
     assert data["target_broker"] == "ctrader"
 
 
-def test_ctrader_tokens_info(client):
+def test_ctrader_tokens_info(client, auth_headers):
     """Verify /api/trading/ctrader/tokens endpoint status."""
-    response = client.get("/api/trading/ctrader/tokens")
+    response = client.get("/api/trading/ctrader/tokens", headers=auth_headers)
     assert response.status_code == 200
     data = response.json()
     assert "configured" in data

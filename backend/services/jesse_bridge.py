@@ -10,15 +10,47 @@ QuantumTrade trading platform:
 import os
 import logging
 import httpx
+from dotenv import load_dotenv
 from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
+
+# Ensure .env is loaded even if this module is imported before backend.main
+load_dotenv()
 
 JESSE_API_URL = os.getenv("JESSE_API_URL", "http://jesse-app:9000")
 JESSE_LOCAL_URL = os.getenv("JESSE_LOCAL_URL", "http://127.0.0.1:9000")
 JESSE_ML_URL = os.getenv("JESSE_ML_URL", "http://jesse-app:9003")
 JESSE_ML_LOCAL_URL = os.getenv("JESSE_ML_LOCAL_URL", "http://127.0.0.1:9003")
-JESSE_PASSWORD = os.getenv("JESSE_PASSWORD", "QuantumTrading2026!")
+# Fail-closed: no hardcoded dashboard password. The bridge stays
+# unavailable (get_status reports available=False) until JESSE_PASSWORD
+# is set in the environment.
+JESSE_PASSWORD = os.getenv("JESSE_PASSWORD", "").strip()
+
+# QTP training-tree shadow ingest lives in /root/qtp-training (scripts/ingest_shadow.py).
+# QTP_SHADOW_INGEST_ENABLED is documentation-only on this process and stays false.
+# Do not copy QTP bundles into jesse-trading/storage/models, do not set
+# JESSE_SYNC_TO_LIVE, and do not point the live ML gate at a new artifact.
+# QTP_SHADOW_INGEST_ENABLED=false
+
+# Predict errors that mean "this symbol has no live model" — not an ML outage.
+# Live fail-closed must not treat these as a veto or the whole universe stalls
+# when only a subset of pairs have a promoted LightGBM artifact.
+_JESSE_ML_NO_ARTIFACT = "no model artifact found"
+_JESSE_ML_PROMOTION_FAILED = "promotion gate failed"
+
+
+def is_jesse_ml_model_gap(error: Optional[str]) -> bool:
+    """True when Jesse ML refused a predict because no deployable model exists.
+
+    Examples from the sidecar:
+      - "No model artifact found for AVAX-USDT (1h, lightgbm)"
+      - "Model artifact ETH-USDT_1h_lightgbm.joblib refused: promotion gate failed ..."
+    """
+    text = str(error or "").lower()
+    if not text:
+        return False
+    return _JESSE_ML_NO_ARTIFACT in text or _JESSE_ML_PROMOTION_FAILED in text
 
 
 class JesseBridgeService:
@@ -56,6 +88,11 @@ class JesseBridgeService:
     async def get_token(self) -> Optional[str]:
         if self._token:
             return self._token
+        if not JESSE_PASSWORD:
+            logger.warning(
+                "JESSE_PASSWORD is not set; Jesse bridge authentication disabled (fail-closed)."
+            )
+            return None
         base = await self._resolve_url()
         try:
             async with httpx.AsyncClient(timeout=5.0) as client:
@@ -296,8 +333,18 @@ class JesseBridgeService:
                     },
                 )
                 if res.status_code == 200:
-                    return res.json()
-                return {"status": "error", "error": f"ML server returned HTTP {res.status_code}: {res.text}"}
+                    payload = res.json()
+                    if isinstance(payload, dict) and payload.get("status") != "success":
+                        err = str(payload.get("error") or "")
+                        if is_jesse_ml_model_gap(err):
+                            payload["status"] = "no_model"
+                    return payload
+                # Never rewrite 5xx bodies to no_model — a traceback that
+                # happens to mention artifacts is still an outage.
+                err = f"ML server returned HTTP {res.status_code}: {res.text}"
+                if 400 <= res.status_code < 500 and is_jesse_ml_model_gap(res.text):
+                    return {"status": "no_model", "error": err}
+                return {"status": "error", "error": err}
         except Exception as e:
             logger.error(f"Failed to query ML prediction endpoint: {e}")
             return {"status": "error", "error": str(e)}

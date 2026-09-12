@@ -23,12 +23,17 @@ def classify_symbol(symbol: str) -> AssetClass:
     sym = symbol.upper().replace("/", "").replace("-", "").strip()
     if sym in _METALS or sym.startswith("XAU") or sym.startswith("XAG"):
         return "metal"
-    if sym in _OIL or sym.endswith("=F") and sym.startswith(("CL", "BZ")):
+    if sym in _OIL or (sym.endswith("=F") and sym.startswith(("CL", "BZ"))):
         return "oil"
+    # Crypto suffixes must win before the 6-letter forex heuristic.
+    # OPUSDT / ARBUSDT / APTUSDT are 6 alpha chars and were sent to
+    # yfinance as OPUSDT=X (404 spam + wrong asset class).
+    if any(sym.endswith(sfx) for sfx in _CRYPTO_SUFFIXES):
+        return "crypto"
+    if sym.endswith("USD") and len(sym) > 6:
+        return "crypto"
     if sym in _FOREX_MAJORS or (len(sym) == 6 and sym.isalpha()):
         return "forex"
-    if any(sym.endswith(sfx) for sfx in _CRYPTO_SUFFIXES) or sym.endswith("USD") and len(sym) > 6:
-        return "crypto"
     if sym in {"SPX", "SPY", "QQQ", "DIA", "NDX", "VIX"}:
         return "index"
     return "stock"

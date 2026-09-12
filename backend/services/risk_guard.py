@@ -227,7 +227,12 @@ def _trades_for_risk(open_trades: list[Trade]) -> list[Trade]:
     }
     wanted = aliases.get(active, {active})
     scoped = []
+    live_mode = get_trading_mode() == TradingMode.LIVE
     for t in open_trades:
+        if live_mode:
+            from backend.services.ledger import is_binance_paper_fill
+            if is_binance_paper_fill(t):
+                continue
         broker = str(getattr(t, "broker", "") or getattr(t, "exchange", "") or "").lower()
         if not broker:
             scoped.append(t)

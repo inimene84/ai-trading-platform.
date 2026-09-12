@@ -24,6 +24,7 @@ def isolate_ctrader_db_positions(monkeypatch):
     monkeypatch.setattr("backend.services.signal_candidate_engine.open_ctrader_db_symbols", lambda: set())
     monkeypatch.setattr("backend.services.signal_candidate_engine.count_open_ctrader_db_trades", lambda: 0)
     monkeypatch.setattr("backend.services.signal_candidate_engine.open_ctrader_db_positions", lambda: [])
+    monkeypatch.setattr("backend.services.signal_candidate_engine.try_open_ctrader_db_positions", lambda: [])
 
 
 @pytest.fixture
@@ -145,20 +146,28 @@ def test_scan_news_endpoint(client, auth_headers):
     assert "candidates_count" in data
 
 
-def test_candidates_and_ready_endpoints(client):
+def test_candidates_and_ready_endpoints(client, auth_headers):
     """Test GET /api/signals/candidates and /ready-for-execution."""
-    cands_res = client.get("/api/signals/candidates")
+    cands_res = client.get("/api/signals/candidates", headers=auth_headers)
     assert cands_res.status_code == 200
     assert "candidates" in cands_res.json()
 
-    ready_res = client.get("/api/signals/ready-for-execution")
+    ready_res = client.get("/api/signals/ready-for-execution", headers=auth_headers)
     assert ready_res.status_code == 200
     assert "signals" in ready_res.json()
 
 
+def test_signal_get_endpoints_require_auth(client, monkeypatch):
+    """Signal candidates expose live trade intent — GETs must reject anonymous callers."""
+    monkeypatch.setenv("ADMIN_API_KEY", "test-admin-key")
+    assert client.get("/api/signals/candidates").status_code == 401
+    assert client.get("/api/signals/ready-for-execution").status_code == 401
+    assert client.get("/api/signals/timing-config").status_code == 401
+
+
 def test_timing_config_endpoints(client, auth_headers):
     """Test GET and POST /api/signals/timing-config."""
-    get_res = client.get("/api/signals/timing-config")
+    get_res = client.get("/api/signals/timing-config", headers=auth_headers)
     assert get_res.status_code == 200
     assert "config" in get_res.json()
     assert "timing_modes" in get_res.json()
@@ -208,13 +217,13 @@ def test_execute_candidate_endpoint_dry_run(client, auth_headers):
     assert data["candidate_id"] == sig_id
 
 
-def test_signals_routes_dual_mounted_for_nginx_rewrite(client):
+def test_signals_routes_dual_mounted_for_nginx_rewrite(client, auth_headers):
     """Dashboard hits /api/backend/signals/* which nginx rewrites to /signals/*."""
-    get_res = client.get("/signals/timing-config")
+    get_res = client.get("/signals/timing-config", headers=auth_headers)
     assert get_res.status_code == 200
     assert "config" in get_res.json()
 
-    api_res = client.get("/api/signals/timing-config")
+    api_res = client.get("/api/signals/timing-config", headers=auth_headers)
     assert api_res.status_code == 200
     assert api_res.json()["config"]["pre_event_window_min"] == get_res.json()["config"]["pre_event_window_min"]
 
@@ -223,6 +232,14 @@ def test_usdcad_classified_as_forex_not_crypto():
     """USDCAD must not match USDC substring and route to cTrader."""
     assert classify_symbol("USDCAD") == "forex"
     assert classify_symbol("BTCUSDT") == "crypto"
+
+
+def test_six_letter_usdt_perps_are_crypto_not_forex():
+    """OP/ARB/APT are 6-char USDT perps — not EURUSD-style forex."""
+    assert classify_symbol("OPUSDT") == "crypto"
+    assert classify_symbol("ARBUSDT") == "crypto"
+    assert classify_symbol("APTUSDT") == "crypto"
+    assert classify_symbol("EURUSD") == "forex"
 
 
 def test_tf_to_binance_interval_maps_m5():
@@ -272,7 +289,9 @@ async def test_execute_candidate_accepts_ctrader_sent_status():
         "sizing": {"lots": 0.01, "quantity": 0.01, "risk_usd": 50.0},
     }
 
-    with patch.object(signal_candidate_engine, "_open_ctrader_position_count", return_value=0), patch(
+    with patch.object(signal_candidate_engine, "_open_ctrader_position_count", return_value=0), patch.dict(
+        signal_candidate_engine.execution_config, {"max_portfolio_risk_pct": 0}
+    ), patch(
         "backend.services.signal_candidate_engine.ctrader_service.ensure_connected",
         return_value=True,
     ), patch(
@@ -312,7 +331,9 @@ async def test_execute_candidate_rejects_simulated_when_credentials_exist():
         "sizing": {"lots": 0.01, "quantity": 0.01, "risk_usd": 50.0},
     }
 
-    with patch.object(signal_candidate_engine, "_open_ctrader_position_count", return_value=0), patch(
+    with patch.object(signal_candidate_engine, "_open_ctrader_position_count", return_value=0), patch.dict(
+        signal_candidate_engine.execution_config, {"max_portfolio_risk_pct": 0}
+    ), patch(
         "backend.services.signal_candidate_engine.ctrader_service.ensure_connected",
         return_value=False,
     ), patch(
@@ -350,7 +371,7 @@ async def test_execute_candidate_skips_market_closed_without_blocking_queue():
     }
 
     with patch.object(signal_candidate_engine, "_open_ctrader_position_count", return_value=0), patch.dict(
-        signal_candidate_engine.execution_config, {"forex_only": False, "include_metals": True}
+        signal_candidate_engine.execution_config, {"forex_only": False, "include_metals": True, "max_portfolio_risk_pct": 0}
     ), patch(
         "backend.services.signal_candidate_engine.ctrader_service.ensure_connected",
         return_value=True,
@@ -559,17 +580,25 @@ async def test_execute_candidate_keeps_ready_on_paper_failure():
     }
 
     mock_resp = MagicMock(success=False, order_id="paper_000001", message="Paper market entry requires an explicit price or prior market fill")
-    with patch.dict(signal_candidate_engine.execution_config, {"forex_only": False}), patch.object(
+    with patch.dict(signal_candidate_engine.execution_config, {"forex_only": False, "max_portfolio_risk_pct": 0}), patch.object(
         signal_candidate_engine, "_resolve_mark_price", new_callable=AsyncMock, return_value=0.0
+    ), patch.object(
+        signal_candidate_engine, "_try_open_binance_positions", return_value=[]
     ), patch(
         "backend.services.signal_candidate_engine.UnifiedTrading"
     ) as mock_ut_cls:
+        mock_ut_cls.return_value.list_sessions.return_value = [
+            {"id": "binance_futures_paper", "broker": "binance_futures", "mode": "paper"}
+        ]
         mock_ut_cls.return_value.place_order.return_value = mock_resp
         res = await signal_candidate_engine.execute_candidate(sig_id, force=True)
 
     assert res["success"] is False
     assert signal_candidate_engine.candidates[sig_id]["status"] == CandidateStatus.READY
     assert signal_candidate_engine.candidates[sig_id]["execution_result"]["success"] is False
+    # Order must be routed to the broker's own session, never the global default
+    _, kwargs = mock_ut_cls.return_value.place_order.call_args
+    assert kwargs.get("session_id") == "binance_futures_paper"
 
 
 def test_resolve_equity_uses_live_broker_and_logs_fallback():
@@ -773,3 +802,579 @@ def test_anti_whipsaw_symbol_cooldown():
         res_forced = asyncio.run(engine.execute_candidate(cand_id, force=True))
         assert res_forced.get("success") is True
 
+
+
+@pytest.mark.asyncio
+async def test_scan_markets_dedupes_live_twin():
+    """A live (symbol, strategy, direction) candidate must not be re-armed by the next scan."""
+    engine = SignalCandidateEngine()
+    engine.candidates.clear()
+    bars = [
+        {"close": 1.08, "high": 1.081, "low": 1.079, "volume": 1}
+        for _ in range(25)
+    ]
+    raw = {
+        "strategy": "MOMENTUM_TREND_PULSE",
+        "direction": "BUY",
+        "entry_price": 1.08,
+        "stop_loss": 1.075,
+        "take_profit": 1.09,
+        "timing_mode": TimingMode.POST_REACTION,
+        "confidence": 0.8,
+        "reason": "test",
+    }
+    with patch.object(CTraderService, "get_trendbars", return_value=bars), \
+         patch.object(engine, "_attach_stop_atr", new_callable=AsyncMock), \
+         patch.object(engine, "_evaluate_momentum", side_effect=lambda *a, **k: dict(raw)), \
+         patch.object(engine, "_evaluate_fade", return_value=None), \
+         patch.object(engine, "_evaluate_straddle", return_value=None), \
+         patch.object(engine, "_evaluate_slingshot", return_value=None), \
+         patch.object(engine, "_fx_gate_mode", return_value="off"), \
+         patch.object(engine, "_has_open_position", return_value=False), \
+         patch.object(engine, "_portfolio_risk_breach", return_value=None), \
+         patch.object(engine, "_binance_position_cap_breach", return_value=None):
+        first = await engine.scan_markets(universe=["EURUSD"], timeframe="M5")
+        second = await engine.scan_markets(universe=["EURUSD"], timeframe="M5")
+
+    assert len(first) == 1
+    assert second == []
+    live = [
+        c for c in engine.candidates.values()
+        if c["status"] in (CandidateStatus.PENDING, CandidateStatus.READY)
+    ]
+    assert len(live) == 1
+
+
+@pytest.mark.asyncio
+async def test_execute_candidate_cancels_duplicate_siblings():
+    """Executing one candidate must cancel live twins on the same symbol+direction."""
+    engine = SignalCandidateEngine()
+    engine.candidates.clear()
+    now_ts = int(time.time())
+
+    def _cand(cid):
+        return {
+            "id": cid,
+            "symbol": "BTCUSDT",
+            "broker": "binance_futures",
+            "strategy": "MOMENTUM_TREND_PULSE",
+            "direction": "BUY",
+            "entry_price": 100000,
+            "stop_loss": 99000,
+            "take_profit": 102000,
+            "timing_mode": TimingMode.BAR_CLOSE,
+            "status": CandidateStatus.READY,
+            "earliest_exec_at": now_ts - 5,
+            "latest_exec_at": now_ts + 600,
+            "sizing": {"lots": 0.01, "quantity": 0.01, "risk_usd": 50.0},
+        }
+
+    engine.candidates["dup-a"] = _cand("dup-a")
+    engine.candidates["dup-b"] = _cand("dup-b")
+
+    mock_resp = MagicMock(success=True, order_id="ord-1", message="filled")
+    with patch.dict(engine.execution_config, {"forex_only": False, "max_portfolio_risk_pct": 0}), patch(
+        "backend.services.sentry_state.is_trading_allowed", return_value=True
+    ), patch.object(
+        engine, "_try_open_binance_positions", return_value=[]
+    ), patch.object(
+        engine, "_resolve_mark_price", new_callable=AsyncMock, return_value=100000.0
+    ), patch(
+        "backend.services.signal_candidate_engine.UnifiedTrading"
+    ) as mock_ut_cls:
+        mock_ut_cls.return_value.list_sessions.return_value = [
+            {"id": "binance_futures_paper", "broker": "binance_futures", "mode": "paper"}
+        ]
+        mock_ut_cls.return_value.place_order.return_value = mock_resp
+        res = await engine.execute_candidate("dup-a", force=True)
+
+    assert res["success"] is True
+    assert engine.candidates["dup-a"]["status"] == CandidateStatus.EXECUTED
+    assert engine.candidates["dup-b"]["status"] == CandidateStatus.CANCELLED
+    _, kwargs = mock_ut_cls.return_value.place_order.call_args
+    assert kwargs.get("session_id") == "binance_futures_paper"
+
+
+def _binance_candidate(cid: str, now_ts: int) -> dict:
+    return {
+        "id": cid,
+        "symbol": "BTCUSDT",
+        "broker": "binance_futures",
+        "strategy": "MOMENTUM_TREND_PULSE",
+        "direction": "BUY",
+        "entry_price": 100000,
+        "stop_loss": 99000,
+        "take_profit": 102000,
+        "timing_mode": TimingMode.BAR_CLOSE,
+        "status": CandidateStatus.READY,
+        "earliest_exec_at": now_ts - 5,
+        "latest_exec_at": now_ts + 600,
+        "sizing": {"lots": 0.01, "quantity": 0.01, "risk_usd": 50.0},
+    }
+
+
+@pytest.mark.asyncio
+async def test_execute_candidate_binance_one_position_per_symbol():
+    """A binance_futures candidate must be skipped when the symbol already has an open position."""
+    engine = SignalCandidateEngine()
+    engine.candidates.clear()
+    engine.candidates["b-1"] = _binance_candidate("b-1", int(time.time()))
+
+    with patch.dict(engine.execution_config, {"forex_only": False, "max_portfolio_risk_pct": 0}), patch(
+        "backend.services.sentry_state.is_trading_allowed", return_value=True
+    ), patch.object(
+        engine, "_try_open_binance_positions", return_value=[{"symbol": "BTCUSDT"}]
+    ):
+        res = await engine.execute_candidate("b-1", force=True)
+
+    assert res["success"] is False
+    assert res["skipped"] is True
+    assert "open Binance position" in res["error"]
+    assert engine.candidates["b-1"]["status"] == CandidateStatus.READY
+
+
+@pytest.mark.asyncio
+async def test_execute_candidate_binance_max_positions_cap():
+    engine = SignalCandidateEngine()
+    engine.candidates.clear()
+    engine.candidates["b-1"] = _binance_candidate("b-1", int(time.time()))
+
+    open_positions = [{"symbol": f"SYM{i}USDT"} for i in range(10)]
+    with patch.dict(
+        engine.execution_config,
+        {"forex_only": False, "max_portfolio_risk_pct": 0, "max_binance_positions": 10},
+    ), patch(
+        "backend.services.sentry_state.is_trading_allowed", return_value=True
+    ), patch.object(
+        engine, "_try_open_binance_positions", return_value=open_positions
+    ):
+        res = await engine.execute_candidate("b-1", force=True)
+
+    assert res["success"] is False
+    assert res["skipped"] is True
+    assert "Max open Binance positions" in res["error"]
+
+
+@pytest.mark.asyncio
+async def test_execute_candidate_portfolio_risk_budget():
+    """Committed risk across live candidates plus the new trade may not exceed the budget."""
+    engine = SignalCandidateEngine()
+    engine.candidates.clear()
+    now_ts = int(time.time())
+    engine.candidates["b-1"] = _binance_candidate("b-1", now_ts)
+    # Another live candidate already commits $50 of the same book.
+    committed = _binance_candidate("b-2", now_ts)
+    committed["symbol"] = "ETHUSDT"
+    engine.candidates["b-2"] = committed
+
+    # equity $10_000, budget 0.5% = $50 -> $50 committed + $50 new = $100 > $50
+    with patch.dict(
+        engine.execution_config, {"forex_only": False, "max_portfolio_risk_pct": 0.5}
+    ), patch(
+        "backend.services.sentry_state.is_trading_allowed", return_value=True
+    ), patch.object(
+        engine, "_try_open_binance_positions", return_value=[]
+    ), patch.object(
+        engine, "_resolve_equity", return_value=10_000.0
+    ):
+        res = await engine.execute_candidate("b-1", force=True)
+
+    assert res["success"] is False
+    assert res["skipped"] is True
+    assert "risk budget" in res["error"].lower()
+    assert engine.candidates["b-1"]["status"] == CandidateStatus.READY
+
+
+@pytest.mark.asyncio
+async def test_scans_return_empty_while_halted():
+    """Signal generation pauses while the sentry halt flag is set."""
+    engine = SignalCandidateEngine()
+    with patch(
+        "backend.services.sentry_state.is_trading_allowed", return_value=False
+    ):
+        assert await engine.scan_markets(universe=["EURUSD"]) == []
+        assert await engine.scan_news_and_events() == []
+
+
+def _scan_raw(strategy: str = "MOMENTUM_TREND_PULSE", direction: str = "SELL") -> dict:
+    return {
+        "strategy": strategy,
+        "direction": direction,
+        "entry_price": 1.08,
+        "stop_loss": 1.085,
+        "take_profit": 1.07,
+        "timing_mode": TimingMode.POST_REACTION,
+        "confidence": 0.8,
+        "reason": "test",
+    }
+
+
+def _feature_bars(n: int = 25, falling: bool = True) -> list:
+    step = -0.0002 if falling else 0.0002
+    return [
+        {
+            "close": 1.10 + i * step,
+            "high": 1.101 + i * step,
+            "low": 1.099 + i * step,
+            "volume": 1,
+        }
+        for i in range(n)
+    ]
+
+
+@pytest.mark.asyncio
+async def test_scan_news_does_not_rearm_after_executed_twin():
+    """After a MACRO_EVENT fill, news scan must not arm another same-direction twin."""
+    engine = SignalCandidateEngine()
+    engine.candidates.clear()
+    engine.candidates["filled-macro"] = {
+        "id": "filled-macro",
+        "symbol": "EURUSD",
+        "broker": "ctrader",
+        "strategy": "MACRO_EVENT_POST_REACTION",
+        "direction": "SELL",
+        "status": CandidateStatus.EXECUTED,
+        "executed_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "sizing": {"risk_usd": 1.0},
+    }
+    calendar = {"events": [{"event": "NFP", "currency": "USD", "impact": "high"}]}
+    with patch(
+        "backend.services.sentry_state.is_trading_allowed", return_value=True
+    ), patch(
+        "backend.services.signal_candidate_engine.ctrader_service.get_trendbars",
+        return_value=_feature_bars(),
+    ), patch.object(
+        engine, "_attach_stop_atr", new_callable=AsyncMock
+    ), patch.object(
+        engine, "_has_open_position", return_value=False
+    ), patch.object(
+        engine, "_portfolio_risk_breach", return_value=None
+    ), patch(
+        "backend.routes.news.get_economic_calendar",
+        new=AsyncMock(return_value=calendar),
+    ), patch(
+        "backend.routes.news.get_news_feed", new=AsyncMock(return_value={})
+    ), patch(
+        "backend.routes.news.get_market_sentiment", new=AsyncMock(return_value={})
+    ):
+        created = await engine.scan_news_and_events()
+
+    assert created == []
+    live = [
+        c
+        for c in engine.candidates.values()
+        if c["status"] in (CandidateStatus.PENDING, CandidateStatus.READY)
+        and c.get("symbol") == "EURUSD"
+    ]
+    assert live == []
+
+
+@pytest.mark.asyncio
+async def test_scan_markets_skips_when_open_position_exists():
+    """Market scan must not arm a candidate that duplicates an open book side."""
+    engine = SignalCandidateEngine()
+    engine.candidates.clear()
+    raw = _scan_raw()
+    with patch.object(CTraderService, "get_trendbars", return_value=_feature_bars()), \
+         patch.object(engine, "_attach_stop_atr", new_callable=AsyncMock), \
+         patch.object(engine, "_evaluate_momentum", side_effect=lambda *a, **k: dict(raw)), \
+         patch.object(engine, "_evaluate_fade", return_value=None), \
+         patch.object(engine, "_evaluate_straddle", return_value=None), \
+         patch.object(engine, "_evaluate_slingshot", return_value=None), \
+         patch.object(engine, "_fx_gate_mode", return_value="off"), \
+         patch.object(engine, "_has_open_position", return_value=True), \
+         patch.object(engine, "_portfolio_risk_breach", return_value=None):
+        created = await engine.scan_markets(universe=["EURUSD"], timeframe="M5")
+
+    assert created == []
+    assert engine.candidates == {}
+
+
+@pytest.mark.asyncio
+async def test_scan_news_skips_when_open_position_exists():
+    engine = SignalCandidateEngine()
+    engine.candidates.clear()
+    calendar = {"events": [{"event": "NFP", "currency": "USD", "impact": "high"}]}
+    with patch(
+        "backend.services.sentry_state.is_trading_allowed", return_value=True
+    ), patch(
+        "backend.services.signal_candidate_engine.ctrader_service.get_trendbars",
+        return_value=_feature_bars(),
+    ), patch.object(
+        engine, "_attach_stop_atr", new_callable=AsyncMock
+    ), patch.object(
+        engine, "_has_open_position", return_value=True
+    ), patch.object(
+        engine, "_portfolio_risk_breach", return_value=None
+    ), patch(
+        "backend.routes.news.get_economic_calendar",
+        new=AsyncMock(return_value=calendar),
+    ), patch(
+        "backend.routes.news.get_news_feed", new=AsyncMock(return_value={})
+    ), patch(
+        "backend.routes.news.get_market_sentiment", new=AsyncMock(return_value={})
+    ):
+        created = await engine.scan_news_and_events()
+
+    assert created == []
+
+
+@pytest.mark.asyncio
+async def test_scan_markets_skips_cross_strategy_same_direction_live_twin():
+    """MOMENTUM must not sit beside a live MACRO_EVENT on the same symbol+side."""
+    engine = SignalCandidateEngine()
+    engine.candidates.clear()
+    engine.candidates["macro-live"] = {
+        "id": "macro-live",
+        "symbol": "EURUSD",
+        "broker": "ctrader",
+        "strategy": "MACRO_EVENT_POST_REACTION",
+        "direction": "SELL",
+        "status": CandidateStatus.READY,
+        "sizing": {"risk_usd": 1.0},
+        "latest_exec_at": int(time.time()) + 600,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    raw = _scan_raw(strategy="MOMENTUM_TREND_PULSE", direction="SELL")
+    with patch.object(CTraderService, "get_trendbars", return_value=_feature_bars()), \
+         patch.object(engine, "_attach_stop_atr", new_callable=AsyncMock), \
+         patch.object(engine, "_evaluate_momentum", side_effect=lambda *a, **k: dict(raw)), \
+         patch.object(engine, "_evaluate_fade", return_value=None), \
+         patch.object(engine, "_evaluate_straddle", return_value=None), \
+         patch.object(engine, "_evaluate_slingshot", return_value=None), \
+         patch.object(engine, "_fx_gate_mode", return_value="off"), \
+         patch.object(engine, "_has_open_position", return_value=False), \
+         patch.object(engine, "_portfolio_risk_breach", return_value=None):
+        created = await engine.scan_markets(universe=["EURUSD"], timeframe="M5")
+
+    assert created == []
+    live = [
+        c
+        for c in engine.candidates.values()
+        if c["status"] in (CandidateStatus.PENDING, CandidateStatus.READY)
+    ]
+    assert len(live) == 1
+    assert live[0]["id"] == "macro-live"
+
+
+@pytest.mark.asyncio
+async def test_scan_markets_respects_portfolio_risk_and_binance_caps():
+    """Scan path must apply the same portfolio / Binance caps as execute."""
+    engine = SignalCandidateEngine()
+    engine.candidates.clear()
+    raw = _scan_raw(strategy="MOMENTUM_TREND_PULSE", direction="BUY")
+    raw["entry_price"] = 100000
+    raw["stop_loss"] = 99000
+    raw["take_profit"] = 102000
+
+    with patch.object(engine, "_attach_stop_atr", new_callable=AsyncMock), \
+         patch.object(engine, "_evaluate_momentum", side_effect=lambda *a, **k: dict(raw)), \
+         patch.object(engine, "_evaluate_fade", return_value=None), \
+         patch.object(engine, "_evaluate_straddle", return_value=None), \
+         patch.object(engine, "_evaluate_slingshot", return_value=None), \
+         patch.object(engine, "_fx_gate_mode", return_value="off"), \
+         patch.object(engine, "_has_open_position", return_value=False), \
+         patch.object(engine, "_portfolio_risk_breach", return_value="Portfolio risk budget exceeded"), \
+         patch(
+             "backend.services.signal_candidate_engine.binance_market_data.get_klines",
+             new_callable=AsyncMock,
+             return_value=_feature_bars(),
+         ):
+        created = await engine.scan_markets(universe=["BTCUSDT"], timeframe="M5")
+    assert created == []
+
+    with patch.object(engine, "_attach_stop_atr", new_callable=AsyncMock), \
+         patch.object(engine, "_evaluate_momentum", side_effect=lambda *a, **k: dict(raw)), \
+         patch.object(engine, "_evaluate_fade", return_value=None), \
+         patch.object(engine, "_evaluate_straddle", return_value=None), \
+         patch.object(engine, "_evaluate_slingshot", return_value=None), \
+         patch.object(engine, "_fx_gate_mode", return_value="off"), \
+         patch.object(engine, "_has_open_position", return_value=False), \
+         patch.object(engine, "_portfolio_risk_breach", return_value=None), \
+         patch.object(
+             engine, "_binance_position_cap_breach",
+             return_value="Already have an open Binance position in BTCUSDT.",
+         ), \
+         patch(
+             "backend.services.signal_candidate_engine.binance_market_data.get_klines",
+             new_callable=AsyncMock,
+             return_value=_feature_bars(),
+         ):
+        created = await engine.scan_markets(universe=["BTCUSDT"], timeframe="M5")
+    assert created == []
+
+
+@pytest.mark.asyncio
+async def test_scan_markets_skips_recent_executed_cross_strategy_twin():
+    """After a MACRO fill, MOMENTUM must not re-arm the same symbol+direction."""
+    engine = SignalCandidateEngine()
+    engine.candidates.clear()
+    engine.candidates["filled-macro"] = {
+        "id": "filled-macro",
+        "symbol": "EURUSD",
+        "broker": "ctrader",
+        "strategy": "MACRO_EVENT_POST_REACTION",
+        "direction": "SELL",
+        "status": CandidateStatus.EXECUTED,
+        "executed_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "sizing": {"risk_usd": 1.0},
+    }
+    raw = _scan_raw(strategy="MOMENTUM_TREND_PULSE", direction="SELL")
+    with patch.object(CTraderService, "get_trendbars", return_value=_feature_bars()), \
+         patch.object(engine, "_attach_stop_atr", new_callable=AsyncMock), \
+         patch.object(engine, "_evaluate_momentum", side_effect=lambda *a, **k: dict(raw)), \
+         patch.object(engine, "_evaluate_fade", return_value=None), \
+         patch.object(engine, "_evaluate_straddle", return_value=None), \
+         patch.object(engine, "_evaluate_slingshot", return_value=None), \
+         patch.object(engine, "_fx_gate_mode", return_value="off"), \
+         patch.object(engine, "_has_open_position", return_value=False), \
+         patch.object(engine, "_portfolio_risk_breach", return_value=None):
+        created = await engine.scan_markets(universe=["EURUSD"], timeframe="M5")
+
+    assert created == []
+    live = [
+        c for c in engine.candidates.values()
+        if c["status"] in (CandidateStatus.PENDING, CandidateStatus.READY)
+    ]
+    assert live == []
+
+
+@pytest.mark.asyncio
+async def test_execute_refuses_when_binance_book_unreadable():
+    engine = SignalCandidateEngine()
+    engine.candidates.clear()
+    engine.candidates["b-1"] = _binance_candidate("b-1", int(time.time()))
+
+    with patch.dict(engine.execution_config, {"forex_only": False, "max_portfolio_risk_pct": 0}), patch(
+        "backend.services.sentry_state.is_trading_allowed", return_value=True
+    ), patch.object(
+        engine, "_try_open_binance_positions", return_value=None
+    ):
+        res = await engine.execute_candidate("b-1", force=True)
+
+    assert res["success"] is False
+    assert res["skipped"] is True
+    assert "Could not read Binance" in res["error"]
+    assert engine.candidates["b-1"]["status"] == CandidateStatus.READY
+
+
+def test_open_position_keys_counts_filled_db_rows_as_open():
+    """Dashboard treats status=filled as open; scans must use the same book."""
+    engine = SignalCandidateEngine()
+    with patch(
+        "backend.services.signal_candidate_engine.ctrader_service.status",
+        return_value={"connected": True, "open_positions": 0},
+    ), patch(
+        "backend.services.signal_candidate_engine.ctrader_service.get_positions",
+        return_value=[],
+    ), patch(
+        "backend.services.signal_candidate_engine.try_open_ctrader_db_positions",
+        return_value=[{"symbol": "GBPUSD", "direction": "BUY"}],
+    ):
+        assert engine._open_position_keys("ctrader") == {("GBPUSD", "BUY")}
+        assert engine._has_open_position("ctrader", "GBPUSD", "BUY") is True
+        assert engine._has_open_position("ctrader", "GBPUSD", "SELL") is False
+
+
+def test_open_position_keys_unknown_when_ctrader_db_unreadable_and_cache_empty():
+    engine = SignalCandidateEngine()
+    with patch(
+        "backend.services.signal_candidate_engine.ctrader_service.status",
+        return_value={"connected": False, "open_positions": 0},
+    ), patch(
+        "backend.services.signal_candidate_engine.ctrader_service.get_positions",
+        return_value=[],
+    ), patch(
+        "backend.services.signal_candidate_engine.try_open_ctrader_db_positions",
+        return_value=None,
+    ):
+        assert engine._open_position_keys("ctrader") is None
+        assert engine._has_open_position("ctrader", "EURUSD", "SELL") is True
+
+
+def test_has_open_position_fail_closed_when_book_unknown():
+    engine = SignalCandidateEngine()
+    with patch.object(engine, "_open_position_keys", return_value=None):
+        assert engine._has_open_position("ctrader", "EURUSD", "SELL") is True
+    with patch.object(engine, "_open_position_keys", return_value={("EURUSD", "SELL")}):
+        assert engine._has_open_position("ctrader", "EURUSD", "SELL") is True
+        assert engine._has_open_position("ctrader", "EURUSD", "BUY") is False
+    with patch.object(engine, "_open_position_keys", return_value=set()):
+        assert engine._has_open_position("ctrader", "EURUSD", "SELL") is False
+
+
+def test_open_position_keys_maps_binance_side():
+    engine = SignalCandidateEngine()
+    with patch.object(
+        engine,
+        "_try_open_binance_positions",
+        return_value=[{"symbol": "BTCUSDT", "side": "SELL"}],
+    ):
+        assert engine._open_position_keys("binance_futures") == {("BTCUSDT", "SELL")}
+
+
+def test_prune_keeps_executed_when_over_cap():
+    engine = SignalCandidateEngine()
+    previous_cfg = dict(engine.execution_config)
+    previous = dict(engine.candidates)
+    try:
+        engine.execution_config["max_candidates"] = 2
+        engine.candidates = {
+            "exec-old": {
+                "id": "exec-old",
+                "status": CandidateStatus.EXECUTED,
+                "created_at": "2026-01-01",
+                "executed_at": datetime.now(timezone.utc).isoformat(),
+                "latest_exec_at": 1,
+            },
+            "ready-new": {
+                "id": "ready-new",
+                "status": CandidateStatus.READY,
+                "created_at": "2026-09-11",
+                "latest_exec_at": 9_999_999_999,
+            },
+            "ready-newer": {
+                "id": "ready-newer",
+                "status": CandidateStatus.READY,
+                "created_at": "2026-09-12",
+                "latest_exec_at": 9_999_999_999,
+            },
+        }
+        engine.prune_candidates(now_ts=100)
+        assert "exec-old" in engine.candidates
+        assert engine.candidates["exec-old"]["status"] == CandidateStatus.EXECUTED
+    finally:
+        engine.execution_config = previous_cfg
+        engine.candidates = previous
+
+
+def test_cancel_live_same_direction_leaves_other_rows():
+    engine = SignalCandidateEngine()
+    engine.candidates.clear()
+    engine.candidates["sell"] = {
+        "id": "sell",
+        "symbol": "EURUSD",
+        "direction": "SELL",
+        "status": CandidateStatus.READY,
+    }
+    engine.candidates["buy"] = {
+        "id": "buy",
+        "symbol": "EURUSD",
+        "direction": "BUY",
+        "status": CandidateStatus.READY,
+    }
+    engine.candidates["done"] = {
+        "id": "done",
+        "symbol": "EURUSD",
+        "direction": "SELL",
+        "status": CandidateStatus.EXECUTED,
+    }
+    cancelled = engine.cancel_live_same_direction(
+        "EURUSD", "SELL", reason="go-live leftover"
+    )
+    assert cancelled == ["sell"]
+    assert engine.candidates["sell"]["status"] == CandidateStatus.CANCELLED
+    assert engine.candidates["buy"]["status"] == CandidateStatus.READY
+    assert engine.candidates["done"]["status"] == CandidateStatus.EXECUTED

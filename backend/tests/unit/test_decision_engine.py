@@ -526,3 +526,59 @@ def test_paper_leverage_for_binance_defaults_to_ten(monkeypatch):
     assert paper_leverage_for_broker("binance_futures") == 10.0
     monkeypatch.setenv("BINANCE_LEVERAGE", "5")
     assert paper_leverage_for_broker("binance_futures") == 5.0
+
+
+def test_apply_hard_notional_caps_live_clips_to_trade_usdt_times_leverage():
+    from backend.services.decision_engine import apply_hard_notional_caps
+
+    capped, reject = apply_hard_notional_caps(
+        480_000.0,
+        trade_usdt=35.0,
+        max_directional_usdt=1000.0,
+        leverage=10.0,
+        live=True,
+        exchange_min_notional=20.0,
+    )
+    assert reject is None
+    assert capped == pytest.approx(350.0)
+
+
+def test_apply_hard_notional_caps_raises_cap_to_exchange_min():
+    from backend.services.decision_engine import apply_hard_notional_caps
+
+    capped, reject = apply_hard_notional_caps(
+        500.0,
+        trade_usdt=5.0,
+        max_directional_usdt=10.0,
+        leverage=1.0,
+        live=True,
+        exchange_min_notional=20.0,
+    )
+    assert reject is None
+    assert capped == pytest.approx(20.0)
+
+
+def test_live_entry_cannot_exceed_hard_notional_cap(risk_config, monkeypatch):
+    monkeypatch.setenv("TRADING_MODE", "live")
+    monkeypatch.setenv("PAPER_TRADING", "false")
+    monkeypatch.setenv("DRY_RUN_ALL", "false")
+    engine = DecisionEngine(risk_config)
+    engine.config.trade_usdt_amount = 35.0
+    engine.config.max_directional_exposure_usdt = 1000.0
+    engine.config.equity_sizing_enabled = True
+    engine.account_equity = 104_800.0
+    engine.account_available = 104_800.0
+    engine.account_leverage = 10.0
+    bars = _make_bars(200, base=1.50)
+    signal = StrategySignal(
+        symbol="OPUSDT", signal="BUY", confidence=0.7,
+        entry_price=1.50, stop_loss=1.49, take_profit=1.55,
+        strategy="combined",
+    )
+    decision = engine._create_entry_decision(
+        "OPUSDT", bars, signal, "BUY", is_pyramid=False, regime="TRENDING",
+    )
+    assert decision is not None
+    notional = decision.quantity * decision.entry_price
+    assert notional <= 350.0 + 1e-6
+

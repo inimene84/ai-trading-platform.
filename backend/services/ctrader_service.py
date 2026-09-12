@@ -340,8 +340,16 @@ class CTraderProtocol:
                 ev.ParseFromString(msg.payload)
                 logger.info(f"cTrader execution event received: type={ev.executionType}")
                 if ev.executionType in (2, 3):  # ORDER_ACCEPTED / ORDER_FILLED
-                    self._service._last_order_error = None
-                    self._service._order_ack_event.set()
+                    oid = None
+                    pid = None
+                    if hasattr(ev, "order") and ev.order:
+                        oid = str(getattr(ev.order, "orderId", "") or "") or None
+                        pid = str(getattr(ev.order, "positionId", "") or "") or None
+                    if not pid and hasattr(ev, "deal") and ev.deal:
+                        pid = str(getattr(ev.deal, "positionId", "") or "") or None
+                    self._service.signal_place_order_ack(
+                        error=None, order_id=oid, position_id=pid,
+                    )
 
                 # Record deal execution details if present
                 if hasattr(ev, "deal") and ev.deal and getattr(ev.deal, "dealId", 0):
@@ -394,8 +402,7 @@ class CTraderProtocol:
                 err_ev.ParseFromString(msg.payload)
                 desc = f"{err_ev.errorCode} — {err_ev.description}"
                 logger.error(f"cTrader Order Error: {desc}")
-                self._service._last_order_error = desc
-                self._service._order_ack_event.set()
+                self._service.signal_place_order_ack(error=desc)
 
             elif ptype == 2131:  # ProtoOASpotEvent (2128 is SubscribeSpotsRes)
                 spot_ev = msgs.ProtoOASpotEvent()
@@ -614,6 +621,8 @@ class CTraderService(BrokerService):
         self._retry_correct_host: bool = False
         self._last_order_error: Optional[str] = None
         self._order_ack_event = threading.Event()
+        self._order_ack_lock = threading.Lock()
+        self._order_ack_waiters: List[Dict[str, Any]] = []
         self._trendbar_last_req: Dict[str, float] = {}
         self._trendbar_events: Dict[str, threading.Event] = {}
         self._recent_deals: Dict[str, Dict[str, Any]] = {}
@@ -688,6 +697,8 @@ class CTraderService(BrokerService):
     # Bid/ask/trendbar integers are always 1/100000 of a price unit (not 10^digits).
     SPOTWARE_PRICE_SCALE = 100_000
     MAX_FX_STOP_PIPS = 120
+    PLACE_ORDER_SEND_TIMEOUT_SEC = 10.0
+    PLACE_ORDER_ACK_TIMEOUT_SEC = 3.0
     # Broker stop level. Protection closer than this is silently discarded.
     MIN_FX_STOP_PIPS = float(os.getenv("CTRADER_MIN_STOP_PIPS", "10"))
     # Exotic JPY crosses (NZDJPY/CHFJPY) have a wider broker stop level than
@@ -818,10 +829,11 @@ class CTraderService(BrokerService):
     def is_plausible_stop(
         cls, symbol: str, entry: float, stop: float, direction: str = "",
     ) -> bool:
-        """False when a DB stop is on the wrong side or impossibly far from entry.
+        """False when a DB stop is impossibly far from entry.
 
         CADJPY SELL @ 112.9 with SL 95.9 is ~1700 pips — a live 30-pip stop
-        must not be overwritten by that row.
+        must not be overwritten by that row. Stops at/through entry are
+        allowed (break-even / trail lock). Callers still clamp vs mark.
         """
         try:
             entry_f = float(entry)
@@ -830,11 +842,10 @@ class CTraderService(BrokerService):
             return False
         if entry_f <= 0 or stop_f <= 0:
             return False
-        side = (direction or "").upper()
-        if side in ("BUY", "LONG") and stop_f >= entry_f:
-            return False
-        if side in ("SELL", "SHORT") and stop_f <= entry_f:
-            return False
+        # Distance rejects garbage (CADJPY ~1700-pip "stop"). After
+        # break-even the ratchet may lock at/through entry, so do not
+        # require the stop to stay on the loss side of entry. Callers
+        # still clamp vs the current mark before sending.
         return abs(stop_f - entry_f) <= cls.max_protective_distance(symbol, entry_f) * 1.05
 
     @classmethod
@@ -1488,6 +1499,26 @@ class CTraderService(BrokerService):
             positions.append(enriched)
         return positions
 
+    def signal_place_order_ack(
+        self,
+        error: Optional[str] = None,
+        order_id: Optional[str] = None,
+        position_id: Optional[str] = None,
+    ) -> None:
+        """Complete the oldest in-flight place_order waiter (per-request ack)."""
+        self._last_order_error = error
+        self._order_ack_event.set()
+        with self._order_ack_lock:
+            for waiter in self._order_ack_waiters:
+                if not waiter["event"].is_set():
+                    waiter["error"] = error
+                    if order_id:
+                        waiter["order_id"] = str(order_id)
+                    if position_id:
+                        waiter["position_id"] = str(position_id)
+                    waiter["event"].set()
+                    return
+
     def place_order(
         self,
         symbol: str = "",
@@ -1507,6 +1538,19 @@ class CTraderService(BrokerService):
         # Resolve argument aliases
         raw_sym = symbol or kwargs.get("yfinance_symbol", "")
         ct_symbol = self._normalize_symbol(raw_sym)
+        from backend.services.multi_asset_bars import classify_symbol
+        if classify_symbol(raw_sym or ct_symbol) == "crypto":
+            logger.error(
+                "cTrader refusing crypto symbol %s — crypto orders must use "
+                "binance_futures_live, not the default cTrader session",
+                raw_sym or ct_symbol,
+            )
+            return {
+                "status": "error",
+                "error": (
+                    f"crypto symbol {raw_sym or ct_symbol} is not a cTrader market"
+                ),
+            }
         side = "BUY" if direction.upper() in ("BUY", "LONG") else "SELL"
         lots = volume if volume is not None else (quantity if quantity is not None else 1.0)
 
@@ -1627,13 +1671,22 @@ class CTraderService(BrokerService):
                         "symbol": ct_symbol,
                     }
 
-            event = threading.Event()
+            send_done = threading.Event()
             result = {"status": "pending"}
+            waiter = {
+                "event": threading.Event(),
+                "error": None,
+                "order_id": None,
+                "position_id": None,
+            }
             self._last_order_error = None
             self._order_ack_event.clear()
+            with self._order_ack_lock:
+                self._order_ack_waiters.append(waiter)
 
             def _send():
                 try:
+                    result["dispatched"] = True
                     self._protocol._send(order_req, 2106)
                     result["status"] = "sent"
                     result["broker"] = "ctrader:live"
@@ -1645,17 +1698,48 @@ class CTraderService(BrokerService):
                     result["status"] = "error"
                     result["error"] = str(e)
                 finally:
-                    event.set()
+                    send_done.set()
 
-            reactor.callFromThread(_send)
-            event.wait(timeout=10.0)
-            if result.get("status") == "sent":
-                self._order_ack_event.wait(timeout=3.0)
-                if self._last_order_error:
-                    result["status"] = "error"
-                    result["error"] = self._last_order_error
-                    logger.error(f"cTrader order rejected: {self._last_order_error}")
-            return result
+            try:
+                reactor.callFromThread(_send)
+                send_done.wait(timeout=self.PLACE_ORDER_SEND_TIMEOUT_SEC)
+                if result.get("status") == "pending":
+                    # Reactor may still send. Never classify this as error —
+                    # callers treat failure as retryable and would double size.
+                    result["status"] = "sent"
+                    result["broker"] = "ctrader:live"
+                    result["symbol"] = ct_symbol
+                    result["direction"] = side
+                    result["quantity"] = lots
+                    result["ack"] = "dispatch_timeout_do_not_retry"
+                    logger.warning(
+                        "cTrader place_order dispatch timed out for %s; "
+                        "treating as sent/unconfirmed (do not retry)",
+                        ct_symbol,
+                    )
+                if result.get("status") == "sent":
+                    waiter["event"].wait(timeout=self.PLACE_ORDER_ACK_TIMEOUT_SEC)
+                    if waiter["error"]:
+                        result["status"] = "error"
+                        result["error"] = waiter["error"]
+                        logger.error(f"cTrader order rejected: {waiter['error']}")
+                    else:
+                        if waiter["order_id"]:
+                            result["order_id"] = waiter["order_id"]
+                        if waiter["position_id"]:
+                            result["position_id"] = waiter["position_id"]
+                        if not waiter["event"].is_set():
+                            result["ack"] = result.get("ack") or "ack_timeout"
+                            logger.warning(
+                                "cTrader place_order ack timed out for %s; "
+                                "keeping sent (do not retry)",
+                                ct_symbol,
+                            )
+                return result
+            finally:
+                with self._order_ack_lock:
+                    if waiter in self._order_ack_waiters:
+                        self._order_ack_waiters.remove(waiter)
 
         except Exception as e:
             logger.error(f"cTrader place_order error: {e}")
