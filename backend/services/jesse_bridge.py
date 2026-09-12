@@ -8,7 +8,6 @@ QuantumTrade trading platform:
 """
 
 import os
-import json
 import logging
 import httpx
 from typing import Any, Dict, Optional

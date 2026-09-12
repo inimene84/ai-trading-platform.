@@ -196,8 +196,8 @@ docker compose ps
 # Public health check
 curl -s http://localhost:8001/health
 
-# Authenticated trading status check
-curl -s -H "X-API-Key: YOUR_ADMIN_API_KEY" http://localhost:8001/trading/status
+# Authenticated trading status check (ADMIN_API_KEY from the environment)
+curl -s -H "X-API-Key: ${ADMIN_API_KEY}" http://localhost:8001/trading/status
 ```
 
 ---

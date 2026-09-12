@@ -1542,6 +1542,7 @@ class TradingLoopService:
                 (t.quantity or 0) * (t.entry_price or 0)
                 for t in open_trades
             )
+            distinct_open_symbols = len({t.symbol for t in open_trades if t.symbol})
 
             # Save snapshot
             from backend.services.trading_mode import get_trading_mode, get_active_broker_name

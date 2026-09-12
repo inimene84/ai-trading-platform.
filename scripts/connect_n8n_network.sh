@@ -33,7 +33,7 @@ curl -s http://ai-trading-backend:8000/health | jq . || echo "Backend unreachabl
 echo -e "\nInfluxDB (should work now):"
 docker run --rm --network trading-net curlimages/curl:latest \
   -X POST "http://vps-influxdb:8086/api/v2/write?org=819d45e061531bd6&bucket=news-sentiment" \
-  -H "Authorization: Token YOUR_TOKEN_HERE" \
+  -H "Authorization: Token ${INFLUXDB_TOKEN:?set INFLUXDB_TOKEN}" \
   -H "Content-Type: text/plain; charset=utf-8" \
   --data-binary "test_metric value=1" || echo "InfluxDB test failed"
 
