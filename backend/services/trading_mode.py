@@ -74,6 +74,7 @@ def paper_starting_balance() -> float:
 
 
 BINANCE_PAPER_SESSION_ID = "binance_paper"
+BINANCE_LIVE_SESSION_ID = "binance_futures_live"
 
 
 def binance_paper_parallel_enabled() -> bool:
@@ -102,6 +103,20 @@ def live_binance_orders_allowed() -> bool:
     if binance_paper_parallel_enabled():
         return False
     return live_exchange_orders_allowed()
+
+
+def binance_order_session_id() -> str | None:
+    """UnifiedTrading session for crypto place_order.
+
+    Dual-live keeps the default session on cTrader. Passing None into
+    place_order therefore sends AVAXUSDT (etc.) to Spotware, which rejects
+    them as unknown. Always pick the Binance session explicitly.
+    """
+    if binance_paper_parallel_enabled():
+        return BINANCE_PAPER_SESSION_ID
+    if live_binance_orders_allowed():
+        return BINANCE_LIVE_SESSION_ID
+    return None
 
 
 def live_ctrader_orders_allowed() -> bool:

@@ -123,16 +123,15 @@ def _manage_position(db, pos: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     min_dist = CTraderService.min_protective_distance(symbol, current)
     pip = max(float(CTraderService.pip_size_for(symbol)), 1e-9)
 
-    # Candidate levels in the profit direction — must always be on the correct
-    # side of entry (BUY: SL below entry; SELL: SL above entry).
+    # After BE trigger, SL may lock at/through entry (profit side).
+    # Broker legality is vs *current* price only — clamping back to the
+    # loss side of entry defeats break-even.
     if side == "BUY":
         be_level = entry + BE_LOCK_R * r
         target = be_level
         if favorable >= TRAIL_START_R * r:
             target = max(be_level, current - max(TRAIL_DIST_R * r, min_dist))
-        target = min(target, current - min_dist)  # broker legality
-        # Safety: never send a SL above entry for a BUY.
-        target = min(target, entry - min_dist)
+        target = min(target, current - min_dist)  # broker legality vs mark
         improves = cur_sl is None or target > cur_sl + pip
     else:
         be_level = entry - BE_LOCK_R * r
@@ -140,8 +139,6 @@ def _manage_position(db, pos: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if favorable >= TRAIL_START_R * r:
             target = min(be_level, current + max(TRAIL_DIST_R * r, min_dist))
         target = max(target, current + min_dist)
-        # Safety: never send a SL below entry for a SELL.
-        target = max(target, entry + min_dist)
         improves = cur_sl is None or target < cur_sl - pip
 
     if not improves:

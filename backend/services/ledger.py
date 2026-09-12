@@ -56,6 +56,15 @@ def binance_position_key(symbol: str, direction: str) -> str:
     return f"{str(symbol).upper()}:{side}"
 
 
+def is_binance_position_key(value: Any) -> bool:
+    """True for hedge-mode keys like BTCUSDT:LONG written by live Binance fills."""
+    raw = _s(value)
+    if ":" not in raw:
+        return False
+    side = raw.rsplit(":", 1)[-1]
+    return side in {"LONG", "SHORT"}
+
+
 def fill_mode_from_order(order_mode: str | None, trading_mode_value: str) -> str:
     raw = _s(order_mode).lower() or _s(trading_mode_value).lower()
     if raw in {"live", "paper", "backtest"}:

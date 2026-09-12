@@ -130,6 +130,9 @@ def test_cadjpy_db_stop_is_implausible_live_stop_is_not():
     assert CTraderService.is_plausible_stop("CADJPY", 112.937, 113.237, "SELL") is True
     assert CTraderService.is_plausible_stop("EURUSD", 1.1000, 1.0950, "BUY") is True
     assert CTraderService.is_plausible_stop("EURUSD", 1.1000, 1.2000, "BUY") is False
+    # Break-even lock sits through entry and must still be plausible.
+    assert CTraderService.is_plausible_stop("EURUSD", 1.1000, 1.1001, "BUY") is True
+    assert CTraderService.is_plausible_stop("EURUSD", 1.1000, 1.0999, "SELL") is True
 
 
 def test_amend_refuses_implausible_stop_on_live_connection(monkeypatch):

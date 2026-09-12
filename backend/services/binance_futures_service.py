@@ -6,6 +6,7 @@ Supports LONG/SHORT positions with configurable leverage (default 10x).
 Interface compatible with ctrader_service for drop-in integration with trading_loop.py.
 """
 
+import hashlib
 import logging
 import os
 import time
@@ -147,6 +148,35 @@ class BinanceClientProxy:
         return attr
 
 
+def entry_client_order_id(
+    futures_sym: str,
+    side: str,
+    is_pyramid: bool,
+    quantity: float,
+    now: Optional[float] = None,
+) -> str:
+    """Stable Binance newClientOrderId for one entry intent in the current minute.
+
+    Same symbol+side+purpose+qty in the same minute → same id (retry/restart
+    of that intent is rejected as a duplicate). A different size or
+    entry-vs-pyramid purpose in the same minute stays distinct. Per-second
+    buckets were a live-behavior accident: a restart 1s later placed a
+    second order.
+    """
+    minute = int(now if now is not None else time.time()) // 60
+    purpose = "p" if is_pyramid else "e"
+    qty_tag = format(float(quantity), ".8f").rstrip("0").rstrip(".").replace(".", "d")
+    if not qty_tag or qty_tag in ("-0", "-"):
+        qty_tag = "0"
+    raw = f"x{futures_sym[:6]}{side[0]}{purpose}{qty_tag}{minute}"
+    if len(raw) <= 36:
+        return raw
+    digest = hashlib.sha1(
+        f"{futures_sym}|{side}|{purpose}|{quantity}|{minute}".encode()
+    ).hexdigest()[:16]
+    return f"x{futures_sym[:6]}{side[0]}{purpose}{digest}"[:36]
+
+
 class BinanceFuturesService:
     """Binance USDT-M Futures broker — compatible with trading_loop.py interface."""
     _banned_until = None
@@ -165,6 +195,9 @@ class BinanceFuturesService:
         self._lot_step: Dict[str, float] = {}
         self._lot_min: Dict[str, float] = {}
         self._qty_precision: Dict[str, int] = {}
+        # TRADING USDT/USDC perps from the last exchangeInfo ingest. Empty
+        # means "unknown" (do not treat every symbol as unlisted).
+        self._tradable_symbols: set = set()
         logger.info(
             f"BinanceFuturesService: testnet={self.testnet} "
             f"leverage={self.leverage}x margin={self.margin_type} dry_run={self.dry_run}"
@@ -180,6 +213,12 @@ class BinanceFuturesService:
                 self._qty_precision[sym] = sym_info.get(
                     'quantityPrecision', QTY_PRECISION.get(sym, 3)
                 )
+                if (
+                    sym_info.get('status') == 'TRADING'
+                    and str(sym_info.get('contractType', '')).upper() == 'PERPETUAL'
+                    and str(sym_info.get('quoteAsset', '')).upper() in ('USDT', 'USDC')
+                ):
+                    self._tradable_symbols.add(sym)
                 for filt in sym_info.get('filters', []):
                     if filt.get('filterType') == 'LOT_SIZE':
                         self._lot_step[sym] = float(filt['stepSize'])
@@ -191,7 +230,8 @@ class BinanceFuturesService:
                             pass
             logger.info(
                 f"Exchange filters loaded for {len(PRICE_PRECISION)} symbols "
-                f"({len(self._lot_step)} lot steps)"
+                f"({len(self._lot_step)} lot steps, "
+                f"{len(self._tradable_symbols)} TRADING USDT/USDC perps)"
             )
         except Exception as e:
             self._handle_api_exception(e)
@@ -281,6 +321,22 @@ class BinanceFuturesService:
         if not (cleaned.endswith('USDT') or cleaned.endswith('USDC')):
             cleaned += 'USDT'
         return cleaned
+
+    def futures_listing_status(self, symbol: str) -> Optional[bool]:
+        """Whether *symbol* is a TRADING USDT/USDC perp on this venue.
+
+        True = listed and TRADING. False = resolved but not in the
+        exchangeInfo TRADING set (delisted/halted/wrong quote). None =
+        cache empty so listing is unknown — callers must not treat that
+        as a hard reject (tests / exchangeInfo outage).
+        """
+        resolved = self._to_futures_symbol(symbol)
+        if not resolved:
+            return False
+        tradable = getattr(self, "_tradable_symbols", None)
+        if not tradable:
+            return None
+        return resolved in tradable
 
     def _setup_symbol(self, client, sym: str) -> None:
         """Configure leverage + margin type once per symbol per session."""
@@ -797,6 +853,18 @@ class BinanceFuturesService:
             logger.info(f"[Binance Futures] Skipping unsupported symbol: {symbol}")
             return {'status': 'skipped', 'broker': 'binance_futures',
                     'reason': f'{symbol} not supported on Binance Futures'}
+        listed = self.futures_listing_status(symbol)
+        if listed is False:
+            logger.warning(
+                "[Binance Futures] Skipping unlisted/halted symbol: %s (resolved %s)",
+                symbol, futures_sym,
+            )
+            return {
+                'status': 'skipped',
+                'broker': 'binance_futures',
+                'reason': f'{futures_sym} not TRADING on Binance futures',
+                'symbol': futures_sym,
+            }
 
         if self.dry_run:
             logger.info(f"[Binance Futures DRY-RUN] {action.upper()} {direction} {futures_sym}")
@@ -989,10 +1057,9 @@ class BinanceFuturesService:
                 # current minute makes Binance reject an accidental duplicate
                 # (e.g. order filled but DB commit failed → restart re-enters).
                 if not reduce_only:
-                    # Include seconds so pyramid layers in the same minute don't collide.
-                    bucket = int(time.time())
-                    layer_tag = "p" if is_pyramid else "e"
-                    order_params["newClientOrderId"] = f"x{futures_sym[:6]}{side[0]}{layer_tag}{bucket}"[:36]
+                    order_params["newClientOrderId"] = entry_client_order_id(
+                        futures_sym, side, is_pyramid, quantity,
+                    )
                 # Note: In Hedge Mode, we DO NOT send reduceOnly as positionSide handles it.
                 # Sending it causes APIError -1106.
                 result = self._safe_create_order(client, order_params)

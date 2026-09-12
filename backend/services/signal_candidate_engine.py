@@ -26,6 +26,7 @@ from backend.services.binance_futures_service import binance_futures_broker
 from backend.services.binance_market_data import binance_market_data
 from backend.services.multi_asset_bars import classify_symbol, tf_to_binance_interval
 from backend.services.trading_mode import live_ctrader_orders_allowed
+from backend.services.symbol_aliases import same_crypto_perp_leg
 
 logger = logging.getLogger(__name__)
 
@@ -325,20 +326,28 @@ class SignalCandidateEngine:
         return keys
 
     def _has_open_position(self, broker: str, symbol: str, direction: str) -> bool:
-        """True when the side is open, or when the book cannot be verified."""
+        """True when the side is open, or when the book cannot be verified.
+
+        USDT/USDC perps are one leg: BTCUSDC BUY matches a live BTCUSDT BUY.
+        """
         key = (str(symbol or "").upper(), self._normalize_direction(direction))
         if not key[0] or not key[1]:
             return False
         keys = self._open_position_keys(broker)
         if keys is None:
             return True
-        return key in keys
+        if key in keys:
+            return True
+        return any(
+            kside == key[1] and same_crypto_perp_leg(ksym, key[0])
+            for ksym, kside in keys
+        )
 
     def _has_live_strategy_twin(self, symbol: str, strategy: str, direction: str) -> bool:
         sym = str(symbol or "").upper()
         side = self._normalize_direction(direction)
         return any(
-            str(c.get("symbol") or "").upper() == sym
+            same_crypto_perp_leg(str(c.get("symbol") or ""), sym)
             and c.get("strategy") == strategy
             and self._normalize_direction(c.get("direction")) == side
             and c.get("status") in LIVE_CANDIDATE_STATUSES
@@ -350,7 +359,7 @@ class SignalCandidateEngine:
         sym = str(symbol or "").upper()
         side = self._normalize_direction(direction)
         return any(
-            str(c.get("symbol") or "").upper() == sym
+            same_crypto_perp_leg(str(c.get("symbol") or ""), sym)
             and self._normalize_direction(c.get("direction")) == side
             and c.get("status") in LIVE_CANDIDATE_STATUSES
             for c in self.candidates.values()
@@ -378,7 +387,7 @@ class SignalCandidateEngine:
         for cand in self.candidates.values():
             if cand.get("status") != CandidateStatus.EXECUTED:
                 continue
-            if str(cand.get("symbol") or "").upper() != sym:
+            if not same_crypto_perp_leg(str(cand.get("symbol") or ""), sym):
                 continue
             if match_strategy and cand.get("strategy") != strategy:
                 continue
@@ -442,8 +451,12 @@ class SignalCandidateEngine:
                 for p in open_binance
                 if p.get("symbol")
             }
-            if cand_sym and cand_sym in open_syms:
-                return f"Already have an open Binance position in {cand_sym}."
+            hit = next((s for s in open_syms if same_crypto_perp_leg(cand_sym, s)), None)
+            if cand_sym and hit:
+                return (
+                    f"Already have an open Binance position in {hit} "
+                    f"(same perp leg as {cand_sym})."
+                )
         max_binance = int(self.execution_config.get("max_binance_positions") or 0)
         if max_binance > 0 and len(open_binance) >= max_binance:
             return f"Max open Binance positions reached ({max_binance})."
@@ -518,7 +531,7 @@ class SignalCandidateEngine:
         for cid, cand in list(self.candidates.items()):
             if cand.get("status") not in LIVE_CANDIDATE_STATUSES:
                 continue
-            if str(cand.get("symbol") or "").upper() != sym:
+            if not same_crypto_perp_leg(str(cand.get("symbol") or ""), sym):
                 continue
             if self._normalize_direction(cand.get("direction")) != side:
                 continue
@@ -1520,7 +1533,10 @@ class SignalCandidateEngine:
                 str(cand.get("symbol") or "").upper(),
                 self._normalize_direction(cand.get("direction")),
             )
-            if side_key in keys:
+            if side_key in keys or any(
+                kside == side_key[1] and same_crypto_perp_leg(ksym, side_key[0])
+                for ksym, kside in keys
+            ):
                 continue
             filtered_ready.append(cand)
         ready = filtered_ready
@@ -1837,7 +1853,7 @@ class SignalCandidateEngine:
                         continue
                     if (
                         other.get("status") in (CandidateStatus.PENDING, CandidateStatus.READY)
-                        and str(other.get("symbol") or "").upper() == cand_sym
+                        and same_crypto_perp_leg(str(other.get("symbol") or ""), cand_sym)
                         and str(other.get("direction") or "").upper() == side
                     ):
                         other["status"] = CandidateStatus.CANCELLED

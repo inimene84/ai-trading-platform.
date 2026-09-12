@@ -12,6 +12,10 @@ from backend.services.kronos_gate import apply_kronos_gate
 from backend.services import kronos_service
 from backend.services.skill_miner import skill_miner
 from backend.services.jesse_bridge import is_jesse_ml_model_gap, jesse_bridge
+from backend.services.symbol_aliases import (
+    is_opposing_side,
+    normalize_side,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -291,6 +295,94 @@ class DecisionEngine:
     def _ranging_entry_allowed(self, symbol: str, signal: Any) -> bool:
         return self._ranging_entries_permitted() and self._ranging_setup_matches(symbol, signal)
 
+    @staticmethod
+    def _position_field(position: Any, name: str, default: Any = None) -> Any:
+        if position is None:
+            return default
+        if isinstance(position, dict):
+            return position.get(name, default)
+        return getattr(position, name, default)
+
+    def _flatten_opposing_position(
+        self,
+        symbol: str,
+        bars: List[Dict[str, Any]],
+        existing_position: Any,
+    ) -> Optional[Decision]:
+        """CLOSE_LONG / CLOSE_SHORT when Combined fires opposite the live leg.
+
+        BTCUSDT / BTCUSDC are resolved by the loop before this is called.
+        Does not open a reverse slot here — next cycle can enter if caps allow.
+        """
+        existing_side = normalize_side(self._position_field(existing_position, "direction"))
+        live_symbol = str(self._position_field(existing_position, "symbol") or symbol or "").upper()
+        try:
+            qty = float(self._position_field(existing_position, "quantity") or 0)
+        except (TypeError, ValueError):
+            qty = 0.0
+        if existing_side not in ("BUY", "SELL") or qty <= 0:
+            return None
+        regime_result = self.regime_detector.detect(bars)
+        signal = self.strategy.generate_signal(
+            symbol,
+            bars,
+            regime=regime_result.regime,
+            regime_weights=regime_result.weights(),
+        )
+        if not signal or signal.signal not in ("BUY", "SELL"):
+            self._record_eval(
+                symbol,
+                existing_side,
+                float(getattr(signal, "confidence", 0.0) or 0.0) if signal else 0.0,
+                "existing position; no opposing signal",
+            )
+            return None
+        if not is_opposing_side(signal.signal, existing_side):
+            self._record_eval(
+                symbol,
+                existing_side,
+                signal.confidence,
+                "existing same-direction position — skip entry",
+            )
+            return None
+        if signal.confidence < self.config.min_signal_strength:
+            self._record_eval(
+                symbol,
+                signal.signal,
+                signal.confidence,
+                "opposing signal below threshold; hold existing",
+            )
+            return None
+        action = "CLOSE_LONG" if existing_side == "BUY" else "CLOSE_SHORT"
+        decision = Decision(
+            action=action,
+            symbol=live_symbol,
+            quantity=qty,
+            entry_price=float(bars[-1]["close"]),
+            confidence=float(signal.confidence),
+            reasoning=(
+                f"opposing {signal.signal} flatten of {existing_side} {live_symbol}"
+            ),
+        )
+        self._record_eval(
+            live_symbol,
+            action,
+            signal.confidence,
+            "opposing flatten",
+            entry=decision.entry_price,
+            approved=True,
+        )
+        logger.info(
+            "[%s] opposing %s (conf=%.2f) flattens live %s %s qty=%s",
+            symbol,
+            signal.signal,
+            signal.confidence,
+            existing_side,
+            live_symbol,
+            qty,
+        )
+        return decision
+
     async def evaluate_symbol(
         self,
         symbol: str,
@@ -401,6 +493,9 @@ class DecisionEngine:
                                                       "pyramid add blocked: risk reviewer gate errored (fail-closed in live)")
                                     return None
                         return decision
+            flatten = self._flatten_opposing_position(symbol, bars, existing_position)
+            if flatten:
+                return flatten
             return None
 
         # 2. Cooldown check
@@ -691,7 +786,7 @@ class DecisionEngine:
                 if signal.confidence < self.config.min_signal_strength + 0.1:
                     return None
 
-        # 6. Max positions check
+        # 6. Max positions check (flatten/reverse of an existing leg is not a new slot)
         max_positions_cap = getattr(self.config, "max_binance_positions", self.config.max_positions)
         if open_count >= max_positions_cap:
             self._record_eval(symbol, signal.signal, signal.confidence,

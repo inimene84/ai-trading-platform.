@@ -1,0 +1,10 @@
+# Working-tree false positives (verified 2026-09-11, CI job "Secrets (working tree)")
+README.md:curl-auth-header:196
+.env.example:generic-api-key:253
+scripts/vps_fix_grafana_remote.sh:curl-auth-user:13
+scripts/vps_fix_grafana_remote.sh:curl-auth-user:21
+scripts/vps_fix_grafana_remote.sh:curl-auth-user:29
+scripts/connect_n8n_network.sh:curl-auth-header:30
+scripts/ci/forbidden_substrings.txt:jesse-postgres-password:6
+scripts/ci/forbidden_substrings.txt:burned-admin-fallback:3
+scripts/ci/forbidden_substrings.txt:jesse-dashboard-password:5

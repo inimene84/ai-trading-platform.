@@ -5,8 +5,10 @@ from unittest.mock import MagicMock, patch
 from backend.services.binance_futures_service import BinanceFuturesService
 from backend.services.trading_loop import TradingLoopService
 from backend.services.trading_mode import (
+    BINANCE_LIVE_SESSION_ID,
     BINANCE_PAPER_SESSION_ID,
     TradingMode,
+    binance_order_session_id,
     binance_paper_parallel_enabled,
     get_trading_mode,
     live_binance_orders_allowed,
@@ -272,6 +274,7 @@ def test_paper_parallel_blocks_live_binance_keeps_ctrader(monkeypatch):
     assert live_ctrader_orders_allowed() is True
     assert TradingLoopService._is_live_binance() is False
     assert TradingLoopService._crypto_session_id() == BINANCE_PAPER_SESSION_ID
+    assert TradingLoopService._binance_order_session_id() == BINANCE_PAPER_SESSION_ID
     assert TradingLoopService._crypto_broker_name() == "binance_futures"
 
 
@@ -311,6 +314,9 @@ def test_dual_live_ctrader_still_treats_binance_as_live(monkeypatch):
     monkeypatch.delenv("BINANCE_PAPER_PARALLEL", raising=False)
     assert live_binance_orders_allowed() is True
     assert TradingLoopService._is_live_binance() is True
+    assert TradingLoopService._crypto_session_id() is None
+    assert TradingLoopService._binance_order_session_id() == BINANCE_LIVE_SESSION_ID
+    assert binance_order_session_id() == BINANCE_LIVE_SESSION_ID
     assert TradingLoopService._crypto_broker_name() == "binance_futures"
 
 

@@ -460,6 +460,98 @@ def test_failed_auth_connection_lost_does_not_reconnect():
     svc._schedule_reconnect.assert_not_called()
 
 
+def _live_place_order_harness(svc, reactor_side_effect):
+    svc._dry_run = False
+    svc._connected = True
+    svc._authenticated = True
+    svc._account_id = 46756268
+    svc._symbol_ids["EURUSD"] = 1
+    svc.PLACE_ORDER_SEND_TIMEOUT_SEC = 0.05
+    svc.PLACE_ORDER_ACK_TIMEOUT_SEC = 0.05
+    sent: dict = {}
+
+    class FakeProtocol:
+        def _send(self, req, ptype):
+            sent["ptype"] = ptype
+            sent["symbol_id"] = req.symbolId
+
+    svc._protocol = FakeProtocol()
+    reactor = MagicMock()
+    reactor.callFromThread.side_effect = reactor_side_effect
+    msgs = MagicMock()
+    order_req = MagicMock()
+    order_req.relativeStopLoss = 0
+    order_req.relativeTakeProfit = 0
+    msgs.ProtoOANewOrderReq.return_value = order_req
+    twisted_mod = MagicMock()
+    twisted_internet = MagicMock()
+    twisted_internet.reactor = reactor
+    messages_mod = MagicMock()
+    messages_mod.OpenApiMessages_pb2 = msgs
+    return sent, order_req, {
+        "twisted": twisted_mod,
+        "twisted.internet": twisted_internet,
+        "ctrader_open_api": MagicMock(),
+        "ctrader_open_api.messages": messages_mod,
+    }
+
+
+def test_place_order_persists_venue_ids_on_per_request_ack(monkeypatch):
+    monkeypatch.setenv("TRADING_MODE", "live")
+    svc = CTraderService()
+
+    def run_and_ack(fn):
+        fn()
+        svc.signal_place_order_ack(order_id="9911", position_id="41416076")
+
+    sent, _req, modules = _live_place_order_harness(svc, run_and_ack)
+    with patch.dict("sys.modules", modules):
+        res = svc.place_order(
+            symbol="EURUSD",
+            direction="BUY",
+            volume=0.01,
+            price=1.1000,
+            stop_loss=1.0980,
+            take_profit=1.1040,
+        )
+    assert res["status"] == "sent"
+    assert res["order_id"] == "9911"
+    assert res["position_id"] == "41416076"
+    assert sent["ptype"] == 2106
+
+
+def test_place_order_timeout_is_sent_not_retryable_error(monkeypatch):
+    monkeypatch.setenv("TRADING_MODE", "live")
+    svc = CTraderService()
+    _sent, _req, modules = _live_place_order_harness(svc, lambda fn: None)
+    with patch.dict("sys.modules", modules):
+        res = svc.place_order(
+            symbol="EURUSD",
+            direction="BUY",
+            volume=0.01,
+            price=1.1000,
+            stop_loss=1.0980,
+            take_profit=1.1040,
+        )
+    assert res["status"] == "sent"
+    assert res.get("ack") == "dispatch_timeout_do_not_retry"
+    assert "error" not in res or not res.get("error")
+
+
+def test_signal_place_order_ack_is_per_request():
+    svc = CTraderService()
+    first = {"event": __import__("threading").Event(), "error": None, "order_id": None, "position_id": None}
+    second = {"event": __import__("threading").Event(), "error": None, "order_id": None, "position_id": None}
+    svc._order_ack_waiters = [first, second]
+    svc.signal_place_order_ack(order_id="1")
+    assert first["event"].is_set()
+    assert first["order_id"] == "1"
+    assert not second["event"].is_set()
+    svc.signal_place_order_ack(order_id="2")
+    assert second["event"].is_set()
+    assert second["order_id"] == "2"
+
+
 def test_authenticated_drop_does_reconnect():
     svc = CTraderService()
     svc._authenticated = True

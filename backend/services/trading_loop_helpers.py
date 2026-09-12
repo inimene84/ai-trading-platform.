@@ -24,7 +24,9 @@ from backend.services.ledger import (
 from backend.services.decision_engine import atr_from_bars
 from backend.services.multi_asset_bars import classify_symbol
 from backend.services.unified_trading import UnifiedTrading, UnifiedOrder, OrderSide, OrderType
+from backend.services.trading_mode import binance_order_session_id, live_binance_orders_allowed
 from backend.services.position_manager import get_position_manager
+from backend.services.symbol_aliases import stop_on_correct_side
 
 logger = logging.getLogger(__name__)
 
@@ -50,15 +52,17 @@ def is_ctrader_symbol(symbol: str) -> bool:
 
 def is_ctrader_trade(trade) -> bool:
     """Detect a cTrader-owned row even when broker was not persisted."""
+    from backend.services.ledger import is_binance_position_key
+
     broker_raw = getattr(trade, "broker", None) or getattr(trade, "exchange", None)
     broker = broker_raw.lower() if isinstance(broker_raw, str) else ""
-    if broker == "ctrader":
-        return True
-    if broker in ("binance_futures", "binance"):
+    if "binance" in broker:
         return False
+    if broker == "ctrader" or broker in {"ic", "icmarkets"}:
+        return True
     position_id = getattr(trade, "broker_position_id", None)
     if isinstance(position_id, str) and position_id.strip():
-        return True
+        return not is_binance_position_key(position_id)
     if isinstance(position_id, int) and position_id:
         return True
     symbol = getattr(trade, "symbol", "")
@@ -158,7 +162,7 @@ class EmergencyExitManager:
                             quantity=trade.quantity,
                             price=float(live_px or 0),
                             reduce_only=True,
-                        ))
+                        ), session_id=binance_order_session_id())
                         if res.success and res.filled_price:
                             trade.exit_price = res.filled_price
                             if res.realized_pnl is not None:
@@ -300,12 +304,18 @@ class BrokerPositionSyncService:
             # Adopt exchange legs that have no SQL row (manual entry, lost
             # response/DB commit, or restored DB). One aggregate row per symbol
             # gives the loop ownership instead of blocking that symbol forever.
-            db_symbols = {t.symbol for t in db_trades}
+            db_keys = {
+                binance_position_key(t.symbol, t.direction)
+                for t in db_trades
+                if not is_binance_paper_fill(t)
+            }
             adopted = 0
             for bp in broker_raw:
                 symbol = bp.get("symbol")
                 qty = float(bp.get("quantity") or bp.get("positionAmt") or 0)
-                if not symbol or qty <= 0 or symbol in db_symbols:
+                direction_hint = (bp.get("side") or "BUY").upper()
+                live_key = binance_position_key(symbol or "", direction_hint)
+                if not symbol or qty <= 0 or live_key in db_keys:
                     continue
                 entry = float(bp.get("entry_price") or bp.get("entryPrice") or 0)
                 if entry <= 0:
@@ -391,7 +401,7 @@ class BrokerPositionSyncService:
                 )
                 db.add(orphan)
                 db_trades.append(orphan)
-                db_symbols.add(symbol)
+                db_keys.add(live_key)
                 adopted += 1
                 logger.critical(
                     f"  [ {symbol} ] adopted orphan exchange leg: "
@@ -522,10 +532,12 @@ class TrailingStopManager:
                             fee_offset = trail_dist * 0.1
                             candidate = trade.entry_price + fee_offset
                             old_stop = trade.stop_loss if trade.stop_loss is not None else float("-inf")
-                            if candidate > old_stop:
+                            if candidate > old_stop and stop_on_correct_side(
+                                trade.direction, candidate, mark=current_price, entry=trade.entry_price
+                            ):
                                 trade.stop_loss = candidate
                                 logger.info(f"  [ {symbol} ] STEP-TRAIL ↑ stop to BE+fees {candidate:.6f} (hw={hw:.6f} >= 0.75 activation)")
-                                TrailingStopManager._sync_exchange_stop(trade, candidate, broker)
+                                TrailingStopManager._sync_exchange_stop(trade, candidate, broker, mark=current_price)
                         continue
 
                     candidate = hw - trail_dist
@@ -534,10 +546,12 @@ class TrailingStopManager:
                     if candidate >= current_price:
                         continue
                     old_stop = trade.stop_loss if trade.stop_loss is not None else float("-inf")
-                    if candidate > old_stop:
+                    if candidate > old_stop and stop_on_correct_side(
+                        trade.direction, candidate, mark=current_price, entry=trade.entry_price
+                    ):
                         trade.stop_loss = candidate
                         logger.info(f"  [ {symbol} ] TRAIL ↑ stop {old_stop if old_stop != float('-inf') else 'None'} -> {candidate:.6f}")
-                        TrailingStopManager._sync_exchange_stop(trade, candidate, broker)
+                        TrailingStopManager._sync_exchange_stop(trade, candidate, broker, mark=current_price)
                 else:  # SHORT
                     lw = high_water.get(trade.id, min(trade.entry_price, current_price))
                     lw = min(lw, current_price)
@@ -548,10 +562,12 @@ class TrailingStopManager:
                             fee_offset = trail_dist * 0.1
                             candidate = trade.entry_price - fee_offset
                             old_stop = trade.stop_loss if trade.stop_loss is not None else float("inf")
-                            if candidate < old_stop:
+                            if candidate < old_stop and stop_on_correct_side(
+                                trade.direction, candidate, mark=current_price, entry=trade.entry_price
+                            ):
                                 trade.stop_loss = candidate
                                 logger.info(f"  [ {symbol} ] STEP-TRAIL ↓ stop to BE+fees {candidate:.6f} (lw={lw:.6f} <= 0.75 activation)")
-                                TrailingStopManager._sync_exchange_stop(trade, candidate, broker)
+                                TrailingStopManager._sync_exchange_stop(trade, candidate, broker, mark=current_price)
                         continue
 
                     candidate = lw + trail_dist
@@ -559,20 +575,39 @@ class TrailingStopManager:
                     if candidate <= current_price:
                         continue
                     old_stop = trade.stop_loss if trade.stop_loss is not None else float("inf")
-                    if candidate < old_stop:
+                    if candidate < old_stop and stop_on_correct_side(
+                        trade.direction, candidate, mark=current_price, entry=trade.entry_price
+                    ):
                         trade.stop_loss = candidate
                         logger.info(f"  [ {symbol} ] TRAIL ↓ stop {old_stop if old_stop != float('inf') else 'None'} -> {candidate:.6f}")
-                        TrailingStopManager._sync_exchange_stop(trade, candidate, broker)
+                        TrailingStopManager._sync_exchange_stop(trade, candidate, broker, mark=current_price)
         except Exception as e:
             logger.warning(f"  [ {symbol} ] trailing-stop error (stop unchanged): {e}")
 
     @staticmethod
-    def _sync_exchange_stop(trade, new_stop: float, broker):
+    def _sync_exchange_stop(trade, new_stop: float, broker, mark: float | None = None):
+        """Push a trailed DB stop to Binance for binance_futures rows.
+
+        Dual-live keeps ACTIVE_BROKER=ctrader; still sync crypto legs when
+        live Binance orders are allowed. Never push a stop on the wrong side
+        of mark/entry (AVAX 7.459 below mark on a short).
+        """
         try:
-            if os.getenv("ACTIVE_BROKER", "ctrader") != "binance_futures":
+            if is_ctrader_trade(trade):
                 return
-            from backend.services.trading_mode import get_trading_mode, TradingMode
-            if get_trading_mode() != TradingMode.LIVE:
+            if not live_binance_orders_allowed():
+                return
+            if not stop_on_correct_side(
+                getattr(trade, "direction", None),
+                new_stop,
+                mark=mark,
+                entry=getattr(trade, "entry_price", None),
+            ):
+                logger.warning(
+                    f"  [ {trade.symbol} ] refuse exchange-stop sync: "
+                    f"{new_stop} wrong-side of mark={mark} entry={getattr(trade, 'entry_price', None)} "
+                    f"{getattr(trade, 'direction', None)}"
+                )
                 return
             res = broker.replace_stop_loss(
                 symbol=trade.symbol,
@@ -642,7 +677,7 @@ class PartialTPManager:
                     quantity=close_qty,
                     price=float(current_price or 0),
                     reduce_only=True,
-                ))
+                ), session_id=binance_order_session_id())
 
                 if res.success:
                     filled_px = res.filled_price or current_price
@@ -762,7 +797,7 @@ class PartialTPManager:
                 quantity=close_qty,
                 price=float(current_price or 0),
                 reduce_only=True,
-            ))
+            ), session_id=binance_order_session_id())
             if not res.success:
                 logger.warning(f"  [ {symbol} ] PARTIAL TP live failed: {res.message}")
                 return

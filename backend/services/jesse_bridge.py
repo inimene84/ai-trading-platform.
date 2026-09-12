@@ -27,6 +27,12 @@ JESSE_ML_LOCAL_URL = os.getenv("JESSE_ML_LOCAL_URL", "http://127.0.0.1:9003")
 # is set in the environment.
 JESSE_PASSWORD = os.getenv("JESSE_PASSWORD", "").strip()
 
+# QTP training-tree shadow ingest lives in /root/qtp-training (scripts/ingest_shadow.py).
+# QTP_SHADOW_INGEST_ENABLED is documentation-only on this process and stays false.
+# Do not copy QTP bundles into jesse-trading/storage/models, do not set
+# JESSE_SYNC_TO_LIVE, and do not point the live ML gate at a new artifact.
+# QTP_SHADOW_INGEST_ENABLED=false
+
 # Predict errors that mean "this symbol has no live model" — not an ML outage.
 # Live fail-closed must not treat these as a veto or the whole universe stalls
 # when only a subset of pairs have a promoted LightGBM artifact.

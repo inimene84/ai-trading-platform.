@@ -168,6 +168,70 @@ def compute_allowed_actions(
     return allowed
 
 
+def clamp_decisions_to_allowed(
+    decisions: dict[str, PortfolioDecision],
+    allowed_actions: dict[str, dict[str, int]],
+    tickers: list[str],
+) -> dict[str, PortfolioDecision]:
+    """Force each ticker's action/qty onto the deterministic allow-list.
+
+    Extra LLM tickers are dropped. Disallowed actions and non-positive
+    quantities become hold. Qty is capped at the precomputed maximum.
+    """
+    out: dict[str, PortfolioDecision] = {}
+    for ticker in tickers:
+        allowed = allowed_actions.get(ticker) or {"hold": 0}
+        raw = decisions.get(ticker)
+        if raw is None:
+            out[ticker] = PortfolioDecision(
+                action="hold",
+                quantity=0,
+                confidence=0,
+                reasoning="Missing decision: hold",
+            )
+            continue
+        action = str(getattr(raw, "action", "hold") or "hold")
+        try:
+            qty = int(getattr(raw, "quantity", 0) or 0)
+        except (TypeError, ValueError):
+            qty = 0
+        conf = getattr(raw, "confidence", 0) or 0
+        reason = str(getattr(raw, "reasoning", "") or "")
+        if action not in allowed or action == "hold":
+            out[ticker] = PortfolioDecision(
+                action="hold",
+                quantity=0,
+                confidence=conf,
+                reasoning=(
+                    reason
+                    if action == "hold"
+                    else f"Clamped hallucinated action {action} to hold"
+                ),
+            )
+            continue
+        max_qty = int(allowed.get(action, 0) or 0)
+        clamped_qty = max(0, min(qty, max_qty))
+        if clamped_qty <= 0:
+            out[ticker] = PortfolioDecision(
+                action="hold",
+                quantity=0,
+                confidence=conf,
+                reasoning=f"Clamped {action} qty {qty} to hold",
+            )
+            continue
+        out[ticker] = PortfolioDecision(
+            action=action,
+            quantity=clamped_qty,
+            confidence=conf,
+            reasoning=(
+                reason
+                if clamped_qty == qty
+                else f"{reason} (qty clamped {qty}->{clamped_qty})"
+            ),
+        )
+    return out
+
+
 def _compact_signals(signals_by_ticker: dict[str, dict]) -> dict[str, dict]:
     """Keep only {agent: {sig, conf}} and drop empty agents."""
     out = {}
@@ -283,7 +347,12 @@ def generate_trading_decision(
         default_factory=create_default_portfolio_output,
     )
 
-    # Merge prefilled holds with LLM results
+    # Merge prefilled holds with LLM results, then clamp to the
+    # deterministic allow-list so hallucinated actions/qty cannot ship.
     merged = dict(prefilled_decisions)
     merged.update(llm_out.decisions)
-    return PortfolioManagerOutput(decisions=merged)
+    return PortfolioManagerOutput(
+        decisions=clamp_decisions_to_allowed(
+            merged, allowed_actions_full, tickers
+        )
+    )

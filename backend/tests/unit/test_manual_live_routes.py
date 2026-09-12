@@ -133,6 +133,64 @@ async def test_modify_position_persists_only_after_exchange_updates():
 
 
 @pytest.mark.asyncio
+async def test_manual_live_order_refuses_when_sl_tp_cannot_be_computed():
+    router = MagicMock()
+    with patch("backend.routes.trading.UnifiedTrading", return_value=router), \
+         patch(
+             "backend.services.trading_loop.trading_loop._fetch_bars",
+             new=AsyncMock(return_value=[]),
+         ), \
+         patch(
+             "backend.services.sentry_state.is_trading_allowed",
+             return_value=True,
+         ), \
+         patch(
+             "backend.routes.trading.get_trading_mode",
+             return_value=TradingMode.LIVE,
+         ):
+        with pytest.raises(HTTPException) as exc:
+            await place_live_order(LiveOrderRequest(
+                symbol="ETHUSDT",
+                side="buy",
+                quantity=0.2,
+                price=100.0,
+            ))
+    assert exc.value.status_code == 400
+    assert "without stop_loss" in str(exc.value.detail)
+    router.place_order.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_manual_paper_order_may_proceed_without_computed_sl_tp():
+    router = MagicMock()
+    router.place_order.return_value = UnifiedOrderResponse(
+        True, "paper-1", "filled", "paper", filled_price=100.0, filled_qty=0.2,
+    )
+    with patch("backend.routes.trading.UnifiedTrading", return_value=router), \
+         patch(
+             "backend.services.trading_loop.trading_loop._fetch_bars",
+             new=AsyncMock(return_value=[]),
+         ), \
+         patch(
+             "backend.services.sentry_state.is_trading_allowed",
+             return_value=True,
+         ), \
+         patch(
+             "backend.routes.trading.get_trading_mode",
+             return_value=TradingMode.PAPER,
+         ):
+        result = await place_live_order(LiveOrderRequest(
+            symbol="ETHUSDT",
+            side="buy",
+            quantity=0.2,
+            price=100.0,
+        ))
+    router.place_order.assert_called_once()
+    assert result["success"] is True
+    assert result["mode"] == "paper"
+
+
+@pytest.mark.asyncio
 async def test_manual_live_order_records_exchange_fill():
     router = MagicMock()
     router.place_order.return_value = UnifiedOrderResponse(

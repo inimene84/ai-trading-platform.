@@ -22,6 +22,8 @@ from backend.services.ctrader_trade_sync import (
     reconcile_ctrader_positions,
     upsert_ctrader_live_trades,
 )
+from backend.services.binance_trade_sync import upsert_binance_live_trades
+from backend.services.ledger import binance_position_key
 from backend.services.trading_loop_helpers import (
     is_ctrader_symbol as _is_ctrader_symbol,
     is_ctrader_trade as _is_ctrader_trade,
@@ -308,6 +310,11 @@ async def get_portfolio():
             logger.warning("cTrader live-book sync for portfolio failed: %s", exc)
 
         live_binance, binance_snapshot_ok = await _live_binance_book()
+        if binance_snapshot_ok:
+            try:
+                upsert_binance_live_trades(db, live_binance)
+            except Exception as exc:
+                logger.warning("Binance live-book upsert for portfolio failed: %s", exc)
         live_binance_syms = {
             str(p.get("symbol") or "").upper()
             for p in live_binance
@@ -408,6 +415,9 @@ async def get_portfolio():
                 "take_profit": t.take_profit,
                 "unrealized_pnl": round(u_pnl, 2),
                 "strategy": t.strategy,
+                "broker": "ctrader" if is_ctrader else (
+                    getattr(t, "broker", None) or getattr(t, "exchange", None) or "binance_futures"
+                ),
                 "opened_at": t.timestamp.isoformat() if t.timestamp else None,
             })
 
@@ -964,6 +974,11 @@ async def get_positions():
             logger.warning("cTrader live-book sync for dashboard failed: %s", exc)
 
         live_binance, binance_snapshot_ok = await _live_binance_book()
+        if binance_snapshot_ok:
+            try:
+                upsert_binance_live_trades(db, live_binance)
+            except Exception as exc:
+                logger.warning("Binance live-book upsert for dashboard failed: %s", exc)
         live_binance_syms = {
             str(p.get("symbol") or "").upper()
             for p in live_binance
@@ -988,6 +1003,12 @@ async def get_positions():
         live_by_symbol = {
             str(p.get("symbol") or "").upper(): p for p in live_ctrader if p.get("symbol")
         }
+        live_bn_by_key = {}
+        for p in live_binance:
+            if abs(float(p.get("quantity") or 0)) <= 0:
+                continue
+            side = str(p.get("side") or p.get("direction") or "BUY").upper()
+            live_bn_by_key[binance_position_key(str(p.get("symbol") or ""), side)] = p
         positions = []
         live_mode = get_trading_mode() == TradingMode.LIVE
         for t in open_trades:
@@ -1038,21 +1059,40 @@ async def get_positions():
                 else:
                     unrealized_pnl = 0.0
             else:
-                current_price = _coalesce_mark_price(
-                    mark_prices.get(t.symbol),
-                    t.entry_price,
-                )
-                if direction == "BUY":
-                    unrealized_pnl = (current_price - t.entry_price) * t.quantity
+                live_bn = live_bn_by_key.get(binance_position_key(sym, direction))
+                bn_qty = float((live_bn or {}).get("quantity") or t.quantity or 0)
+                bn_entry = float((live_bn or {}).get("entry_price") or t.entry_price or 0)
+                if live_bn:
+                    current_price = _coalesce_mark_price(
+                        live_bn.get("mark_price") or live_bn.get("current_price") or mark_prices.get(t.symbol),
+                        bn_entry,
+                    )
+                    if live_bn.get("unrealized_pnl") is not None:
+                        unrealized_pnl = float(live_bn["unrealized_pnl"])
+                    elif direction == "BUY":
+                        unrealized_pnl = (current_price - bn_entry) * bn_qty
+                    else:
+                        unrealized_pnl = (bn_entry - current_price) * bn_qty
                 else:
-                    unrealized_pnl = (t.entry_price - current_price) * t.quantity
+                    current_price = _coalesce_mark_price(
+                        mark_prices.get(t.symbol),
+                        t.entry_price,
+                    )
+                    bn_qty = float(t.quantity or 0)
+                    bn_entry = float(t.entry_price or 0)
+                    if direction == "BUY":
+                        unrealized_pnl = (current_price - bn_entry) * bn_qty
+                    else:
+                        unrealized_pnl = (bn_entry - current_price) * bn_qty
 
+            out_qty = lots if is_ctrader else bn_qty
+            out_entry = float(t.entry_price or 0) if is_ctrader else bn_entry
             pnl_pct = position_pnl_pct(
-                entry=float(t.entry_price or 0),
+                entry=out_entry,
                 mark=current_price,
                 direction=direction,
                 unrealized_pnl=unrealized_pnl,
-                quantity=float(t.quantity or 0),
+                quantity=out_qty,
                 is_ctrader=is_ctrader,
             )
 
@@ -1060,8 +1100,8 @@ async def get_positions():
                 "id": t.id,
                 "symbol": t.symbol,
                 "direction": t.direction,
-                "quantity": t.quantity,
-                "entry_price": t.entry_price,
+                "quantity": out_qty,
+                "entry_price": out_entry,
                 "current_price": current_price,
                 "stop_loss": t.stop_loss,
                 "take_profit": t.take_profit,
@@ -1105,6 +1145,12 @@ async def get_trades(
                     reconcile_ctrader_positions(db, live_ctrader, broker=ctrader_broker)
             except Exception as exc:
                 logger.warning("cTrader reconcile in get_trades failed: %s", exc)
+            try:
+                live_binance, binance_snapshot_ok = await _live_binance_book()
+                if binance_snapshot_ok:
+                    upsert_binance_live_trades(db, live_binance)
+            except Exception as exc:
+                logger.warning("Binance live-book upsert in get_trades failed: %s", exc)
 
         q = db.query(Trade).order_by(Trade.id.desc())
         if symbol:
@@ -1133,6 +1179,7 @@ async def get_trades(
                     "status": t.status,
                     "pnl": t.pnl,
                     "strategy": t.strategy,
+                    "broker": getattr(t, "broker", None) or getattr(t, "exchange", None),
                     "notes": t.notes,
                 }
                 for t in trades
@@ -1507,7 +1554,8 @@ async def place_smart_order(req: SmartOrderRequest):
                 take_profit=req.take_profit,
                 status="open",
                 broker=target_broker_name,
-                broker_order_id=str(result.get("order_id", "")),
+                broker_order_id=str(result.get("order_id") or "") or None,
+                broker_position_id=str(result.get("position_id") or "") or None,
                 broker_metadata=result,
                 notes=f"Smart order routed to {target_broker_name}",
             )
@@ -1855,6 +1903,46 @@ async def close_ctrader_live_position(
     res = ctrader_broker.close_position(position_id, symbol=symbol, volume=volume)
     if res.get("status") == "error":
         raise HTTPException(status_code=502, detail=res.get("error") or "cTrader close failed")
+    return {
+        "success": True,
+        "result": res,
+        "positions": ctrader_broker.get_positions(),
+    }
+
+
+@router.put("/ctrader/positions/{position_id}/amend")
+async def amend_ctrader_live_position(position_id: str, body: ModifyPositionRequest):
+    """Set absolute SL/TP on a live cTrader position. Send both legs; SL-only clears TP."""
+    from backend.services.ctrader_service import ctrader_broker
+    if body.stop_loss is None and body.take_profit is None:
+        raise HTTPException(status_code=400, detail="Provide stop_loss and/or take_profit")
+    if not ctrader_broker.is_connected and not ctrader_broker.dry_run:
+        raise HTTPException(status_code=400, detail="cTrader is not connected")
+    matched = next(
+        (p for p in ctrader_broker.get_positions() if str(p.get("position_id")) == str(position_id)),
+        None,
+    )
+    if not matched:
+        raise HTTPException(status_code=404, detail=f"cTrader position {position_id} not found")
+    side = str(matched.get("side") or matched.get("direction") or "").upper()
+    mark = float(matched.get("current_price") or 0)
+    sl = body.stop_loss
+    tp = body.take_profit
+    if mark > 0 and side in {"BUY", "LONG"}:
+        if sl is not None and sl >= mark:
+            raise HTTPException(status_code=400, detail="Refusing BUY stop at/above mark")
+        if tp is not None and tp <= mark:
+            raise HTTPException(status_code=400, detail="Refusing BUY take-profit at/below mark")
+    if mark > 0 and side in {"SELL", "SHORT"}:
+        if sl is not None and sl <= mark:
+            raise HTTPException(status_code=400, detail="Refusing SELL stop at/below mark")
+        if tp is not None and tp >= mark:
+            raise HTTPException(status_code=400, detail="Refusing SELL take-profit at/above mark")
+    res = ctrader_broker.amend_position_sltp(
+        position_id, stop_loss=sl, take_profit=tp,
+    )
+    if res.get("status") == "error":
+        raise HTTPException(status_code=502, detail=res.get("error") or "cTrader amend failed")
     return {
         "success": True,
         "result": res,
@@ -2440,12 +2528,31 @@ async def place_live_order(request: LiveOrderRequest):
 
     # Manual/workflow orders historically sent no SL/TP → naked hedge legs on Binance.
     if stop_loss is None or take_profit is None:
-        bars = await trading_loop._fetch_bars(symbol)
-        if bars and len(bars) >= 15:
-            entry = request.price or float(bars[-1]["close"])
-            stop_loss, take_profit = compute_sl_tp_levels(
-                bars, direction, entry, get_risk_config(),
-                signal_sl=stop_loss, signal_tp=take_profit,
+        try:
+            bars = await trading_loop._fetch_bars(symbol)
+            if bars and len(bars) >= 15:
+                entry = request.price or float(bars[-1]["close"])
+                if entry:
+                    stop_loss, take_profit = compute_sl_tp_levels(
+                        bars, direction, entry, get_risk_config(),
+                        signal_sl=stop_loss, signal_tp=take_profit,
+                    )
+        except Exception as exc:
+            logger.warning("Could not compute SL/TP for %s: %s", symbol, exc)
+
+    if stop_loss is None or take_profit is None:
+        if get_trading_mode() == TradingMode.PAPER:
+            logger.warning(
+                "Paper order %s %s proceeding without SL/TP (levels unavailable)",
+                direction, symbol,
+            )
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Refusing live order without stop_loss and take_profit "
+                    "(levels missing and bar fetch could not compute them)"
+                ),
             )
 
     ut = UnifiedTrading()
