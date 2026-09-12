@@ -78,6 +78,8 @@ def _env_list(key: str, default: str) -> List[str]:
 
 
 def _yf_symbol_for(symbol: str, asset_class: str) -> str:
+    if symbol.upper().endswith(("USDT", "USDC", "BUSD", "PERP")):
+        return symbol
     if asset_class in ("metal", "forex"):
         if symbol in _YF_METALS_MAP:
             return _YF_METALS_MAP[symbol]

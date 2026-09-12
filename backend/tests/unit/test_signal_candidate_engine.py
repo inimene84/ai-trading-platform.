@@ -234,6 +234,14 @@ def test_usdcad_classified_as_forex_not_crypto():
     assert classify_symbol("BTCUSDT") == "crypto"
 
 
+def test_six_letter_usdt_perps_are_crypto_not_forex():
+    """OP/ARB/APT are 6-char USDT perps — not EURUSD-style forex."""
+    assert classify_symbol("OPUSDT") == "crypto"
+    assert classify_symbol("ARBUSDT") == "crypto"
+    assert classify_symbol("APTUSDT") == "crypto"
+    assert classify_symbol("EURUSD") == "forex"
+
+
 def test_tf_to_binance_interval_maps_m5():
     """Scanner timeframe M5 must map to Binance 5m, not invalid m5."""
     assert tf_to_binance_interval("M5") == "5m"
