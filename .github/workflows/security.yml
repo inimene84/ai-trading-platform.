@@ -89,10 +89,11 @@ jobs:
             --report-format json
           status=$?
           set -e
-          if [[ "$status" -ne 0 ]]; then
+          if [[ "$status" -eq 1 ]]; then
             echo "::warning::Historical gitleaks findings are advisory; do not rewrite git history."
+            exit 0
           fi
-          exit 0
+          exit "$status"
 
       - uses: actions/upload-artifact@v4
         if: always()
