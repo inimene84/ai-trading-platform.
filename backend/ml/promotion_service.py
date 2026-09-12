@@ -105,7 +105,15 @@ def evaluate_bundle_for_engine(
         require_feature_schema=True,
     )
     holdout = dict(bundle.metrics.get("holdout") or {})
-    if holdout_registry is not None and holdout_id and holdout.get("spent_this_run"):
+    # Persist only the first spend. Second-peek REJECT must not overwrite
+    # the sealed hashes (GET /jesse/promotion-status also hits this path).
+    if (
+        holdout_registry is not None
+        and holdout_id
+        and holdout.get("spent_this_run")
+        and not already_spent
+        and not holdout_registry.is_spent(holdout_id)
+    ):
         holdout_registry.mark_spent(
             holdout_id,
             meta={
