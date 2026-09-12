@@ -235,6 +235,9 @@ async def test_decision_engine_sentiment_gate():
     config = RiskConfig()
     engine = DecisionEngine(risk_config=config)
     engine.enable_kronos = False
+    # This test is about the news sentiment veto, not Jesse ML. Autouse
+    # TRADING_MODE=live would otherwise fail-close on an unreachable Jesse host.
+    engine.enable_jesse_ml = False
 
     bars = [{"time": 1000 + i * 60, "open": 1.1000, "high": 1.1020, "low": 1.0980, "close": 1.1010, "volume": 100} for i in range(50)]
 

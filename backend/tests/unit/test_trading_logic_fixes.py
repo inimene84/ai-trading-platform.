@@ -88,6 +88,8 @@ async def test_scan_markets_skips_metals_when_disabled():
     previous_cfg = dict(engine.execution_config)
     previous = dict(engine.candidates)
     engine.candidates.clear()
+    previous_cooldowns = dict(engine._symbol_cooldowns)
+    engine._symbol_cooldowns.clear()
     try:
         engine.execution_config["include_metals"] = False
         with patch(
@@ -101,6 +103,7 @@ async def test_scan_markets_skips_metals_when_disabled():
     finally:
         engine.execution_config = previous_cfg
         engine.candidates = previous
+        engine._symbol_cooldowns = previous_cooldowns
 
 
 def test_same_base_cap_blocks_third_eur_pair():
