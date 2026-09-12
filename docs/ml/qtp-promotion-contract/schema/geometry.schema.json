@@ -1,0 +1,94 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://quantumtrade.local/schema/qtp-promotion-contract/1.0.0/geometry.schema.json",
+  "title": "QTP geometry.json",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["spec_version", "strategy_id", "triple_barrier", "bar", "costs", "gates"],
+  "properties": {
+    "spec_version": { "type": "string", "const": "1.0.0" },
+    "strategy_id": { "type": "string", "minLength": 1 },
+    "triple_barrier": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["sl_atr_mult", "pt_atr_mult", "atr_period", "vertical_timeout_bars"],
+      "properties": {
+        "sl_atr_mult": { "type": "number", "const": 1.75 },
+        "pt_atr_mult": { "type": "number", "const": 5.5 },
+        "atr_period": { "type": "integer", "minimum": 1 },
+        "vertical_timeout_bars": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "bar": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["timeframe", "primary_type"],
+      "properties": {
+        "timeframe": { "type": "string", "minLength": 1 },
+        "primary_type": { "type": "string", "minLength": 1 }
+      }
+    },
+    "costs": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["taker_fee_rate", "slippage_rate", "funding_rate_per_8h"],
+      "properties": {
+        "taker_fee_rate": { "type": "number", "minimum": 0 },
+        "slippage_rate": { "type": "number", "minimum": 0 },
+        "funding_rate_per_8h": { "type": "number" }
+      }
+    },
+    "gates": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": [
+        "dsr_min",
+        "pbo_max",
+        "min_trades",
+        "min_net_sharpe_after_costs",
+        "min_costed_edge_bps",
+        "holdout_required_for_promote"
+      ],
+      "properties": {
+        "dsr_min": { "type": "number", "minimum": 0, "maximum": 1 },
+        "pbo_max": { "type": "number", "minimum": 0, "maximum": 1 },
+        "min_trades": { "type": "integer", "minimum": 1 },
+        "min_net_sharpe_after_costs": { "type": "number" },
+        "min_costed_edge_bps": { "type": "number" },
+        "min_path_sharpe_p10": { "type": "number" },
+        "min_conformal_coverage": { "type": "number", "minimum": 0, "maximum": 1 },
+        "holdout_required_for_promote": { "type": "boolean" },
+        "path_left_tail_hard": { "type": "boolean" },
+        "conformal_coverage_hard": { "type": "boolean" },
+        "minbtl_hard": { "type": "boolean" }
+      }
+    },
+    "live": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "p_win_min": { "type": "number", "minimum": 0, "maximum": 1 },
+        "width_max": { "type": "number", "minimum": 0 }
+      }
+    },
+    "validation": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "inner": { "type": "string" },
+        "outer": { "type": "string" },
+        "pbo_n_splits": { "type": "integer", "minimum": 2 },
+        "library": { "type": "string", "const": "purgedcv" }
+      }
+    },
+    "hashes": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "geometry_hash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "feature_schema_hash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "holdout_id": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+      }
+    }
+  }
+}

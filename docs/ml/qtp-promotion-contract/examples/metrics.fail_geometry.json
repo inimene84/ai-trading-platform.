@@ -1,0 +1,44 @@
+{
+  "conformal_coverage": 0.82,
+  "costed_edge_bps": 3.2,
+  "dsr": 0.971,
+  "dsr_is_probability": true,
+  "hashes": {
+    "feature_schema_hash": "478ba53a905627ed0cf59d34b80220cccc6f010f79638023ebb704c24c655b7c",
+    "geometry_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+    "holdout_id": "04f257c8221723e6baccb341b407590bbcd689e9c9dcfcc62b50fc28c705fbd5"
+  },
+  "holdout": {
+    "end": "2025-12-31",
+    "instrument": "BTC-USDT",
+    "passed": true,
+    "spent": true,
+    "spent_this_run": true,
+    "start": "2025-10-01",
+    "timeframe": "1h"
+  },
+  "minbtl_years": 1.2,
+  "n_trades": 120,
+  "n_trials_effective": 37.4,
+  "n_trials_raw": 120,
+  "n_trials_source": "TrialSharpeRecorder.n_effective",
+  "net_sharpe_after_costs": 0.41,
+  "path_sharpe_p10": -0.2,
+  "pbo": 0.22,
+  "pbo_feasible": true,
+  "pbo_matrix_complete": true,
+  "pbo_n_configs": 80,
+  "pbo_n_obs": 400,
+  "pbo_n_splits": 16,
+  "production_drift": false,
+  "production_kill": false,
+  "promote_requested": true,
+  "spec_version": "1.0.0",
+  "strategy_id": "qtp-lgbm-meta-v1",
+  "track_record_years": 2.0,
+  "zero_cost": {
+    "dsr": 0.99,
+    "net_sharpe": 1.15,
+    "used_for_promotion": false
+  }
+}

@@ -127,12 +127,13 @@ flowchart LR
 The platform embeds financial machine learning practices inspired by Marcos López de Prado:
 
 ### 1. Robust Validation Metrics
-- **Deflated Sharpe Ratio (DSR)**: Corrects for selection bias under multiple testing, non-normal return distributions (skewness/kurtosis), and track-record length ($DSR > 0.95$ threshold required for deployment).
-- **Combinatorially Symmetric Cross-Validation (CSCV)**: Evaluates the Probability of Backtest Overfitting ($PBO < 0.30$), ensuring strategies do not memorize historical noise.
-- **Purged K-Fold with Temporal Embargo**: Eliminates information leakage across non-independent financial observations.
+- **Promotion Contract v1.0.0**: Train→serve is fail-closed. The GPU job and Decision Engine must agree on `geometry.json`, `metrics.json`, feature-schema hashes, and deterministic gates (`REJECT` / `SHADOW` / `PROMOTE` / `ROLLBACK`). See [`docs/ml/qtp-promotion-contract/`](docs/ml/qtp-promotion-contract/).
+- **Deflated Sharpe Ratio (DSR)**: Probability in $[0,1]$ from `purgedcv.deflated_sharpe_ratio` / `_full` on **costed** returns, using `effective_n_trials` or `TrialSharpeRecorder.n_effective()` — never raw Optuna `n_trials`. House gate $DSR \ge 0.95$.
+- **Probability of Backtest Overfitting (PBO)**: Full completed-trial returns matrix via `purgedcv.probability_of_backtest_overfitting`. House gate $PBO < 0.30$. Infeasible or winner-only matrices are hard `REJECT`.
+- **Purged K-Fold with Temporal Embargo**: Inner `PurgedKFold`; outer `CombinatorialPurgedCV` + `reconstruct_paths`. Sealed holdout is not a CPCV fold.
 
 ### 2. Triple-Barrier Labeling & Conformal Meta-Models
-- **Triple Barrier Method**: Signals are labeled using dynamic upper take-profit, lower stop-loss (volatility-adjusted via ATR), and time-out horizontal barriers.
+- **Triple Barrier Method**: Signals are labeled using dynamic upper take-profit, lower stop-loss (volatility-adjusted via ATR), and time-out horizontal barriers. House lock: **SL 1.75 ATR / PT 5.5 ATR** (training geometry must match live).
 - **Sample Uniqueness Concurrency Weighting**: Overlapping trade windows are down-weighted by inverse concurrency to eliminate label redundancy.
 - **Split-Conformal Uncertainty Gating**: Calibrated LightGBM models output non-conformity scores; candidates with excessive prediction intervals are vetoed before touching capital.
 - **Fractional Kelly Sizing**: Allocations scale proportionally to model edge and uncertainty while strictly capping max directional exposure.

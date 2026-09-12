@@ -1,0 +1,48 @@
+{
+  "bar": {
+    "primary_type": "time",
+    "timeframe": "1h"
+  },
+  "costs": {
+    "funding_rate_per_8h": 0.0001,
+    "slippage_rate": 0.0002,
+    "taker_fee_rate": 0.0004
+  },
+  "gates": {
+    "conformal_coverage_hard": false,
+    "dsr_min": 0.95,
+    "holdout_required_for_promote": true,
+    "min_conformal_coverage": 0.7,
+    "min_costed_edge_bps": 0.0,
+    "min_net_sharpe_after_costs": 0.0,
+    "min_path_sharpe_p10": -0.5,
+    "min_trades": 80,
+    "minbtl_hard": false,
+    "path_left_tail_hard": false,
+    "pbo_max": 0.3
+  },
+  "hashes": {
+    "feature_schema_hash": "478ba53a905627ed0cf59d34b80220cccc6f010f79638023ebb704c24c655b7c",
+    "geometry_hash": "22de66df6ecf8dbcc396479293bbb8a55d26e491297da8a296bb14a1b73c0b22",
+    "holdout_id": "04f257c8221723e6baccb341b407590bbcd689e9c9dcfcc62b50fc28c705fbd5"
+  },
+  "live": {
+    "p_win_min": 0.55,
+    "width_max": 0.35
+  },
+  "spec_version": "1.0.0",
+  "strategy_id": "qtp-lgbm-meta-v1",
+  "triple_barrier": {
+    "atr_period": 14,
+    "pt_atr_mult": 5.5,
+    "sl_atr_mult": 1.75,
+    "vertical_timeout_bars": 48
+  },
+  "validation": {
+    "inner": "PurgedKFold",
+    "library": "purgedcv",
+    "library_pin": "eslazarev/purged-cross-validation",
+    "outer": "CombinatorialPurgedCV",
+    "pbo_n_splits": 16
+  }
+}
