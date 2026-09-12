@@ -232,9 +232,18 @@ async def test_decision_engine_sentiment_gate():
     from backend.strategies.base import StrategySignal
     from backend.strategies.market_regime import RegimeResult
 
-    config = RiskConfig()
+    config = RiskConfig(
+        use_risk_reviewer_llm=False,
+        enable_personas=False,
+        enable_jesse_ml=False,
+        min_edge_fee_mult=0.0,
+    )
     engine = DecisionEngine(risk_config=config)
     engine.enable_kronos = False
+    # Autouse TRADING_MODE=live fail-closes Jesse ML and the risk reviewer
+    # when those services are unreachable. This test is sentiment-only.
+    engine.enable_jesse_ml = False
+    engine.promotion_state = None
 
     bars = [{"time": 1000 + i * 60, "open": 1.1000, "high": 1.1020, "low": 1.0980, "close": 1.1010, "volume": 100} for i in range(50)]
 

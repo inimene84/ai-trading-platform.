@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import numpy as np
 import pytest
 
+from backend.ml.artifacts import PromotionBundle
 from backend.ml.costs import apply_costs, costed_edge_bps, per_bar_roundtrip_cost
 from backend.ml.geometry import (
     HOUSE_ATR_PERIOD,
@@ -18,9 +19,14 @@ from backend.ml.geometry import (
 )
 from backend.ml.gpu_job import TrainingPathViolation, assert_training_path_isolated
 from backend.ml.hashes import canonical_json, geometry_hash, holdout_id_hash, sha256_hex
+from backend.ml.holdout_registry import HoldoutRegistry
 from backend.ml.live_signal import evaluate_live_four_numbers
 from backend.ml.promotion_gates import GateResult
-from backend.ml.promotion_service import PromotionState, live_geometry_from_risk_config
+from backend.ml.promotion_service import (
+    PromotionState,
+    evaluate_bundle_for_engine,
+    live_geometry_from_risk_config,
+)
 from backend.ml.purgedcv_metrics import (
     EffectiveTrials,
     PromotionMetricError,
@@ -266,13 +272,56 @@ def test_promotion_required_without_artifacts(monkeypatch):
 
 
 def test_holdout_registry_rejects_second_peek(tmp_path):
-    from backend.ml.holdout_registry import HoldoutRegistry
-
     registry = HoldoutRegistry(tmp_path / "holdout_registry.json")
     hid = "a" * 64
     registry.mark_spent(hid, meta={"geometry_hash": "1" * 64, "feature_schema_hash": "2" * 64})
     assert registry.is_second_peek(hid, geometry_hash="3" * 64, feature_schema_hash="2" * 64) is True
     assert registry.is_second_peek(hid, geometry_hash="1" * 64, feature_schema_hash="2" * 64) is False
+
+
+def test_mark_spent_does_not_overwrite_existing_hashes(tmp_path):
+    registry = HoldoutRegistry(tmp_path / "holdout_registry.json")
+    hid = "a" * 64
+    original = {"geometry_hash": "1" * 64, "feature_schema_hash": "2" * 64}
+    registry.mark_spent(hid, meta=original)
+    registry.mark_spent(
+        hid,
+        meta={"geometry_hash": "9" * 64, "feature_schema_hash": "8" * 64},
+    )
+    recorded = registry.record(hid)
+    assert recorded["geometry_hash"] == original["geometry_hash"]
+    assert recorded["feature_schema_hash"] == original["feature_schema_hash"]
+    assert registry.is_second_peek(hid, geometry_hash="9" * 64, feature_schema_hash="8" * 64) is True
+
+
+def test_second_peek_reject_does_not_replace_holdout_hashes(tmp_path):
+    examples = Path(__file__).resolve().parents[3] / "docs/ml/qtp-promotion-contract/examples"
+    geometry = json.loads((examples / "geometry.json").read_text(encoding="utf-8"))
+    feature_schema = json.loads((examples / "feature_schema.json").read_text(encoding="utf-8"))
+    metrics = json.loads((examples / "metrics.pass.json").read_text(encoding="utf-8"))
+    hid = str(metrics["hashes"]["holdout_id"])
+    sealed_geo = "1" * 64
+    sealed_feat = "2" * 64
+
+    registry = HoldoutRegistry(tmp_path / "holdout_registry.json")
+    registry.mark_spent(hid, meta={"geometry_hash": sealed_geo, "feature_schema_hash": sealed_feat})
+
+    bundle = PromotionBundle(
+        directory=tmp_path,
+        geometry=geometry,
+        metrics=metrics,
+        feature_schema=feature_schema,
+    )
+    state = evaluate_bundle_for_engine(bundle, holdout_registry=registry)
+    assert state.verdict == "REJECT"
+    assert state.result.failed_gate == "HOLDOUT_SPENT"
+    recorded = registry.record(hid)
+    assert recorded["geometry_hash"] == sealed_geo
+    assert recorded["feature_schema_hash"] == sealed_feat
+
+    replay = evaluate_bundle_for_engine(bundle, holdout_registry=registry)
+    assert replay.verdict == "REJECT"
+    assert replay.result.failed_gate == "HOLDOUT_SPENT"
 
 
 def test_jesse_sync_defaults_use_house_geometry():

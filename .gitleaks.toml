@@ -16,25 +16,19 @@ tags = ["key", "quantumtrade"]
     '''(^|/)\.gitleaks\.toml$''',
   ]
 
-# Path and regex allowlists MUST be separate. A single [[allowlists]] table
-# with both `paths` and `regexes` is treated as AND, which hid .env.example
-# and the deny-list file from the path exceptions.
-[[allowlists]]
-description = "Example env files, scanner config, and the burned-marker deny list"
-paths = [
-  '''(^|/)\.env\.example$''',
-  '''(^|/)n8n/\.env\.example$''',
-  '''(^|/)scripts/ci/forbidden_substrings\.txt$''',
-  '''(^|/)\.gitleaks\.toml$''',
-]
-
-[[allowlists]]
-description = "Documented placeholders — not live credentials"
+# gitleaks 8.24.3 (the version CI pins) unmarshals a singular [allowlist]
+# only. Array [[allowlists]] is ignored until 8.25.0. Do not path-exclude
+# all of .env.example — keep placeholders on a regex allowlist so a real
+# key pasted into the example file still fails the working-tree scan.
+[allowlist]
+description = "Documented placeholders and the scanner's own deny-list"
 regexTarget = "match"
 regexes = [
-  '''(?i)your_[A-Za-z0-9_]+(_here)?''',
+  '''your_[A-Za-z0-9_]+_here''',
   '''change-me-strong-password''',
   '''sk-local-litellm-key''',
-  '''YOUR_ADMIN_API_KEY''',
-  '''YOUR_TOKEN_HERE''',
+]
+paths = [
+  '''(^|/)scripts/ci/forbidden_substrings\.txt$''',
+  '''(^|/)\.gitleaks\.toml$''',
 ]

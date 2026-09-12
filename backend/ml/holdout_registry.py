@@ -58,6 +58,15 @@ class HoldoutRegistry:
         return not same_artifact
 
     def mark_spent(self, holdout_id: str, *, meta: dict[str, Any] | None = None) -> None:
+        """Record a holdout_id as spent. First write wins.
+
+        A later REJECT / second-peek artifact must not replace the original
+        hashes — otherwise ``is_second_peek`` would treat the attacker as the
+        sealed occupant and allow PROMOTE on the next resolve.
+        """
         spent = self._data.setdefault("spent", {})
-        spent[str(holdout_id)] = meta or {"spent": True}
+        key = str(holdout_id)
+        if key in spent:
+            return
+        spent[key] = meta or {"spent": True}
         self.save()
