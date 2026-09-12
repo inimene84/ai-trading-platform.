@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import numpy as np
 import pytest
 
+from backend.ml.artifacts import PromotionBundle
 from backend.ml.costs import apply_costs, costed_edge_bps, per_bar_roundtrip_cost
 from backend.ml.geometry import (
     HOUSE_ATR_PERIOD,
@@ -18,10 +19,9 @@ from backend.ml.geometry import (
 )
 from backend.ml.gpu_job import TrainingPathViolation, assert_training_path_isolated
 from backend.ml.hashes import canonical_json, geometry_hash, holdout_id_hash, sha256_hex
+from backend.ml.holdout_registry import HoldoutRegistry
 from backend.ml.live_signal import evaluate_live_four_numbers
 from backend.ml.promotion_gates import GateResult
-from backend.ml.artifacts import PromotionBundle
-from backend.ml.holdout_registry import HoldoutRegistry
 from backend.ml.promotion_service import (
     PromotionState,
     evaluate_bundle_for_engine,

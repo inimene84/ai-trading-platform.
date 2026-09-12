@@ -22,6 +22,14 @@ from backend.ml.promotion_gates import GateResult, evaluate_promotion_gates
 logger = logging.getLogger(__name__)
 
 
+def _truthy_flag(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y"}
+    return bool(value)
+
+
 def live_geometry_from_risk_config(config: Any) -> dict[str, Any]:
     """Map live RiskConfig locked fields onto the geometry.json shape."""
     geo = house_geometry()
@@ -110,7 +118,7 @@ def evaluate_bundle_for_engine(
     if (
         holdout_registry is not None
         and holdout_id
-        and holdout.get("spent_this_run")
+        and _truthy_flag(holdout.get("spent_this_run"))
         and not already_spent
         and not holdout_registry.is_spent(holdout_id)
     ):
