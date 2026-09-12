@@ -40,7 +40,11 @@ async def test_manual_close_sends_reduce_only_exchange_order_before_db_close():
 
     with patch("backend.routes.trading.SessionLocal", return_value=db), \
          patch("backend.routes.trading.UnifiedTrading", return_value=router), \
-         patch("backend.services.trading_mode.get_trading_mode", return_value=TradingMode.LIVE):
+         patch("backend.services.trading_mode.get_trading_mode", return_value=TradingMode.LIVE), \
+         patch(
+             "backend.services.binance_futures_service.binance_futures_broker.get_exit_price",
+             return_value=105.0,
+         ):
         result = await close_position(1)
 
     order = router.place_order.call_args.args[0]
@@ -68,7 +72,11 @@ async def test_manual_close_leaves_db_open_when_exchange_close_fails():
 
     with patch("backend.routes.trading.SessionLocal", return_value=db), \
          patch("backend.routes.trading.UnifiedTrading", return_value=router), \
-         patch("backend.services.trading_mode.get_trading_mode", return_value=TradingMode.LIVE):
+         patch("backend.services.trading_mode.get_trading_mode", return_value=TradingMode.LIVE), \
+         patch(
+             "backend.services.binance_futures_service.binance_futures_broker.get_exit_price",
+             return_value=105.0,
+         ):
         with pytest.raises(HTTPException) as exc:
             await close_position(1)
 

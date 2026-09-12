@@ -6,7 +6,7 @@ from unittest.mock import patch, AsyncMock
 from fastapi.testclient import TestClient
 
 from backend.main import app
-from backend.services.jesse_bridge import JesseBridgeService, jesse_bridge
+from backend.services.jesse_bridge import JesseBridgeService, is_jesse_ml_model_gap, jesse_bridge
 from backend.services.risk_config import get_risk_config
 
 
@@ -148,6 +148,22 @@ async def test_jesse_bridge_get_ml_prediction():
         assert res["status"] == "success"
         assert res["signal"] == "BUY"
         assert res["confidence"] == 0.58
+
+
+def test_is_jesse_ml_model_gap_detects_missing_and_unpromoted():
+    assert is_jesse_ml_model_gap("No model artifact found for AVAX-USDT (1h, lightgbm)") is True
+    assert is_jesse_ml_model_gap("Model artifact ETH-USDT_1h_lightgbm.joblib refused: promotion gate failed") is True
+    assert is_jesse_ml_model_gap("Connection refused") is False
+    assert is_jesse_ml_model_gap("") is False
+
+
+def test_jesse_promotion_status_unconfigured(client, monkeypatch):
+    api_key = os.getenv("ADMIN_API_KEY", "test_key")
+    monkeypatch.setenv("ADMIN_API_KEY", api_key)
+    monkeypatch.delenv("QTP_PROMOTION_ARTIFACT_DIR", raising=False)
+    res = client.get("/api/jesse/promotion-status", headers={"x-api-key": api_key})
+    assert res.status_code == 200
+    assert res.json()["status"] == "unconfigured"
 
 
 def test_jesse_ml_predict_routes(client, monkeypatch):

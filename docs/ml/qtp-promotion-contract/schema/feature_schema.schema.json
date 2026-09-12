@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://quantumtrade.local/schema/qtp-promotion-contract/1.0.0/feature_schema.schema.json",
+  "title": "QTP feature_schema.json",
+  "type": "object",
+  "additionalProperties": true,
+  "required": ["spec_version", "features"],
+  "properties": {
+    "spec_version": { "type": "string", "const": "1.0.0" },
+    "instrument": { "type": "string" },
+    "timeframe": { "type": "string" },
+    "features": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["name", "dtype"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "dtype": { "type": "string", "minLength": 1 },
+          "fracdiff_d": { "type": ["number", "null"] },
+          "scaler_id": { "type": ["string", "null"] }
+        }
+      }
+    }
+  }
+}

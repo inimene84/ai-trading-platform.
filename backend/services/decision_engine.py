@@ -3,15 +3,22 @@ import logging
 from typing import Optional, Dict, Any, List, Never
 from dataclasses import dataclass
 
+from backend.ml.promotion_service import (
+    PromotionState,
+    apply_live_signal_check,
+    log_shadow_prediction,
+    promotion_required,
+    resolve_promotion,
+)
+from backend.services.jesse_bridge import is_jesse_ml_model_gap, jesse_bridge
+from backend.services.kronos_gate import apply_kronos_gate
+from backend.services.opinion_layer import analyze_symbol as opinion_analyze
 from backend.services.risk_config import RiskConfig
+from backend.services.skill_miner import skill_miner
 from backend.services.trading_mode import TradingMode, get_trading_mode, live_exchange_orders_allowed
+from backend.services import kronos_service
 from backend.strategies.combined import CombinedStrategy
 from backend.strategies.market_regime import MarketRegimeDetector
-from backend.services.opinion_layer import analyze_symbol as opinion_analyze
-from backend.services.kronos_gate import apply_kronos_gate
-from backend.services import kronos_service
-from backend.services.skill_miner import skill_miner
-from backend.services.jesse_bridge import is_jesse_ml_model_gap, jesse_bridge
 from backend.services.symbol_aliases import (
     is_opposing_side,
     normalize_side,
@@ -157,7 +164,8 @@ def compute_sl_tp_levels(
 ) -> tuple[float, float]:
     """ATR-based stop-loss and take-profit for an entry (shared by loop + manual orders)."""
     try:
-        atr = atr_from_bars(bars, entry_price)
+        periods = int(getattr(config, "atr_period", 14) or 14)
+        atr = atr_from_bars(bars, entry_price, periods=periods)
     except Exception:
         atr = entry_price * 0.02
 
@@ -203,6 +211,8 @@ class DecisionEngine:
         self.regime_detector = regime_detector or MarketRegimeDetector()
         self.enable_kronos = os.getenv("ENABLE_KRONOS", "true").lower() == "true"
         self.enable_jesse_ml = os.getenv("JESSE_ML_GATE_ENABLED", "true").lower() == "true" and getattr(self.config, "enable_jesse_ml", True)
+        # Promotion contract is fail-closed when artifacts exist. None = legacy ML path.
+        self.promotion_state: Optional[PromotionState] = resolve_promotion(self.config)
         # Snapshot of the most recent evaluation so the loop can persist a
         # signal row for EVERY symbol it scans (not just executed trades).
         self.last_evaluation: Dict[str, Any] = {}
@@ -677,75 +687,111 @@ class DecisionEngine:
 
         # 4e. Jesse Machine Learning Directional Consensus & Meta-Label Gate
         if self.enable_jesse_ml:
-            try:
-                ml_res = await jesse_bridge.get_ml_prediction(symbol=symbol, timeframe="1h")
-                if ml_res.get("status") == "success":
-                    ml_sig = ml_res.get("signal")
-                    ml_conf = ml_res.get("confidence", 0.0)
-                    probs = ml_res.get("probabilities", {})
-                    p_bullish = probs.get("bullish", 0.0)
-                    p_bearish = probs.get("bearish", 0.0)
-                    uncertainty = ml_res.get("uncertainty", "LOW")
-                    gated = ml_res.get("gated", False)
-                    kelly = ml_res.get("kelly", {})
-
-                    # Conformal Uncertainty Veto: reject trades in high ambiguity or wide conformal sets
-                    if uncertainty == "HIGH" or gated:
-                        reason = ml_res.get("gated_reason") or f"Conformal uncertainty is HIGH (margin={ml_res.get('conformal_margin', 0):.3f})"
-                        logger.info(f"[{symbol}] Jesse ML Conformal Uncertainty Gate VETO: {reason} blocks {signal.signal}")
-                        self._record_eval(symbol, signal.signal, signal.confidence, f"vetoed by Jesse ML uncertainty gate ({reason})")
-                        return None
-
-                    # Hard Veto if ML model opposes candidate direction
-                    if signal.signal == "BUY" and (p_bearish >= 0.50 or ml_sig == "SELL"):
-                        logger.info(f"[{symbol}] Jesse ML Gate VETO: Bearish drift ({p_bearish*100:.1f}%, sig={ml_sig}) opposes BUY")
-                        self._record_eval(symbol, signal.signal, signal.confidence, f"vetoed by Jesse ML gate (bearish prob: {p_bearish:.2f})")
-                        return None
-                    elif signal.signal == "SELL" and (p_bullish >= 0.50 or ml_sig == "BUY"):
-                        logger.info(f"[{symbol}] Jesse ML Gate VETO: Bullish drift ({p_bullish*100:.1f}%, sig={ml_sig}) opposes SELL")
-                        self._record_eval(symbol, signal.signal, signal.confidence, f"vetoed by Jesse ML gate (bullish prob: {p_bullish:.2f})")
-                        return None
-
-                    # Confidence boost on directional consensus
-                    if (signal.signal == "BUY" and ml_sig == "BUY") or (signal.signal == "SELL" and ml_sig == "SELL"):
-                        boost = min(0.12, ml_conf * 0.15)
-                        signal.confidence = min(1.0, signal.confidence + boost)
-                        logger.info(f"[{symbol}] Jesse ML Gate BOOST: Consensus {ml_sig} (+{boost:.2f} -> conf={signal.confidence:.2f})")
-                    elif (signal.signal == "BUY" and ml_sig == "SELL") or (signal.signal == "SELL" and ml_sig == "BUY"):
-                        dampen = min(0.15, ml_conf * 0.15)
-                        signal.confidence = max(0.0, signal.confidence - dampen)
-                        logger.info(f"[{symbol}] Jesse ML Gate DAMPEN: Disagreement {ml_sig} (-{dampen:.2f} -> conf={signal.confidence:.2f})")
-
-                    # Capture Fractional Kelly size multiplier for downstream position sizing
-                    if "size_multiplier" in kelly:
-                        setattr(signal, "kelly_multiplier", float(kelly["size_multiplier"]))
-                        logger.info(f"[{symbol}] Jesse ML Calibrated Edge: Kelly multiplier={kelly['size_multiplier']}x (fractional_kelly={kelly.get('fractional_kelly', 0):.4f})")
-
-                    if signal.confidence < self.config.min_signal_strength:
-                        self._record_eval(symbol, signal.signal, signal.confidence, "confidence reduced below threshold by Jesse ML gate")
-                        return None
-                else:
-                    err = ml_res.get("error") or "Jesse ML status not success"
-                    # Missing / unpromoted artifacts are expected for most of the
-                    # universe. Fail-closed on those vetoed every live entry after
-                    # the ML gate landed (0 deployable models on the VPS).
-                    if ml_res.get("status") == "no_model" or is_jesse_ml_model_gap(err):
-                        logger.warning(
-                            f"[{symbol}] Jesse ML gate skipped — no deployable model ({err})"
-                        )
-                        setattr(signal, "jesse_ml_gap", err)
-                    elif live_exchange_orders_allowed():
-                        logger.error(f"[{symbol}] Jesse ML gate returned non-success in LIVE mode ({err}) — fail closed: vetoing {signal.signal}")
-                        self._record_eval(symbol, signal.signal, signal.confidence, f"vetoed by Jesse ML error in LIVE mode ({err})")
-                        return None
-                    else:
-                        logger.debug(f"[{symbol}] Jesse ML returned non-success in paper mode ({err}) — skipping gate")
-            except Exception as e:
-                if live_exchange_orders_allowed():
-                    logger.error(f"[{symbol}] Jesse ML gate failed in LIVE mode ({e}) — fail closed: vetoing {signal.signal}")
-                    self._record_eval(symbol, signal.signal, signal.confidence, f"vetoed by Jesse ML failure in LIVE mode ({e})")
+            promo = self.promotion_state
+            if promo is not None:
+                self.last_evaluation["promotion_verdict"] = promo.verdict
+                self.last_evaluation["promotion_reason"] = promo.result.reason
+            if promo is not None and promo.reject_model:
+                if live_exchange_orders_allowed() or promotion_required():
+                    self._record_eval(
+                        symbol, signal.signal, signal.confidence,
+                        f"vetoed by QTP promotion contract ({promo.verdict}: {promo.result.reason})",
+                    )
                     return None
-                logger.debug(f"[{symbol}] Jesse ML gate evaluation notice (fail-open in paper): {e}")
+                logger.info("[%s] Promotion %s — skipping model in paper (Core Hub strategy only)", symbol, promo.verdict)
+            else:
+                try:
+                    ml_res = await jesse_bridge.get_ml_prediction(symbol=symbol, timeframe="1h")
+                    if ml_res.get("status") == "success":
+                        if promo is not None and promo.shadow:
+                            # SHADOW: load artifact, log preds, size=0 from this model.
+                            log_shadow_prediction(promo, symbol, ml_res)
+                            setattr(signal, "kelly_multiplier", 0.0)
+                            self.last_evaluation["shadow_ml"] = {
+                                "signal": ml_res.get("signal"),
+                                "confidence": ml_res.get("confidence"),
+                            }
+                        else:
+                            ml_sig = ml_res.get("signal")
+                            ml_conf = ml_res.get("confidence", 0.0)
+                            probs = ml_res.get("probabilities", {})
+                            p_bullish = probs.get("bullish", 0.0)
+                            p_bearish = probs.get("bearish", 0.0)
+                            uncertainty = ml_res.get("uncertainty", "LOW")
+                            gated = ml_res.get("gated", False)
+                            kelly = ml_res.get("kelly", {})
+
+                            if promo is not None and promo.promote:
+                                live_check = apply_live_signal_check(promo, {
+                                    "side": ml_sig,
+                                    "p_win": ml_res.get("p_win", ml_conf),
+                                    "conformal_width": ml_res.get("conformal_width"),
+                                    "costed_edge_bps": ml_res.get("costed_edge_bps"),
+                                })
+                                if live_check.applied and not live_check.allowed:
+                                    self._record_eval(
+                                        symbol, signal.signal, signal.confidence,
+                                        f"vetoed by promoted-model live four-number check ({live_check.reason})",
+                                    )
+                                    return None
+
+                            # Conformal Uncertainty Veto: reject trades in high ambiguity or wide conformal sets
+                            if uncertainty == "HIGH" or gated:
+                                reason = ml_res.get("gated_reason") or f"Conformal uncertainty is HIGH (margin={ml_res.get('conformal_margin', 0):.3f})"
+                                logger.info(f"[{symbol}] Jesse ML Conformal Uncertainty Gate VETO: {reason} blocks {signal.signal}")
+                                self._record_eval(symbol, signal.signal, signal.confidence, f"vetoed by Jesse ML uncertainty gate ({reason})")
+                                return None
+
+                            # Hard Veto if ML model opposes candidate direction
+                            if signal.signal == "BUY" and (p_bearish >= 0.50 or ml_sig == "SELL"):
+                                logger.info(f"[{symbol}] Jesse ML Gate VETO: Bearish drift ({p_bearish*100:.1f}%, sig={ml_sig}) opposes BUY")
+                                self._record_eval(symbol, signal.signal, signal.confidence, f"vetoed by Jesse ML gate (bearish prob: {p_bearish:.2f})")
+                                return None
+                            elif signal.signal == "SELL" and (p_bullish >= 0.50 or ml_sig == "BUY"):
+                                logger.info(f"[{symbol}] Jesse ML Gate VETO: Bullish drift ({p_bullish*100:.1f}%, sig={ml_sig}) opposes SELL")
+                                self._record_eval(symbol, signal.signal, signal.confidence, f"vetoed by Jesse ML gate (bullish prob: {p_bullish:.2f})")
+                                return None
+
+                            # Confidence boost on directional consensus
+                            if (signal.signal == "BUY" and ml_sig == "BUY") or (signal.signal == "SELL" and ml_sig == "SELL"):
+                                boost = min(0.12, ml_conf * 0.15)
+                                signal.confidence = min(1.0, signal.confidence + boost)
+                                logger.info(f"[{symbol}] Jesse ML Gate BOOST: Consensus {ml_sig} (+{boost:.2f} -> conf={signal.confidence:.2f})")
+                            elif (signal.signal == "BUY" and ml_sig == "SELL") or (signal.signal == "SELL" and ml_sig == "BUY"):
+                                dampen = min(0.15, ml_conf * 0.15)
+                                signal.confidence = max(0.0, signal.confidence - dampen)
+                                logger.info(f"[{symbol}] Jesse ML Gate DAMPEN: Disagreement {ml_sig} (-{dampen:.2f} -> conf={signal.confidence:.2f})")
+
+                            # Capture Fractional Kelly size multiplier for downstream position sizing
+                            if "size_multiplier" in kelly:
+                                setattr(signal, "kelly_multiplier", float(kelly["size_multiplier"]))
+                                logger.info(f"[{symbol}] Jesse ML Calibrated Edge: Kelly multiplier={kelly['size_multiplier']}x (fractional_kelly={kelly.get('fractional_kelly', 0):.4f})")
+
+                            if signal.confidence < self.config.min_signal_strength:
+                                self._record_eval(symbol, signal.signal, signal.confidence, "confidence reduced below threshold by Jesse ML gate")
+                                return None
+                    else:
+                        err = ml_res.get("error") or "Jesse ML status not success"
+                        # Missing / unpromoted artifacts are expected for most of the
+                        # universe. Fail-closed on those vetoed every live entry after
+                        # the ML gate landed (0 deployable models on the VPS).
+                        if ml_res.get("status") == "no_model" or is_jesse_ml_model_gap(err):
+                            logger.warning(
+                                f"[{symbol}] Jesse ML gate skipped — no deployable model ({err})"
+                            )
+                            setattr(signal, "jesse_ml_gap", err)
+                        elif live_exchange_orders_allowed():
+                            logger.error(f"[{symbol}] Jesse ML gate returned non-success in LIVE mode ({err}) — fail closed: vetoing {signal.signal}")
+                            self._record_eval(symbol, signal.signal, signal.confidence, f"vetoed by Jesse ML error in LIVE mode ({err})")
+                            return None
+                        else:
+                            logger.debug(f"[{symbol}] Jesse ML returned non-success in paper mode ({err}) — skipping gate")
+                except Exception as e:
+                    if live_exchange_orders_allowed():
+                        logger.error(f"[{symbol}] Jesse ML gate failed in LIVE mode ({e}) — fail closed: vetoing {signal.signal}")
+                        self._record_eval(symbol, signal.signal, signal.confidence, f"vetoed by Jesse ML failure in LIVE mode ({e})")
+                        return None
+                    logger.debug(f"[{symbol}] Jesse ML gate evaluation notice (fail-open in paper): {e}")
 
         # 5. AI Opinion Layer — multi-agent weighted consensus
         if self.config.enable_personas:
@@ -855,6 +901,14 @@ class DecisionEngine:
             self._record_eval(symbol, decision.action, decision.confidence, "entry decision",
                               entry=decision.entry_price, sl=decision.stop_loss,
                               tp=decision.take_profit, approved=True)
+            if self.promotion_state is not None:
+                self.last_evaluation["promotion_verdict"] = self.promotion_state.verdict
+                if self.promotion_state.shadow and self.promotion_state.logged_predictions:
+                    last_pred = self.promotion_state.logged_predictions[-1]
+                    self.last_evaluation["shadow_ml"] = {
+                        "signal": last_pred.get("signal"),
+                        "confidence": last_pred.get("confidence"),
+                    }
         return decision
 
     def _create_entry_decision(self, symbol: str, bars: List[Dict[str, Any]], signal: Any, direction: str, is_pyramid: bool, regime: str = "UNKNOWN") -> Optional[Decision]:

@@ -4,11 +4,13 @@ on:
   push:
     paths:
       - "backend/**"
+      - "docs/ml/qtp-promotion-contract/**"
       - "pyproject.toml"
       - ".github/workflows/backend-ci.yml"
   pull_request:
     paths:
       - "backend/**"
+      - "docs/ml/qtp-promotion-contract/**"
       - "pyproject.toml"
 
 jobs:

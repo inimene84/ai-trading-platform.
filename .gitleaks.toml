@@ -27,22 +27,19 @@ tags = ["password", "quantumtrade", "jesse"]
 [rules.allowlist]
 paths = ['''(^|/)scripts/ci/forbidden_substrings\.txt$''', '''(^|/)\.gitleaks\.toml$''']
 
-# Allowlists are independent rules (OR semantics). Keep deny-list files
-# path-allowlisted so the needles they must contain do not self-flag.
-[[allowlists]]
-description = "Deny-list and config files that legitimately contain the needles"
-paths = [
-  '''(^|/)\.env\.example$''',
-  '''(^|/)n8n/\.env\.example$''',
-  '''(^|/)scripts/ci/forbidden_substrings\.txt$''',
-  '''(^|/)\.gitleaks\.toml$''',
-]
-
-[[allowlists]]
-description = "Documented placeholders"
+# gitleaks 8.24.3 (the version CI pins) unmarshals a singular [allowlist]
+# only. Array [[allowlists]] is ignored until 8.25.0. Do not path-exclude
+# all of .env.example — keep placeholders on a regex allowlist so a real
+# key pasted into the example file still fails the working-tree scan.
+[allowlist]
+description = "Documented placeholders and the scanner's own deny-list"
 regexTarget = "match"
 regexes = [
   '''your_[A-Za-z0-9_]+_here''',
   '''change-me-strong-password''',
   '''sk-local-litellm-key''',
+]
+paths = [
+  '''(^|/)scripts/ci/forbidden_substrings\.txt$''',
+  '''(^|/)\.gitleaks\.toml$''',
 ]

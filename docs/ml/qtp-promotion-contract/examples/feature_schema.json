@@ -1,0 +1,31 @@
+{
+  "features": [
+    {
+      "dtype": "float64",
+      "fracdiff_d": 0.4,
+      "name": "ret_1",
+      "scaler_id": "standard_v1"
+    },
+    {
+      "dtype": "float64",
+      "fracdiff_d": null,
+      "name": "atr_14",
+      "scaler_id": "standard_v1"
+    },
+    {
+      "dtype": "float64",
+      "fracdiff_d": null,
+      "name": "rsi_14",
+      "scaler_id": "minmax_v1"
+    },
+    {
+      "dtype": "float64",
+      "fracdiff_d": 0.0,
+      "name": "funding_8h",
+      "scaler_id": "standard_v1"
+    }
+  ],
+  "instrument": "BTC-USDT",
+  "spec_version": "1.0.0",
+  "timeframe": "1h"
+}
